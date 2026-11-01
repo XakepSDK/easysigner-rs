@@ -34,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Linux libraries (file dialogs, virtual display for the window check)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev xvfb libxkbcommon-x11-0 libgl1-mesa-dri
+        run: sudo apt-get update && sudo apt-get install -y xvfb weston libxkbcommon-x11-0 libgl1-mesa-dri libegl1 libwayland-egl1
       - name: Test
         shell: bash
         run: sh scripts/cargo.sh test --release --locked
@@ -55,10 +55,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set +e
+          # links nothing beyond the C library (no GTK): X11, Wayland and OpenGL are loaded at run time
+          ldd target/release/kzsigner
+          ! ldd target/release/kzsigner | grep -v 'linux-vdso\|libc\.so\|libm\.so\|libgcc_s\|ld-linux' || exit 1
+          # X11
           timeout 8 xvfb-run -a target/release/kzsigner gui > gui.log 2>&1
           r=$?
           cat gui.log
-          [ $r -eq 124 ]
+          [ $r -eq 124 ] || exit 1
+          # native Wayland (a headless Weston, no X server)
+          export XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless --socket=wl-ci --idle-time=0 > weston.log 2>&1 &
+          sleep 3
+          env -u DISPLAY WAYLAND_DISPLAY=wl-ci WAYLAND_DEBUG=1 timeout 8 target/release/kzsigner gui > wl.log 2>&1
+          r=$?
+          kill %1
+          grep -m3 'set_app_id\|set_title' wl.log
+          [ $r -eq 124 ] && grep -q 'set_app_id("kzsigner")' wl.log
       - name: Window opens and keeps running (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

@@ -29,7 +29,8 @@ Windows flash a console for a moment before the window opens.
 
 On Linux, `sh install.sh` (in the download) installs kzsigner into `~/.local/bin` with an
 applications-menu entry and icon, and offers it in "Open with" for `.cms` and `.p12` files;
-`sh install.sh --uninstall` removes it.
+`sh install.sh --uninstall` removes it. It uses only the standard freedesktop.org locations, needs
+no root, and works the same on GNOME, KDE Plasma and other desktops.
 
 ```
 kzsigner sign document.pdf -k GOSTKNCA_xxx.p12          # -> document.pdf.cms
@@ -66,8 +67,11 @@ so a download can be checked without building: `gh attestation verify FILE -R Xa
 GitHub stores attestations only for public repositories, so this step is skipped while the
 repository is private.
 
-On Linux the window needs the GTK 3 development files for the file dialogs (`libgtk-3-dev`), and
-at run time X11 or XWayland with OpenGL (Mesa is enough). The Windows `.exe` cross-builds from
+On Linux the program links nothing beyond the C library, so it runs on any distribution and
+desktop (GNOME, KDE Plasma, Xfce, ...). The window runs natively on Wayland or on X11 and needs
+OpenGL (Mesa is enough). File dialogs come from the desktop through the XDG desktop portal, so KDE
+shows its own dialog and GNOME its own; without a portal, `zenity` is used if installed, and the
+path fields can always be typed or pasted into. The Windows `.exe` cross-builds from
 Linux with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW); CI builds it natively.
 
 ## How it is put together
