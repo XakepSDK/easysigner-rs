@@ -17,6 +17,10 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -95,6 +99,17 @@ jobs:
           (cd dist && sha256sum "$D".zip "$D".tar.xz 2>/dev/null || true) >> "dist/$D.sha256"
           cat "dist/$D.sha256"
           ls -la dist "$D"
+      # Build provenance (gh attestation verify FILE -R XakepSDK/easysigner-rs). GitHub only
+      # stores attestations for public repositories (private ones need Enterprise Cloud), so
+      # the step is skipped while the repository is private.
+      - name: Attest build provenance
+        if: github.event.repository.private == false && github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/kzsigner-*.zip
+            dist/kzsigner-*.tar.xz
+            ${{ runner.os == 'Windows' && 'target/release/kzsigner.exe' || 'target/release/kzsigner' }}
       - uses: actions/upload-artifact@v4
         with:
           name: kzsigner-${{ runner.os }}-x64

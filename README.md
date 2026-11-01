@@ -61,6 +61,11 @@ Windows) link times out of the files. To check a download, build the release's t
 with `SHA256SUMS`. CI builds every commit twice, in different folders, and fails if the
 executables differ.
 
+CI also signs build provenance for the archives and executables with GitHub artifact attestations,
+so a download can be checked without building: `gh attestation verify FILE -R XakepSDK/easysigner-rs`.
+GitHub stores attestations only for public repositories, so this step is skipped while the
+repository is private.
+
 On Linux the window needs the GTK 3 development files for the file dialogs (`libgtk-3-dev`), and
 at run time X11 or XWayland with OpenGL (Mesa is enough). The Windows `.exe` cross-builds from
 Linux with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW); CI builds it natively.
