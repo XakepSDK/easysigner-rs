@@ -1,0 +1,44 @@
+[package]
+name = "kzsigner"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer"
+license = "MIT"
+repository = "https://github.com/XakepSDK/easysigner-rs"
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:rfd"]
+
+[dependencies]
+gost94 = "0.11"
+streebog = "0.11"
+sha1 = "0.11"
+sha2 = "0.11"
+digest = "0.11"
+hmac = "0.13"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+des = "0.9"
+rc2 = "0.9"
+aes = "0.9"
+cipher = "0.5"
+num-bigint = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
+getrandom = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+lexopt = "0.3"
+rpassword = "7"
+eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+rfd = { version = "0.17", optional = true, default-features = false, features = ["gtk3"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

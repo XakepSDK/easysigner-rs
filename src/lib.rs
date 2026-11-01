@@ -1,0 +1,161 @@
+//! kzsigner: sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer.
+
+pub mod cert;
+pub mod cms;
+pub mod der;
+pub mod gost;
+pub mod http;
+pub mod keys;
+pub mod ocsp;
+pub mod output;
+pub mod p12;
+pub mod report;
+pub mod sign;
+pub mod time;
+pub mod trust;
+pub mod tsp;
+pub mod verify;
+
+use cert::Cert;
+use p12::Key;
+use report::{SignResult, SignerReport, VerifyReport};
+use trust::TrustStore;
+
+pub const DEFAULT_TSA_URL: &str = tsp::DEFAULT_TSA_URL;
+pub const DEFAULT_OCSP_URL: &str = ocsp::DEFAULT_URL;
+
+/// kzsigner's own version.
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+pub fn crypto_version() -> &'static str {
+    "built in (KZ GOST and RSA in Rust; GOST hashes from RustCrypto)"
+}
+
+/// What the command line and the window use: open a key, sign, verify, extract.
+pub struct Engine {
+    trust: TrustStore,
+}
+
+impl Engine {
+    /// `extra_trust`: CA certificates to trust on top of the bundled NCA RK ones.
+    pub fn new(extra_trust: Vec<Cert>) -> Engine {
+        Engine { trust: TrustStore::new(extra_trust) }
+    }
+
+    pub fn open_key(&self, p12: &[u8], password: &str, alias: Option<&str>) -> Result<Key> {
+        p12::open(p12, password, alias)
+    }
+
+    pub fn key_warnings(&self, c: &Cert) -> Vec<String> {
+        cert::key_warnings(c)
+    }
+
+    /// See [`sign::sign`].
+    pub fn sign(
+        &self,
+        input: &[u8],
+        key: &Key,
+        detached: bool,
+        tsa_url: Option<&str>,
+        cosign_if_cms: bool,
+        detached_original: Option<&[u8]>,
+    ) -> Result<SignResult> {
+        sign::sign(input, key, detached, tsa_url, cosign_if_cms, detached_original)
+    }
+
+    /// `ocsp_url`: None to skip the revocation check.
+    pub fn verify(&self, cms: &[u8], detached_original: Option<&[u8]>, ocsp_url: Option<&str>) -> Result<VerifyReport> {
+        verify::verify(cms, detached_original, &self.trust, ocsp_url)
+    }
+
+    pub fn extract(&self, cms: &[u8]) -> Result<Vec<u8>> {
+        cms::SignedData::parse(cms)?.content.ok_or_else(|| {
+            Error::new("This .cms has no embedded document: it is a detached signature, the original was never inside it.")
+        })
+    }
+
+    /// Whether `data` is a CMS SignedData with at least one signature.
+    pub fn is_signed_cms(&self, data: &[u8]) -> bool {
+        cms::SignedData::try_parse(data).is_some()
+    }
+
+    /// Certificate details and trust status, without any signature.
+    pub fn describe(&self, c: &Cert) -> SignerReport {
+        let mut sr = SignerReport::default();
+        cert::describe(&mut sr, c);
+        let chain = self.trust.check(c, time::now_ms());
+        sr.chain_ok = chain.ok;
+        sr.chain_status = Some(chain.status);
+        sr.chain = chain.path;
+        sr.algorithm = Some(cert::key_alg_name(c));
+        sr
+    }
+}
+
+/// An error meant to be shown to the user as-is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error(pub String);
+
+impl Error {
+    pub fn new(m: impl Into<String>) -> Error {
+        Error(m.into())
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Random bytes from the operating system.
+pub fn random(buf: &mut [u8]) -> Result<()> {
+    getrandom::fill(buf).map_err(|e| Error::new(format!("no random numbers from the system: {e}")))
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Standard Base64 without whitespace; padding optional. None if it is not Base64.
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0);
+    for ch in s.bytes() {
+        let v = B64.iter().position(|&b| b == ch)? as u32;
+        acc = acc << 6 | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    if s.len() % 4 == 1 {
+        return None;
+    }
+    Some(out)
+}
