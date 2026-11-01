@@ -33,7 +33,7 @@ rm -rf "$W"
 mkdir -p "$W/classes" "$W/dex" "$W/res" "$W/lib/arm64-v8a" "$W/lib/x86_64" dist
 
 # the Java side: compiled, then turned into Android's classes.dex
-javac -source 8 -target 8 -nowarn -encoding UTF-8 -bootclasspath "$JAR" -classpath "$JAR" \
+javac --release 8 -nowarn -encoding UTF-8 -classpath "$JAR" \
     -d "$W/classes" android/java/kz/kzsigner/*.java
 "$BT/d8" --release --min-api 26 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class' | sort)
 
