@@ -77,17 +77,18 @@ fn sign_then_verify_in_the_window() {
     pw.type_text("Qwerty12");
     h.run();
     // the eye shows the password as plain text, and hides it again
+    // (a key open may be running in the background: step instead of waiting for quiet)
     h.get_by_label("Show password").click();
-    h.run();
+    h.run_steps(2);
     assert!(
         h.query_by_role(egui::accesskit::Role::PasswordInput)
             .is_none()
     );
     h.get_by_label("Hide password").click();
-    h.run();
+    h.run_steps(2);
     let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
     pw.focus();
-    h.run();
+    h.run_steps(2);
     h.key_press(egui::Key::Enter);
     settle(&mut h);
     assert!(
