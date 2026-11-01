@@ -8,6 +8,9 @@
 #
 # It maps the source and cargo folders to fixed names in the paths the compiler records (panic
 # locations), and on Windows (MSVC) asks the linker for a fixed timestamp instead of the time.
+# It also hides pkg-config: nothing here links a system library, but some build scripts record
+# what they find (x11-dl stores the X11 library folder), which would make the output depend on
+# the -dev packages installed on the build machine.
 set -eu
 cd "$(dirname "$0")/.."
 src=$(pwd)
@@ -22,6 +25,7 @@ case "$(rustc -vV | sed -n 's/^host: //p')" in
 *-windows-msvc) flags="$flags$(printf '\037')-Clink-arg=/Brepro$(printf '\037')-Clink-arg=/PDBALTPATH:%_PDB%" ;;
 esac
 export CARGO_ENCODED_RUSTFLAGS="$flags"
+export PKG_CONFIG_LIBDIR=/nonexistent PKG_CONFIG_PATH= PKG_CONFIG_SYSROOT_DIR=
 unset RUSTFLAGS
 if [ $# -eq 0 ]; then
     set -- build --release --locked
