@@ -49,7 +49,12 @@ jobs:
           for f in kzsigner; do
             [ "$RUNNER_OS" = Windows ] && f=$f.exe
             sha256sum "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
-            cmp "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
+            cmp "target/release/$f" "$RUNNER_TEMP/again/target/release/$f" || {
+              echo "Differing build outputs:"
+              (cd target/release && find deps build -type f \( -name '*.rlib' -o -name '*.a' -o -name 'output' \) | sort) |
+                while read -r x; do cmp -s "target/release/$x" "$RUNNER_TEMP/again/target/release/$x" || echo "  $x"; done
+              exit 1
+            }
           done
       - name: Window opens and keeps running (Linux)
         if: runner.os == 'Linux'
