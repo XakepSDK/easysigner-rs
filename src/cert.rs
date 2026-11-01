@@ -72,7 +72,11 @@ impl Cert {
                 for e in x.inner()?.items(der::SEQUENCE)? {
                     let k = e.items(der::SEQUENCE)?;
                     let oid = k.first().ok_or_else(f)?.oid()?;
-                    let v = k.last().ok_or_else(f)?.expect(der::OCTET_STRING)?.octets()?;
+                    let v = k
+                        .last()
+                        .ok_or_else(f)?
+                        .expect(der::OCTET_STRING)?
+                        .octets()?;
                     extensions.push((oid, v));
                 }
             }
@@ -106,7 +110,10 @@ impl Cert {
     /// The public key BIT STRING contents (for OCSP key hashes).
     pub fn public_key_bits(&self) -> Result<Vec<u8>> {
         let k = der::parse(&self.spki)?.items(der::SEQUENCE)?;
-        Ok(k.get(1).ok_or_else(|| Error::new("malformed SubjectPublicKeyInfo"))?.bits()?.to_vec())
+        Ok(k.get(1)
+            .ok_or_else(|| Error::new("malformed SubjectPublicKeyInfo"))?
+            .bits()?
+            .to_vec())
     }
 
     pub fn valid_on(&self, ms: i64) -> bool {
@@ -127,13 +134,21 @@ impl Cert {
     }
 
     fn extension(&self, oid: &str) -> Option<&[u8]> {
-        self.extensions.iter().find(|(o, _)| o == oid).map(|(_, v)| v.as_slice())
+        self.extensions
+            .iter()
+            .find(|(o, _)| o == oid)
+            .map(|(_, v)| v.as_slice())
     }
 
     /// The subject key identifier extension's value.
     pub fn subject_key_id(&self) -> Option<Vec<u8>> {
         let v = self.extension("2.5.29.14")?;
-        der::parse(v).ok()?.expect(der::OCTET_STRING).ok()?.octets().ok()
+        der::parse(v)
+            .ok()?
+            .expect(der::OCTET_STRING)
+            .ok()?
+            .octets()
+            .ok()
     }
 
     /// Key usage bits, or None without the extension.
@@ -142,11 +157,17 @@ impl Cert {
         let t = der::parse(v).ok()?;
         let c = t.expect(der::BIT_STRING).ok()?.content;
         let bits = c.get(1..)?;
-        Some((0..9).map(|i| bits.get(i / 8).is_some_and(|b| b & (0x80 >> (i % 8)) != 0)).collect())
+        Some(
+            (0..9)
+                .map(|i| bits.get(i / 8).is_some_and(|b| b & (0x80 >> (i % 8)) != 0))
+                .collect(),
+        )
     }
 
     pub fn extended_key_usage(&self) -> Vec<String> {
-        let Some(v) = self.extension("2.5.29.37") else { return vec![] };
+        let Some(v) = self.extension("2.5.29.37") else {
+            return vec![];
+        };
         der::parse(v)
             .and_then(|t| t.items(der::SEQUENCE))
             .map(|k| k.iter().filter_map(|o| o.oid().ok()).collect())
@@ -159,10 +180,15 @@ impl Cert {
 
     /// Basic constraints cA flag (false without the extension).
     pub fn is_ca(&self) -> bool {
-        let Some(v) = self.extension("2.5.29.19") else { return false };
+        let Some(v) = self.extension("2.5.29.19") else {
+            return false;
+        };
         der::parse(v)
             .and_then(|t| t.items(der::SEQUENCE))
-            .map(|k| k.first().is_some_and(|b| b.tag == der::BOOLEAN && b.boolean().unwrap_or(false)))
+            .map(|k| {
+                k.first()
+                    .is_some_and(|b| b.tag == der::BOOLEAN && b.boolean().unwrap_or(false))
+            })
             .unwrap_or(false)
     }
 
@@ -208,7 +234,9 @@ fn label(oid: &str) -> &str {
 
 fn atvs(name: &[u8]) -> Vec<(String, Tlv<'_>)> {
     let mut out = Vec::new();
-    let Ok(rdns) = der::parse(name).and_then(|t| t.items(der::SEQUENCE)) else { return out };
+    let Ok(rdns) = der::parse(name).and_then(|t| t.items(der::SEQUENCE)) else {
+        return out;
+    };
     for rdn in rdns {
         for atv in rdn.children().unwrap_or_default() {
             if let Ok(k) = atv.items(der::SEQUENCE)
@@ -251,12 +279,18 @@ pub fn get<'a>(m: &'a [(String, String)], k: &str) -> Option<&'a str> {
 }
 
 pub fn dn(name: &[u8]) -> String {
-    rdns(name).iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", ")
+    rdns(name)
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn cn(name: &[u8]) -> String {
     let r = rdns(name);
-    get(&r, "CN").map(str::to_string).unwrap_or_else(|| dn(name))
+    get(&r, "CN")
+        .map(str::to_string)
+        .unwrap_or_else(|| dn(name))
 }
 
 /// Name equality, ignoring string types, case and extra spaces (as Bouncy Castle's X500Name).
@@ -269,7 +303,10 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
             .iter()
             .map(|(o, v)| {
                 let t = value_text(v).to_lowercase();
-                (o.clone(), t.split_whitespace().collect::<Vec<_>>().join(" "))
+                (
+                    o.clone(),
+                    t.split_whitespace().collect::<Vec<_>>().join(" "),
+                )
             })
             .collect()
     };
@@ -285,7 +322,11 @@ pub fn describe(sr: &mut SignerReport, c: &Cert) {
     sr.subject = rdns(&c.subject);
     sr.subject_dn = Some(dn(&c.subject));
     let issuer_dn = dn(&c.issuer);
-    sr.issuer_cn = Some(get(&rdns(&c.issuer), "CN").map(str::to_string).unwrap_or_else(|| issuer_dn.clone()));
+    sr.issuer_cn = Some(
+        get(&rdns(&c.issuer), "CN")
+            .map(str::to_string)
+            .unwrap_or_else(|| issuer_dn.clone()),
+    );
     sr.issuer_dn = Some(issuer_dn);
     sr.serial_hex = Some(c.serial_hex());
     sr.not_before = Some(c.not_before);
@@ -326,10 +367,16 @@ pub fn key_warnings(c: &Cert) -> Vec<String> {
     let mut w = Vec::new();
     let now = time::now_ms();
     if now > c.not_after {
-        w.push(format!("The certificate expired on {}.", time::fmt(Some(c.not_after))));
+        w.push(format!(
+            "The certificate expired on {}.",
+            time::fmt(Some(c.not_after))
+        ));
     }
     if now < c.not_before {
-        w.push(format!("The certificate is not valid until {}.", time::fmt(Some(c.not_before))));
+        w.push(format!(
+            "The certificate is not valid until {}.",
+            time::fmt(Some(c.not_before))
+        ));
     }
     if c.key_usage().is_some_and(|k| !k[KU_NON_REPUDIATION]) {
         w.push(
@@ -343,10 +390,16 @@ pub fn key_warnings(c: &Cert) -> Vec<String> {
 
 pub fn alg_name(enc_oid: &str, digest_oid: Option<&str>) -> String {
     match enc_oid {
-        gost::SIG_GOST2015_512 | gost::KEY_GOST2015_512 => "GOST 34.10-2015 (512) / GOST 34.11-2015".into(),
-        gost::SIG_GOST2015_256 | gost::KEY_GOST2015_256 => "GOST 34.10-2015 (256) / GOST 34.11-2015".into(),
+        gost::SIG_GOST2015_512 | gost::KEY_GOST2015_512 => {
+            "GOST 34.10-2015 (512) / GOST 34.11-2015".into()
+        }
+        gost::SIG_GOST2015_256 | gost::KEY_GOST2015_256 => {
+            "GOST 34.10-2015 (256) / GOST 34.11-2015".into()
+        }
         gost::SIG_GOST2004 | gost::KEY_GOST2004 => "GOST 34.310-2004 / GOST 34.311-95".into(),
-        gost::RSA_ENCRYPTION | gost::SIG_SHA256_RSA => format!("RSA / {}", digest_label(digest_oid)),
+        gost::RSA_ENCRYPTION | gost::SIG_SHA256_RSA => {
+            format!("RSA / {}", digest_label(digest_oid))
+        }
         o => format!("{o} / {}", digest_label(digest_oid)),
     }
 }
@@ -354,7 +407,11 @@ pub fn alg_name(enc_oid: &str, digest_oid: Option<&str>) -> String {
 /// Algorithm label for a certificate's own key.
 pub fn key_alg_name(c: &Cert) -> String {
     let k = c.key_alg();
-    if k == gost::RSA_ENCRYPTION { "RSA".into() } else { alg_name(&k, None) }
+    if k == gost::RSA_ENCRYPTION {
+        "RSA".into()
+    } else {
+        alg_name(&k, None)
+    }
 }
 
 pub fn digest_label(oid: Option<&str>) -> String {

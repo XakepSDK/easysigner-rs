@@ -4,6 +4,8 @@ pub mod cert;
 pub mod cms;
 pub mod der;
 pub mod gost;
+#[cfg(feature = "gui")]
+pub mod gui;
 pub mod http;
 pub mod keys;
 pub mod ocsp;
@@ -41,7 +43,9 @@ pub struct Engine {
 impl Engine {
     /// `extra_trust`: CA certificates to trust on top of the bundled NCA RK ones.
     pub fn new(extra_trust: Vec<Cert>) -> Engine {
-        Engine { trust: TrustStore::new(extra_trust) }
+        Engine {
+            trust: TrustStore::new(extra_trust),
+        }
     }
 
     pub fn open_key(&self, p12: &[u8], password: &str, alias: Option<&str>) -> Result<Key> {
@@ -62,11 +66,23 @@ impl Engine {
         cosign_if_cms: bool,
         detached_original: Option<&[u8]>,
     ) -> Result<SignResult> {
-        sign::sign(input, key, detached, tsa_url, cosign_if_cms, detached_original)
+        sign::sign(
+            input,
+            key,
+            detached,
+            tsa_url,
+            cosign_if_cms,
+            detached_original,
+        )
     }
 
     /// `ocsp_url`: None to skip the revocation check.
-    pub fn verify(&self, cms: &[u8], detached_original: Option<&[u8]>, ocsp_url: Option<&str>) -> Result<VerifyReport> {
+    pub fn verify(
+        &self,
+        cms: &[u8],
+        detached_original: Option<&[u8]>,
+        ocsp_url: Option<&str>,
+    ) -> Result<VerifyReport> {
         verify::verify(cms, detached_original, &self.trust, ocsp_url)
     }
 
@@ -128,7 +144,9 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 pub fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
             if i <= c.len() {
                 out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);

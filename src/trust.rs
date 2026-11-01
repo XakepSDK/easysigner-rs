@@ -6,11 +6,20 @@ use crate::{Result, time};
 
 /// NCA RK's root and issuing CA certificates, bundled into the executable.
 pub const BUNDLED_CA: [(&str, &[u8]); 10] = [
-    ("root_gost_2022", include_bytes!("../certs/root_gost_2022.cer")),
+    (
+        "root_gost_2022",
+        include_bytes!("../certs/root_gost_2022.cer"),
+    ),
     ("root_gost", include_bytes!("../certs/root_gost.cer")),
-    ("root_rsa_2022", include_bytes!("../certs/root_rsa_2022.cer")),
+    (
+        "root_rsa_2022",
+        include_bytes!("../certs/root_rsa_2022.cer"),
+    ),
     ("root_rsa", include_bytes!("../certs/root_rsa.cer")),
-    ("nca_gost_2022", include_bytes!("../certs/nca_gost_2022.cer")),
+    (
+        "nca_gost_2022",
+        include_bytes!("../certs/nca_gost_2022.cer"),
+    ),
     ("nca_gost", include_bytes!("../certs/nca_gost.cer")),
     ("nca_rsa_2022", include_bytes!("../certs/nca_rsa_2022.cer")),
     ("nca_rsa", include_bytes!("../certs/nca_rsa.cer")),
@@ -35,7 +44,9 @@ impl TrustStore {
     pub fn new(extra: Vec<Cert>) -> TrustStore {
         let mut trusted: Vec<Cert> = BUNDLED_CA
             .iter()
-            .map(|(n, d)| Cert::parse_any(d).unwrap_or_else(|e| panic!("bundled certificate {n}: {e}")))
+            .map(|(n, d)| {
+                Cert::parse_any(d).unwrap_or_else(|e| panic!("bundled certificate {n}: {e}"))
+            })
             .collect();
         trusted.extend(extra);
         TrustStore { trusted }
@@ -49,7 +60,12 @@ impl TrustStore {
         let mut first_issuer: Option<Cert> = None;
         let r = self.walk(c, at, &mut path, &mut first_issuer);
         match r {
-            Ok((ok, status)) => Chain { ok, status, path, issuer: first_issuer },
+            Ok((ok, status)) => Chain {
+                ok,
+                status,
+                path,
+                issuer: first_issuer,
+            },
             Err(e) => Chain {
                 ok: false,
                 status: format!("Certificate path not valid: {e}"),
@@ -72,7 +88,11 @@ impl TrustStore {
         loop {
             path.push(cur.cn());
             if !cur.valid_on(at) {
-                return Err(format!("certificate '{}' was not valid on {}", cur.cn(), time::fmt(Some(at))));
+                return Err(format!(
+                    "certificate '{}' was not valid on {}",
+                    cur.cn(),
+                    time::fmt(Some(at))
+                ));
             }
             let self_signed = cur.self_issued();
             if self.trusted.contains(&cur) && (!is_start || self_signed) {
@@ -83,7 +103,10 @@ impl TrustStore {
             }
             let Some(issuer) = self.find_issuer(&cur, &seen) else {
                 if self_signed {
-                    return Err(format!("self-signed certificate '{}' is not a trusted root", cur.cn()));
+                    return Err(format!(
+                        "self-signed certificate '{}' is not a trusted root",
+                        cur.cn()
+                    ));
                 }
                 return Ok((
                     false,
@@ -121,7 +144,10 @@ fn require_ca(issuer: &Cert) -> std::result::Result<(), String> {
         return Err(format!("issuer '{}' is not a CA", issuer.cn()));
     }
     if !issuer.may_sign_certs() {
-        return Err(format!("issuer '{}' may not sign certificates", issuer.cn()));
+        return Err(format!(
+            "issuer '{}' may not sign certificates",
+            issuer.cn()
+        ));
     }
     Ok(())
 }
@@ -129,10 +155,16 @@ fn require_ca(issuer: &Cert) -> std::result::Result<(), String> {
 /// Checks the bundled certificates against each other: how many have a signature that no
 /// bundled issuer verifies.
 pub fn check_bundled() -> Result<(usize, usize)> {
-    let all: Vec<Cert> = BUNDLED_CA.iter().map(|(_, d)| Cert::parse_any(d)).collect::<Result<_>>()?;
+    let all: Vec<Cert> = BUNDLED_CA
+        .iter()
+        .map(|(_, d)| Cert::parse_any(d))
+        .collect::<Result<_>>()?;
     let bad = all
         .iter()
-        .filter(|c| !all.iter().any(|i| cert::names_equal(&i.subject, &c.issuer) && c.signed_by(i)))
+        .filter(|c| {
+            !all.iter()
+                .any(|i| cert::names_equal(&i.subject, &c.issuer) && c.signed_by(i))
+        })
         .count();
     Ok((all.len(), bad))
 }

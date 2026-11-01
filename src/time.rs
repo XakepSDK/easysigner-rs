@@ -49,7 +49,9 @@ fn bad_time() -> Error {
 pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
     let s = std::str::from_utf8(content).map_err(|_| bad_time())?;
     let num = |a: usize, b: usize| -> Result<i64> {
-        s.get(a..b).and_then(|x| x.parse::<i64>().ok()).ok_or_else(bad_time)
+        s.get(a..b)
+            .and_then(|x| x.parse::<i64>().ok())
+            .ok_or_else(bad_time)
     };
     let (y, rest) = match tag {
         crate::der::UTC_TIME => {
@@ -117,7 +119,11 @@ pub fn encode_generalized(ms: i64) -> Vec<u8> {
 /// ISO-8601 UTC, like Java's Instant.toString: 2026-11-01T10:00:00Z (with .SSS when not 0).
 pub fn iso(ms: i64) -> String {
     let (y, mo, d, h, mi, s, f) = parts(ms);
-    let frac = if f == 0 { String::new() } else { format!(".{f:03}") };
+    let frac = if f == 0 {
+        String::new()
+    } else {
+        format!(".{f:03}")
+    };
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}{frac}Z")
 }
 
@@ -128,7 +134,11 @@ pub fn fmt(ms: Option<i64>) -> String {
     match Local.timestamp_millis_opt(ms).single() {
         Some(t) => {
             let off = t.offset().local_minus_utc();
-            let zone = if off == 0 { "UTC".to_string() } else { t.format("%:z").to_string() };
+            let zone = if off == 0 {
+                "UTC".to_string()
+            } else {
+                t.format("%:z").to_string()
+            };
             format!("{} {zone}", t.format("%Y-%m-%d %H:%M:%S"))
         }
         None => iso(ms),

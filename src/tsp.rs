@@ -29,7 +29,11 @@ impl TstInfo {
             return Err(Error::new("TSTInfo too short"));
         }
         let mi = k[2].items(der::SEQUENCE)?;
-        let nonce = k[5..].iter().find(|t| t.tag == der::INTEGER).map(|t| t.uint().map(<[u8]>::to_vec)).transpose()?;
+        let nonce = k[5..]
+            .iter()
+            .find(|t| t.tag == der::INTEGER)
+            .map(|t| t.uint().map(<[u8]>::to_vec))
+            .transpose()?;
         Ok(TstInfo {
             policy: k[1].oid()?,
             imprint_alg: alg_id(&mi[0])?.0,
@@ -53,7 +57,10 @@ impl Request {
     pub fn encode(&self) -> Vec<u8> {
         let mut b = der::small_int(1);
         // the hash algorithm without parameters, as Bouncy Castle (NCALayer's library) writes it
-        b.extend(der::seq(&[&der::seq(&[&der::oid(&self.hash_oid)]), &der::octets(&self.hash)]));
+        b.extend(der::seq(&[
+            &der::seq(&[&der::oid(&self.hash_oid)]),
+            &der::octets(&self.hash),
+        ]));
         if let Some(p) = &self.policy {
             b.extend(der::oid(p));
         }
@@ -68,7 +75,10 @@ impl Request {
 
     pub fn parse(data: &[u8]) -> Result<Request> {
         let k = der::parse(data)?.items(der::SEQUENCE)?;
-        let mi = k.get(1).ok_or_else(|| Error::new("bad timestamp request"))?.items(der::SEQUENCE)?;
+        let mi = k
+            .get(1)
+            .ok_or_else(|| Error::new("bad timestamp request"))?
+            .items(der::SEQUENCE)?;
         let mut r = Request {
             hash_oid: alg_id(&mi[0])?.0,
             hash: mi[1].octets()?,
@@ -111,20 +121,45 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
         nonce: Some(der::uint(&nonce)[2..].to_vec()),
         cert_req: true,
     };
-    let resp = http::post(url, "application/timestamp-query", &req.encode(), "timestamp server")?;
+    let resp = http::post(
+        url,
+        "application/timestamp-query",
+        &req.encode(),
+        "timestamp server",
+    )?;
     let token = read_response(&resp)?;
-    validate(&req, token)
-        .map_err(|e| Error::new(format!("The timestamp server's answer does not match the request: {}", e.0)))?;
+    validate(&req, token).map_err(|e| {
+        Error::new(format!(
+            "The timestamp server's answer does not match the request: {}",
+            e.0
+        ))
+    })?;
     si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, token);
     Ok(())
 }
 
 /// The token (a ContentInfo, as encoded) from a TimeStampResp.
 fn read_response(resp: &[u8]) -> Result<&[u8]> {
-    let bad = |e: Error| Error::new(format!("The timestamp server's answer is unreadable ({})", e.0));
-    let k = der::parse(resp).and_then(|t| t.items(der::SEQUENCE)).map_err(bad)?;
-    let status = k.first().ok_or_else(|| bad(Error::new("empty")))?.items(der::SEQUENCE).map_err(bad)?;
-    let code = status.first().map(|s| s.small_int()).transpose().map_err(bad)?.unwrap_or(2);
+    let bad = |e: Error| {
+        Error::new(format!(
+            "The timestamp server's answer is unreadable ({})",
+            e.0
+        ))
+    };
+    let k = der::parse(resp)
+        .and_then(|t| t.items(der::SEQUENCE))
+        .map_err(bad)?;
+    let status = k
+        .first()
+        .ok_or_else(|| bad(Error::new("empty")))?
+        .items(der::SEQUENCE)
+        .map_err(bad)?;
+    let code = status
+        .first()
+        .map(|s| s.small_int())
+        .transpose()
+        .map_err(bad)?
+        .unwrap_or(2);
     match k.get(1) {
         Some(tok) if code == 0 || code == 1 => Ok(tok.raw),
         _ => {
@@ -143,7 +178,11 @@ fn read_response(resp: &[u8]) -> Result<&[u8]> {
 
 fn validate(req: &Request, token: &[u8]) -> Result<()> {
     let sd = SignedData::parse_inner(token)?;
-    let info = TstInfo::parse(sd.content.as_deref().ok_or_else(|| Error::new("token without TSTInfo"))?)?;
+    let info = TstInfo::parse(
+        sd.content
+            .as_deref()
+            .ok_or_else(|| Error::new("token without TSTInfo"))?,
+    )?;
     if req.nonce.is_some() && info.nonce != req.nonce {
         return Err(Error::new("response contains wrong nonce value."));
     }
@@ -156,7 +195,9 @@ fn validate(req: &Request, token: &[u8]) -> Result<()> {
         return Err(Error::new("response for different message imprint digest."));
     }
     if req.cert_req && sd.signers.first().and_then(|s| sd.signer_cert(s)).is_none() {
-        return Err(Error::new("Certificate requested but not present in response."));
+        return Err(Error::new(
+            "Certificate requested but not present in response.",
+        ));
     }
     Ok(())
 }
@@ -177,7 +218,12 @@ pub fn check(sr: &mut SignerReport, si: &SignerInfo, trust: &TrustStore) {
     }
 }
 
-fn check_token(sr: &mut SignerReport, si: &SignerInfo, token: &[u8], trust: &TrustStore) -> Result<()> {
+fn check_token(
+    sr: &mut SignerReport,
+    si: &SignerInfo,
+    token: &[u8],
+    trust: &TrustStore,
+) -> Result<()> {
     let sd = SignedData::parse_inner(token)?;
     if sd.signers.len() != 1 {
         return Err(Error::new("time-stamp token signed by multiple signers."));
@@ -186,29 +232,48 @@ fn check_token(sr: &mut SignerReport, si: &SignerInfo, token: &[u8], trust: &Tru
         return Err(Error::new("ContentInfo object not for a time stamp."));
     }
     let tsi = &sd.signers[0];
-    if tsi.signed_attr(cms::ATTR_SIGNING_CERT).is_none() && tsi.signed_attr(cms::ATTR_SIGNING_CERT_V2).is_none() {
-        return Err(Error::new("no signing certificate attribute found, time stamp invalid."));
+    if tsi.signed_attr(cms::ATTR_SIGNING_CERT).is_none()
+        && tsi.signed_attr(cms::ATTR_SIGNING_CERT_V2).is_none()
+    {
+        return Err(Error::new(
+            "no signing certificate attribute found, time stamp invalid.",
+        ));
     }
-    let content = sd.content.clone().ok_or_else(|| Error::new("time stamp without TSTInfo"))?;
+    let content = sd
+        .content
+        .clone()
+        .ok_or_else(|| Error::new("time stamp without TSTInfo"))?;
     let info = TstInfo::parse(&content)?;
     sr.timestamp_time = Some(info.gen_time);
     let tsa_cert: Option<Cert> = sd.signer_cert(tsi);
-    sr.timestamp_info = Some(tsa_cert.as_ref().map(Cert::cn).unwrap_or_else(|| "unknown TSA".into()));
+    sr.timestamp_info = Some(
+        tsa_cert
+            .as_ref()
+            .map(Cert::cn)
+            .unwrap_or_else(|| "unknown TSA".into()),
+    );
     let imprint_ok = gost::hash(&info.imprint_alg, &si.signature).is_ok_and(|h| h == info.imprint);
     let sig_ok = tsa_cert.as_ref().is_some_and(|c| {
-        matches!(verify::check_signer(tsi, c, &content, TST_INFO), Ok(Outcome::Valid))
-            && verify::signing_certificate_matches(tsi, c).unwrap_or(false)
+        matches!(
+            verify::check_signer(tsi, c, &content, TST_INFO),
+            Ok(Outcome::Valid)
+        ) && verify::signing_certificate_matches(tsi, c).unwrap_or(false)
     });
     sr.timestamp_ok = Some(imprint_ok && sig_ok);
-    let Some(tsa_cert) = tsa_cert else { return Ok(()) };
+    let Some(tsa_cert) = tsa_cert else {
+        return Ok(());
+    };
     let chain = trust.check(&tsa_cert, info.gen_time);
     let purpose_ok = tsa_cert.has_eku(cert::EKU_TIME_STAMPING);
     sr.timestamp_trusted = Some(chain.ok && purpose_ok);
     let tsa = sr.timestamp_info.clone().unwrap_or_default();
     if !chain.ok {
-        sr.warnings.push(format!("The timestamp authority '{tsa}' is not a trusted NCA RK TSA."));
+        sr.warnings.push(format!(
+            "The timestamp authority '{tsa}' is not a trusted NCA RK TSA."
+        ));
     } else if !purpose_ok {
-        sr.warnings.push("The timestamp authority's certificate is not issued for timestamping.".into());
+        sr.warnings
+            .push("The timestamp authority's certificate is not issued for timestamping.".into());
     }
     Ok(())
 }

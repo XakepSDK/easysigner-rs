@@ -18,8 +18,15 @@ pub fn sign(
     cosign_if_cms: bool,
     detached_original: Option<&[u8]>,
 ) -> Result<SignResult> {
-    let existing = if cosign_if_cms { SignedData::try_parse(input) } else { None };
-    let mut r = SignResult { warnings: cert::key_warnings(&key.cert), ..Default::default() };
+    let existing = if cosign_if_cms {
+        SignedData::try_parse(input)
+    } else {
+        None
+    };
+    let mut r = SignResult {
+        warnings: cert::key_warnings(&key.cert),
+        ..Default::default()
+    };
     let (content, attach): (&[u8], bool) = match &existing {
         None => (input, !detached),
         Some(e) => match &e.content {
@@ -56,7 +63,9 @@ pub fn sign(
 /// signed: every existing signer's signed message digest must match `original`.
 fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
     for si in &existing.signers {
-        let Some(md) = si.signed_attr(cms::ATTR_MESSAGE_DIGEST) else { continue };
+        let Some(md) = si.signed_attr(cms::ATTR_MESSAGE_DIGEST) else {
+            continue;
+        };
         let check = || -> Result<bool> {
             let signed = der::parse(&md)?.expect(der::OCTET_STRING)?.octets()?;
             Ok(signed == gost::hash(&si.digest_alg, original)?)
@@ -68,7 +77,11 @@ fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
                     "The original file does not match this .cms: its existing signatures are for a different document.",
                 ));
             }
-            Err(e) => return Err(Error::new(format!("Could not check the original file against the .cms: {e}"))),
+            Err(e) => {
+                return Err(Error::new(format!(
+                    "Could not check the original file against the .cms: {e}"
+                )));
+            }
         }
     }
     Ok(())

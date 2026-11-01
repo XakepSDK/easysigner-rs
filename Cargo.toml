@@ -1,15 +1,14 @@
 [package]
 name = "kzsigner"
-version = "0.1.0"
+version = "0.1.0-dev"
 edition = "2024"
 rust-version = "1.88"
 description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer"
-license = "MIT"
 repository = "https://github.com/XakepSDK/easysigner-rs"
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:rfd"]
+gui = ["dep:eframe", "dep:rfd", "dep:wgpu"]
 
 [dependencies]
 gost94 = "0.11"
@@ -30,10 +29,17 @@ getrandom = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lexopt = "0.3"
 rpassword = "7"
-eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+eframe = { version = "0.37", optional = true, default-features = false, features = ["x11"] }
 rfd = { version = "0.17", optional = true, default-features = false, features = ["gtk3"] }
 
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.37", optional = true, default-features = false, features = ["glow"] }
+wgpu = { version = "30", optional = true, default-features = false }
+
 [target.'cfg(windows)'.dependencies]
+# Direct3D 12, with Windows' own software renderer (WARP) when there is no graphics driver
+eframe = { version = "0.37", optional = true, default-features = false, features = ["wgpu_no_default_features"] }
+wgpu = { version = "30", optional = true, default-features = false, features = ["dx12", "wgsl", "std"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [profile.release]
@@ -42,3 +48,6 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+egui_kittest = "0.37"

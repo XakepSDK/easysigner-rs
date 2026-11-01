@@ -8,13 +8,24 @@ use crate::gost::{self, Curve, Scheme};
 use crate::{Error, Result};
 
 pub enum PublicKey {
-    Gost { curve: Curve, x: BigUint, y: BigUint },
-    Rsa { n: BigUint, e: BigUint },
+    Gost {
+        curve: Curve,
+        x: BigUint,
+        y: BigUint,
+    },
+    Rsa {
+        n: BigUint,
+        e: BigUint,
+    },
     Other(String),
 }
 
 pub enum PrivateKey {
-    Gost { curve: Curve, scheme: Scheme, d: BigUint },
+    Gost {
+        curve: Curve,
+        scheme: Scheme,
+        d: BigUint,
+    },
     Rsa(RsaPrivate),
 }
 
@@ -31,13 +42,19 @@ pub struct RsaPrivate {
 fn param_set(params: Option<&Tlv>) -> Result<String> {
     let p = params.ok_or_else(|| Error::new("GOST key without curve parameters"))?;
     let items = p.items(der::SEQUENCE)?;
-    items.first().ok_or_else(|| Error::new("GOST key without curve parameters"))?.oid()
+    items
+        .first()
+        .ok_or_else(|| Error::new("GOST key without curve parameters"))?
+        .oid()
 }
 
 /// AlgorithmIdentifier: (OID, parameters).
 pub fn alg_id<'a>(t: &Tlv<'a>) -> Result<(String, Option<Tlv<'a>>)> {
     let k = t.items(der::SEQUENCE)?;
-    let oid = k.first().ok_or_else(|| Error::new("malformed ASN.1: empty AlgorithmIdentifier"))?.oid()?;
+    let oid = k
+        .first()
+        .ok_or_else(|| Error::new("malformed ASN.1: empty AlgorithmIdentifier"))?
+        .oid()?;
     Ok((oid, k.get(1).copied()))
 }
 
@@ -54,7 +71,11 @@ impl PublicKey {
             let curve = gost::curve(&param_set(params.as_ref())?)?;
             let xy = der::parse(bits)?.expect(der::OCTET_STRING)?.content;
             let n = xy.len() / 2;
-            return Ok(PublicKey::Gost { curve, x: gost::le(&xy[..n]), y: gost::le(&xy[n..2 * n]) });
+            return Ok(PublicKey::Gost {
+                curve,
+                x: gost::le(&xy[..n]),
+                y: gost::le(&xy[n..2 * n]),
+            });
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = der::parse(bits)?.items(der::SEQUENCE)?;
@@ -72,7 +93,13 @@ impl PublicKey {
     /// Checks `sig` over `data`. `sig_alg` is the signature algorithm OID; `digest_alg` the
     /// separate digest OID of a CMS signer, used when the signature algorithm names only the key
     /// type (rsaEncryption).
-    pub fn verify(&self, sig_alg: &str, digest_alg: Option<&str>, data: &[u8], sig: &[u8]) -> Result<bool> {
+    pub fn verify(
+        &self,
+        sig_alg: &str,
+        digest_alg: Option<&str>,
+        data: &[u8],
+        sig: &[u8],
+    ) -> Result<bool> {
         match self {
             PublicKey::Gost { curve, x, y } => {
                 let sc = gost::by_sig(sig_alg)
@@ -99,10 +126,20 @@ fn rsa_digest<'a>(sig_alg: &str, digest_alg: Option<&'a str>) -> Result<&'a str>
         "1.2.840.113549.1.1.12" => gost::H_SHA384,
         "1.2.840.113549.1.1.13" => gost::H_SHA512,
         gost::RSA_ENCRYPTION => match digest_alg {
-            Some(d @ (gost::H_SHA1 | gost::H_SHA224 | gost::H_SHA256 | gost::H_SHA384 | gost::H_SHA512)) => d,
+            Some(
+                d @ (gost::H_SHA1
+                | gost::H_SHA224
+                | gost::H_SHA256
+                | gost::H_SHA384
+                | gost::H_SHA512),
+            ) => d,
             _ => gost::H_SHA256,
         },
-        _ => return Err(Error::new(format!("Unsupported signature algorithm {sig_alg}"))),
+        _ => {
+            return Err(Error::new(format!(
+                "Unsupported signature algorithm {sig_alg}"
+            )));
+        }
     })
 }
 
@@ -128,7 +165,9 @@ fn rsa_verify(n: &BigUint, e: &BigUint, digest_oid: &str, h: &[u8], sig: &[u8]) 
     if em.len() < 11 || em[0] != 0 || em[1] != 1 {
         return false;
     }
-    let Some(zero) = em[2..].iter().position(|&b| b != 0xff) else { return false };
+    let Some(zero) = em[2..].iter().position(|&b| b != 0xff) else {
+        return false;
+    };
     if zero < 8 || em[2 + zero] != 0 {
         return false;
     }
@@ -186,12 +225,16 @@ impl PrivateKey {
 
     /// Digest OID used with this key: the GOST one, or SHA-256 for RSA (as NCALayer does).
     pub fn digest_oid(&self) -> &'static str {
-        self.scheme().map(|s| s.digest_oid).unwrap_or(gost::H_SHA256)
+        self.scheme()
+            .map(|s| s.digest_oid)
+            .unwrap_or(gost::H_SHA256)
     }
 
     /// Signature algorithm OID: KZ GOST, or sha256WithRSAEncryption.
     pub fn sig_oid(&self) -> &'static str {
-        self.scheme().map(|s| s.sig_oid).unwrap_or(gost::SIG_SHA256_RSA)
+        self.scheme()
+            .map(|s| s.sig_oid)
+            .unwrap_or(gost::SIG_SHA256_RSA)
     }
 
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
@@ -206,7 +249,8 @@ impl PrivateKey {
     pub fn matches(&self, pub_key: &PublicKey) -> bool {
         match (self, pub_key) {
             (PrivateKey::Gost { curve, d, .. }, PublicKey::Gost { curve: c2, x, y }) => {
-                curve.name == c2.name && curve.public(d).is_some_and(|(px, py)| &px == x && &py == y)
+                curve.name == c2.name
+                    && curve.public(d).is_some_and(|(px, py)| &px == x && &py == y)
             }
             (PrivateKey::Rsa(k), PublicKey::Rsa { n, .. }) => &k.n == n,
             _ => false,

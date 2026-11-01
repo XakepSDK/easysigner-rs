@@ -44,7 +44,12 @@ pub struct Scheme {
 }
 
 pub const SCHEMES: [Scheme; 3] = [
-    Scheme { key_oid: KEY_GOST2004, sig_oid: SIG_GOST2004, digest_oid: H_GOST34311, size: 32 },
+    Scheme {
+        key_oid: KEY_GOST2004,
+        sig_oid: SIG_GOST2004,
+        digest_oid: H_GOST34311,
+        size: 32,
+    },
     Scheme {
         key_oid: KEY_GOST2015_256,
         sig_oid: SIG_GOST2015_256,
@@ -65,7 +70,10 @@ pub fn by_key(oid: &str) -> Option<Scheme> {
 
 /// By signature OID (or, leniently, by key OID, which some files name instead).
 pub fn by_sig(oid: &str) -> Option<Scheme> {
-    SCHEMES.iter().copied().find(|s| s.sig_oid == oid || s.key_oid == oid)
+    SCHEMES
+        .iter()
+        .copied()
+        .find(|s| s.sig_oid == oid || s.key_oid == oid)
 }
 
 pub fn is_gost(oid: &str) -> bool {
@@ -134,14 +142,28 @@ pub fn curve(param_set: &str) -> Result<Curve> {
         },
         "1.2.398.3.10.1.1.2.2.1" => Curve {
             name: "Tc26-Gost-3410-12-512-paramSetA",
-            p: h("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc7"),
-            a: h("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc4"),
-            b: h("e8c2505dedfc86ddc1bd0b2b6667f1da34b82574761cb0e879bd081cfd0b6265ee3cb090f30d27614cb4574010da90dd862ef9d4ebee4761503190785a71c760"),
-            q: h("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff27e69532f48d89116ff22b8d4e0560609b4b38abfad2b85dcacdb1411f10b275"),
+            p: h(
+                "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc7",
+            ),
+            a: h(
+                "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffdc4",
+            ),
+            b: h(
+                "e8c2505dedfc86ddc1bd0b2b6667f1da34b82574761cb0e879bd081cfd0b6265ee3cb090f30d27614cb4574010da90dd862ef9d4ebee4761503190785a71c760",
+            ),
+            q: h(
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff27e69532f48d89116ff22b8d4e0560609b4b38abfad2b85dcacdb1411f10b275",
+            ),
             gx: h("3"),
-            gy: h("7503cfe87a836ae3a61b8816e25450e6ce5e1c93acf1abc1778064fdcbefa921df1626be4fd036e93d75e6a50e3a41e98028fe5fc235f5b889a589cb5215f2a4"),
+            gy: h(
+                "7503cfe87a836ae3a61b8816e25450e6ce5e1c93acf1abc1778064fdcbefa921df1626be4fd036e93d75e6a50e3a41e98028fe5fc235f5b889a589cb5215f2a4",
+            ),
         },
-        _ => return Err(Error::new(format!("Unsupported GOST curve parameter set {param_set}"))),
+        _ => {
+            return Err(Error::new(format!(
+                "Unsupported GOST curve parameter set {param_set}"
+            )));
+        }
     })
 }
 
@@ -168,7 +190,11 @@ impl Curve {
     }
 
     fn infinity() -> Jac {
-        Jac { x: BigUint::one(), y: BigUint::one(), z: BigUint::zero() }
+        Jac {
+            x: BigUint::one(),
+            y: BigUint::one(),
+            z: BigUint::zero(),
+        }
     }
 
     fn double(&self, pt: &Jac) -> Jac {
@@ -186,7 +212,11 @@ impl Curve {
         let y4_8 = (BigUint::from(8u32) * self.mul_m(&yy, &yy)) % &self.p;
         let y3 = self.sub_m(&self.mul_m(&m, &self.sub_m(&s, &x3)), &y4_8);
         let z3 = self.mul_m(&(BigUint::from(2u32) * &pt.y), &pt.z);
-        Jac { x: x3, y: y3, z: z3 }
+        Jac {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
     }
 
     fn add(&self, p1: &Jac, p2: &Jac) -> Jac {
@@ -203,17 +233,31 @@ impl Curve {
         let s1 = self.mul_m(&p1.y, &self.mul_m(&p2.z, &z2z2));
         let s2 = self.mul_m(&p2.y, &self.mul_m(&p1.z, &z1z1));
         if u1 == u2 {
-            return if s1 == s2 { self.double(p1) } else { Self::infinity() };
+            return if s1 == s2 {
+                self.double(p1)
+            } else {
+                Self::infinity()
+            };
         }
         let hh = self.sub_m(&u2, &u1);
         let r = self.sub_m(&s2, &s1);
         let h2 = self.mul_m(&hh, &hh);
         let h3 = self.mul_m(&h2, &hh);
         let u1h2 = self.mul_m(&u1, &h2);
-        let x3 = self.sub_m(&self.sub_m(&self.mul_m(&r, &r), &h3), &self.add_m(&u1h2, &u1h2));
-        let y3 = self.sub_m(&self.mul_m(&r, &self.sub_m(&u1h2, &x3)), &self.mul_m(&s1, &h3));
+        let x3 = self.sub_m(
+            &self.sub_m(&self.mul_m(&r, &r), &h3),
+            &self.add_m(&u1h2, &u1h2),
+        );
+        let y3 = self.sub_m(
+            &self.mul_m(&r, &self.sub_m(&u1h2, &x3)),
+            &self.mul_m(&s1, &h3),
+        );
         let z3 = self.mul_m(&hh, &self.mul_m(&p1.z, &p2.z));
-        Jac { x: x3, y: y3, z: z3 }
+        Jac {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
     }
 
     /// k·P with a fixed sequence of operations per bit (a ladder).
@@ -238,11 +282,18 @@ impl Curve {
         }
         let zi = self.inv_m(&p.z);
         let zi2 = self.mul_m(&zi, &zi);
-        Some((self.mul_m(&p.x, &zi2), self.mul_m(&p.y, &self.mul_m(&zi2, &zi))))
+        Some((
+            self.mul_m(&p.x, &zi2),
+            self.mul_m(&p.y, &self.mul_m(&zi2, &zi)),
+        ))
     }
 
     fn g(&self) -> Jac {
-        Jac { x: self.gx.clone(), y: self.gy.clone(), z: BigUint::one() }
+        Jac {
+            x: self.gx.clone(),
+            y: self.gy.clone(),
+            z: BigUint::one(),
+        }
     }
 
     pub fn on_curve(&self, x: &BigUint, y: &BigUint) -> bool {
@@ -250,7 +301,10 @@ impl Curve {
             return false;
         }
         let lhs = self.mul_m(y, y);
-        let rhs = self.add_m(&self.add_m(&self.mul_m(&self.mul_m(x, x), x), &self.mul_m(&self.a, x)), &self.b);
+        let rhs = self.add_m(
+            &self.add_m(&self.mul_m(&self.mul_m(x, x), x), &self.mul_m(&self.a, x)),
+            &self.b,
+        );
         lhs == rhs
     }
 
@@ -268,7 +322,9 @@ impl Curve {
         }
         loop {
             let k = random_below(q)?;
-            let Some((cx, _)) = self.affine(&self.mul(&k, &self.g())) else { continue };
+            let Some((cx, _)) = self.affine(&self.mul(&k, &self.g())) else {
+                continue;
+            };
             let r = cx % q;
             if r.is_zero() {
                 continue;
@@ -285,7 +341,7 @@ impl Curve {
 
     /// Checks a GOST R 34.10 signature (r || s, little-endian) of `hash` by point (x, y).
     pub fn verify(&self, x: &BigUint, y: &BigUint, hash: &[u8], sig: &[u8]) -> bool {
-        if sig.len() % 2 != 0 || sig.is_empty() || !self.on_curve(x, y) {
+        if !sig.len().is_multiple_of(2) || sig.is_empty() || !self.on_curve(x, y) {
             return false;
         }
         let q = &self.q;
@@ -302,7 +358,11 @@ impl Curve {
         let v = e.modpow(&(q - 2u32), q);
         let z1 = (&s * &v) % q;
         let z2 = ((q - &r) * &v) % q;
-        let pq = Jac { x: x.clone(), y: y.clone(), z: BigUint::one() };
+        let pq = Jac {
+            x: x.clone(),
+            y: y.clone(),
+            z: BigUint::one(),
+        };
         let c = self.add(&self.mul(&z1, &self.g()), &self.mul(&z2, &pq));
         match self.affine(&c) {
             Some((cx, _)) => cx % q == r,
@@ -366,6 +426,9 @@ mod tests {
         let m1 = b"012345678901234567890123456789012345678901234567890123456789012";
         let h = hash(H_GOST2015_256, m1).unwrap();
         let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "9d151eefd8590b89daa6ba6cb74af9275dd051026bb149a452fd84e5e57b5500");
+        assert_eq!(
+            hex,
+            "9d151eefd8590b89daa6ba6cb74af9275dd051026bb149a452fd84e5e57b5500"
+        );
     }
 }

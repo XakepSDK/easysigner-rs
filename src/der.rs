@@ -78,7 +78,14 @@ pub fn read(data: &[u8]) -> Result<(Tlv<'_>, &[u8])> {
                 return Err(bad("truncated"));
             }
             let raw = &data[..hdr + l];
-            Ok((Tlv { tag, content: &raw[hdr..], raw }, &data[hdr + l..]))
+            Ok((
+                Tlv {
+                    tag,
+                    content: &raw[hdr..],
+                    raw,
+                },
+                &data[hdr + l..],
+            ))
         }
         None => {
             // children up to the end-of-contents mark 00 00
@@ -92,7 +99,14 @@ pub fn read(data: &[u8]) -> Result<(Tlv<'_>, &[u8])> {
             }
             let inner = data.len() - hdr - rest.len();
             let raw = &data[..hdr + inner + 2];
-            Ok((Tlv { tag, content: &data[hdr..hdr + inner], raw }, &rest[2..]))
+            Ok((
+                Tlv {
+                    tag,
+                    content: &data[hdr..hdr + inner],
+                    raw,
+                },
+                &rest[2..],
+            ))
         }
     }
 }
@@ -124,7 +138,10 @@ impl<'a> Tlv<'a> {
 
     pub fn expect(self, tag: u8) -> Result<Tlv<'a>> {
         if self.tag != tag {
-            return Err(bad(&format!("expected tag {tag:#04x}, found {:#04x}", self.tag)));
+            return Err(bad(&format!(
+                "expected tag {tag:#04x}, found {:#04x}",
+                self.tag
+            )));
         }
         Ok(self)
     }
@@ -208,15 +225,16 @@ impl<'a> Tlv<'a> {
             0x0c | 0x13 | 0x16 | 0x1a | 0x12 => String::from_utf8_lossy(&c).into_owned(),
             0x14 => c.iter().map(|&b| b as char).collect(),
             0x1e => {
-                let u: Vec<u16> =
-                    c.chunks(2).map(|p| u16::from_be_bytes([p[0], *p.get(1).unwrap_or(&0)])).collect();
+                let u: Vec<u16> = c
+                    .chunks(2)
+                    .map(|p| u16::from_be_bytes([p[0], *p.get(1).unwrap_or(&0)]))
+                    .collect();
                 String::from_utf16_lossy(&u)
             }
             0x1c => c
                 .chunks(4)
-                .filter_map(|p| {
-                    (p.len() == 4).then(|| u32::from_be_bytes([p[0], p[1], p[2], p[3]]))
-                })
+                .filter(|&p| p.len() == 4)
+                .map(|p| u32::from_be_bytes([p[0], p[1], p[2], p[3]]))
                 .map(|u| char::from_u32(u).unwrap_or('\u{fffd}'))
                 .collect(),
             _ => return None,
@@ -252,7 +270,13 @@ pub fn oid_to_string(c: &[u8]) -> Result<String> {
         }
     }
     let first = parts[0];
-    let (a, b) = if first < 40 { (0, first) } else if first < 80 { (1, first - 40) } else { (2, first - 80) };
+    let (a, b) = if first < 40 {
+        (0, first)
+    } else if first < 80 {
+        (1, first - 40)
+    } else {
+        (2, first - 80)
+    };
     let mut s = format!("{a}.{b}");
     for p in &parts[1..] {
         s.push('.');
@@ -262,7 +286,10 @@ pub fn oid_to_string(c: &[u8]) -> Result<String> {
 }
 
 pub fn oid_content(s: &str) -> Vec<u8> {
-    let n: Vec<u64> = s.split('.').map(|p| p.parse().expect("valid OID")).collect();
+    let n: Vec<u64> = s
+        .split('.')
+        .map(|p| p.parse().expect("valid OID"))
+        .collect();
     let mut out = Vec::new();
     let mut arcs = vec![n[0] * 40 + n[1]];
     arcs.extend(&n[2..]);
@@ -366,7 +393,12 @@ mod tests {
 
     #[test]
     fn oid_round_trip() {
-        for s in ["1.2.840.113549.1.7.2", "1.2.398.3.10.1.1.2.3.2", "2.5.4.3", "2.16.840.1.101.3.4.2.1"] {
+        for s in [
+            "1.2.840.113549.1.7.2",
+            "1.2.398.3.10.1.1.2.3.2",
+            "2.5.4.3",
+            "2.16.840.1.101.3.4.2.1",
+        ] {
             assert_eq!(oid_to_string(&oid_content(s)).unwrap(), s);
         }
     }
@@ -374,7 +406,9 @@ mod tests {
     #[test]
     fn indefinite_lengths() {
         // SEQUENCE (indef) { OCTET STRING constructed (indef) { "ab", "c" } }
-        let data = [0x30, 0x80, 0x24, 0x80, 0x04, 0x02, b'a', b'b', 0x04, 0x01, b'c', 0, 0, 0, 0];
+        let data = [
+            0x30, 0x80, 0x24, 0x80, 0x04, 0x02, b'a', b'b', 0x04, 0x01, b'c', 0, 0, 0, 0,
+        ];
         let t = parse(&data).unwrap();
         let k = t.children().unwrap();
         assert_eq!(k.len(), 1);

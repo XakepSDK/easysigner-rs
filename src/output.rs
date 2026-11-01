@@ -12,7 +12,10 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         o,
         "{}",
         if r.valid {
-            format!("RESULT: VALID - all {} signature(s) check out", r.signers.len())
+            format!(
+                "RESULT: VALID - all {} signature(s) check out",
+                r.signers.len()
+            )
         } else {
             "RESULT: NOT VALID (see details below)".into()
         }
@@ -25,38 +28,65 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
             r.content_sha256.as_deref().unwrap_or("")
         );
     } else if r.detached_provided {
-        let _ = writeln!(o, "Document: detached, checked against {}", data.unwrap_or("the original"));
+        let _ = writeln!(
+            o,
+            "Document: detached, checked against {}",
+            data.unwrap_or("the original")
+        );
     }
     for w in &r.warnings {
         let _ = writeln!(o, "Note: {w}");
     }
     for s in &r.signers {
         let _ = writeln!(o);
-        let _ = writeln!(o, "Signature #{}: {}", s.index, if s.valid { "VALID" } else { "NOT VALID" });
+        let _ = writeln!(
+            o,
+            "Signature #{}: {}",
+            s.index,
+            if s.valid { "VALID" } else { "NOT VALID" }
+        );
         let line = |o: &mut String, k: &str, v: &str| {
             let _ = writeln!(o, "  {:<14} {v}", format!("{k}:"));
         };
         let given = s.get("G").map(|g| format!(" {g}")).unwrap_or_default();
-        line(&mut o, "Signer", &format!("{}{given}", s.get("CN").unwrap_or("?")));
+        line(
+            &mut o,
+            "Signer",
+            &format!("{}{given}", s.get("CN").unwrap_or("?")),
+        );
         if let Some(v) = s.get("IIN") {
             line(&mut o, "IIN", v);
         }
         if let Some(org) = s.get("O") {
-            let bin = s.get("BIN").map(|b| format!(" (BIN {b})")).unwrap_or_default();
+            let bin = s
+                .get("BIN")
+                .map(|b| format!(" (BIN {b})"))
+                .unwrap_or_default();
             line(&mut o, "Organization", &format!("{org}{bin}"));
         }
         if let Some(v) = s.get("E") {
             line(&mut o, "Email", v);
         }
         line(&mut o, "Signed at", &signed_at(s));
-        line(&mut o, "Algorithm", s.algorithm.as_deref().unwrap_or("null"));
+        line(
+            &mut o,
+            "Algorithm",
+            s.algorithm.as_deref().unwrap_or("null"),
+        );
         line(
             &mut o,
             "Signature",
-            if s.signature_ok { "matches the document" } else { s.signature_error.as_deref().unwrap_or("null") },
+            if s.signature_ok {
+                "matches the document"
+            } else {
+                s.signature_error.as_deref().unwrap_or("null")
+            },
         );
-        let types =
-            if s.cert_types.is_empty() { String::new() } else { format!(", type {}", s.cert_types.join("/")) };
+        let types = if s.cert_types.is_empty() {
+            String::new()
+        } else {
+            format!(", type {}", s.cert_types.join("/"))
+        };
         line(
             &mut o,
             "Certificate",
@@ -72,7 +102,9 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         line(
             &mut o,
             "Revocation",
-            s.ocsp_status.as_deref().unwrap_or("not checked (use --ocsp, needs internet)"),
+            s.ocsp_status
+                .as_deref()
+                .unwrap_or("not checked (use --ocsp, needs internet)"),
         );
         for w in &s.warnings {
             line(&mut o, "Warning", w);
@@ -82,7 +114,9 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
 }
 
 fn signed_at(s: &SignerReport) -> String {
-    let Some(ts) = s.timestamp_time else { return format!("{} (signer's clock)", fmt(s.signing_time)) };
+    let Some(ts) = s.timestamp_time else {
+        return format!("{} (signer's clock)", fmt(s.signing_time));
+    };
     let state = if s.timestamp_ok != Some(true) {
         "INVALID"
     } else if s.timestamp_trusted == Some(true) {
@@ -90,7 +124,11 @@ fn signed_at(s: &SignerReport) -> String {
     } else {
         "signature ok but TSA not trusted"
     };
-    format!("{} (timestamp by {}, {state})", fmt(Some(ts)), s.timestamp_info.as_deref().unwrap_or("null"))
+    format!(
+        "{} (timestamp by {}, {state})",
+        fmt(Some(ts)),
+        s.timestamp_info.as_deref().unwrap_or("null")
+    )
 }
 
 // ------------------------------------------------------------------ JSON
@@ -117,7 +155,12 @@ fn strs(v: &[String]) -> J {
     J::List(v.iter().map(|x| J::Str(x.clone())).collect())
 }
 fn obj(fields: Vec<(&str, J)>) -> J {
-    J::Obj(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    J::Obj(
+        fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
 }
 
 /// JSON for `verify --json`. Every field is always present (null when unknown); dates are
@@ -143,7 +186,15 @@ fn signer(x: &SignerReport) -> J {
         ("valid", J::Bool(x.valid)),
         ("signatureOk", J::Bool(x.signature_ok)),
         ("signatureError", s(&x.signature_error)),
-        ("subject", J::Obj(x.subject.iter().map(|(k, v)| (k.clone(), J::Str(v.clone()))).collect())),
+        (
+            "subject",
+            J::Obj(
+                x.subject
+                    .iter()
+                    .map(|(k, v)| (k.clone(), J::Str(v.clone())))
+                    .collect(),
+            ),
+        ),
         ("subjectDn", s(&x.subject_dn)),
         ("issuerDn", s(&x.issuer_dn)),
         ("issuerCn", s(&x.issuer_cn)),
@@ -163,7 +214,13 @@ fn signer(x: &SignerReport) -> J {
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
         ("ocspStatus", s(&x.ocsp_status)),
         ("warnings", strs(&x.warnings)),
-        ("certificate", x.cert_der.as_ref().map(|d| J::Str(crate::base64_encode(d))).unwrap_or(J::Null)),
+        (
+            "certificate",
+            x.cert_der
+                .as_ref()
+                .map(|d| J::Str(crate::base64_encode(d)))
+                .unwrap_or(J::Null),
+        ),
     ])
 }
 
@@ -188,7 +245,10 @@ fn quote(out: &mut String, v: &str) {
             '\n' => out.push_str("\\n"),
             '\u{c}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
-            c if c < ' ' || ('\u{80}'..'\u{a0}').contains(&c) || ('\u{2000}'..'\u{2100}').contains(&c) => {
+            c if c < ' '
+                || ('\u{80}'..'\u{a0}').contains(&c)
+                || ('\u{2000}'..'\u{2100}').contains(&c) =>
+            {
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),

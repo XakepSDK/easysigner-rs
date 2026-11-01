@@ -1,0 +1,88 @@
+# Builds and tests on Linux and Windows: unit tests, the end-to-end checks (tests/e2e.rs), the
+# scripted window test (tests/gui.rs), and a real window start. A push to main whose Cargo.toml
+# version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,
+# with release-notes/X.Y.Z.md.
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version from Cargo.toml
+        id: version
+        shell: bash
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux libraries (file dialogs, virtual display for the window check)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev xvfb libxkbcommon-x11-0 libgl1-mesa-dri
+      - name: Test
+        run: cargo test --release
+      - name: Build
+        run: cargo build --release
+      - name: Window opens and keeps running (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set +e
+          timeout 8 xvfb-run -a target/release/kzsigner gui > gui.log 2>&1
+          r=$?
+          cat gui.log
+          [ $r -eq 124 ]
+      - name: Window opens and keeps running (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -PassThru -FilePath target\release\kzsigner.exe -ArgumentList gui
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { Write-Error "the window closed with exit code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id
+      - name: Package
+        shell: bash
+        run: |
+          V=${{ steps.version.outputs.version }}
+          mkdir -p dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            D="kzsigner-$V-windows-x64"; mkdir "$D"
+            cp target/release/kzsigner.exe README.md "$D/"
+            7z a -bd -mx=9 "dist/$D.zip" "$D" >/dev/null
+          else
+            D="kzsigner-$V-linux-x64"; mkdir "$D"
+            cp target/release/kzsigner README.md "$D/"
+            tar -cJf "dist/$D.tar.xz" "$D"
+          fi
+          ls -la dist "$D"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kzsigner-${{ runner.os }}-x64
+          path: dist/
+  release:
+    if: github.ref == 'refs/heads/main' && !contains(needs.build.outputs.version, '-')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release (once per version)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=${{ needs.build.outputs.version }}
+          if gh release view "v$V" >/dev/null 2>&1; then echo "v$V already released"; exit 0; fi
+          gh release create "v$V" --target "$GITHUB_SHA" --title "kzsigner $V" --notes-file "release-notes/$V.md" dist/*

@@ -19,7 +19,12 @@ fn fixtures() -> PathBuf {
 
 /// Test only: a fake TSA on 127.0.0.1 (NOT NCA's), key from tsa.p12. Returns its URL.
 fn fake_tsa() -> String {
-    let key = kzsigner::p12::open(&std::fs::read(fixtures().join("keys/tsa.p12")).unwrap(), PASSWORD, None).unwrap();
+    let key = kzsigner::p12::open(
+        &std::fs::read(fixtures().join("keys/tsa.p12")).unwrap(),
+        PASSWORD,
+        None,
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -76,14 +81,19 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
     let policy = req.policy.clone().unwrap_or("1.2.398.3.3.2.6.2".into());
     let mut info = der::small_int(1);
     info.extend(der::oid(&policy));
-    info.extend(der::seq(&[&der::seq(&[&der::oid(&req.hash_oid)]), &der::octets(&req.hash)]));
+    info.extend(der::seq(&[
+        &der::seq(&[&der::oid(&req.hash_oid)]),
+        &der::octets(&req.hash),
+    ]));
     info.extend(der::small_int(serial));
     info.extend(kzsigner::time::encode_generalized(kzsigner::time::now_ms()));
     if let Some(n) = &req.nonce {
         info.extend(der::uint(n));
     }
     let info = der::tlv(der::SEQUENCE, &info);
-    let token = cms::sign_once(&info, TST_INFO, true, &key.private_key, &key.cert).ok()?.encode();
+    let token = cms::sign_once(&info, TST_INFO, true, &key.private_key, &key.cert)
+        .ok()?
+        .encode();
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
 }
 
@@ -134,7 +144,11 @@ fn end_to_end() {
     let dir = std::env::temp_dir().join(format!("kzsigner-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut t = Run { dir: dir.clone(), pass: 0, fail: vec![] };
+    let mut t = Run {
+        dir: dir.clone(),
+        pass: 0,
+        fail: vec![],
+    };
     let k = fixtures().join("keys");
     let fx = fixtures().join("kalkan");
     let key = |n: &str| s(&k.join(n));
@@ -147,16 +161,39 @@ fn end_to_end() {
         std::fs::write(t.path(&d), doc).unwrap();
         let ca = key(&format!("ca_{a}.cer"));
         t.kz(&["sign", "-k", &key(&format!("alice_{a}.p12")), &d]);
-        t.kz(&["sign", "-k", &key(&format!("bob_{a}.p12")), &format!("{d}.cms")]);
+        t.kz(&[
+            "sign",
+            "-k",
+            &key(&format!("bob_{a}.p12")),
+            &format!("{d}.cms"),
+        ]);
         let v = t.kz(&["verify", &format!("{d}.cms"), "--trust", &ca]);
-        t.check(&format!("{a}: sign + co-sign verifies (2 signers)"), v.contains("VALID - all 2"));
+        t.check(
+            &format!("{a}: sign + co-sign verifies (2 signers)"),
+            v.contains("VALID - all 2"),
+        );
         let v = t.kz(&["verify", &format!("{d}.cms")]);
-        t.check(&format!("{a}: untrusted CA is reported"), v.contains("NOT VALID"));
+        t.check(
+            &format!("{a}: untrusted CA is reported"),
+            v.contains("NOT VALID"),
+        );
         t.kz(&["extract", &format!("{d}.cms"), "-o", &format!("x_{a}.txt")]);
         let x = std::fs::read(t.path(&format!("x_{a}.txt"))).unwrap_or_default();
-        t.check(&format!("{a}: extract returns the original"), x == doc.as_bytes());
+        t.check(
+            &format!("{a}: extract returns the original"),
+            x == doc.as_bytes(),
+        );
         let ts = format!("ts_{a}.cms");
-        t.kz(&["sign", "-k", &key(&format!("alice_{a}.p12")), "doc.txt", "--tsa", &tsa, "-o", &ts]);
+        t.kz(&[
+            "sign",
+            "-k",
+            &key(&format!("alice_{a}.p12")),
+            "doc.txt",
+            "--tsa",
+            &tsa,
+            "-o",
+            &ts,
+        ]);
         let v = t.kz(&["verify", &ts, "--trust", &ca]);
         t.check(
             &format!("{a}: timestamped signature verifies"),
@@ -173,32 +210,111 @@ fn end_to_end() {
 
     std::fs::copy(t.path("d_rsa.txt.cms"), t.path("mixed.cms")).unwrap();
     t.kz(&["sign", "-k", &key("alice_gost2004.p12"), "mixed.cms"]);
-    let v = t.kz(&["verify", "mixed.cms", "--trust", &key("ca_rsa.cer"), "--trust", &key("ca_gost2004.cer")]);
-    t.check("mixed RSA + GOST co-signing (3 signers)", v.contains("VALID - all 3"));
+    let v = t.kz(&[
+        "verify",
+        "mixed.cms",
+        "--trust",
+        &key("ca_rsa.cer"),
+        "--trust",
+        &key("ca_gost2004.cer"),
+    ]);
+    t.check(
+        "mixed RSA + GOST co-signing (3 signers)",
+        v.contains("VALID - all 3"),
+    );
 
-    t.kz(&["sign", "-k", &key("alice_gost2015.p12"), "doc.txt", "--detached", "-o", "det.cms"]);
-    t.check("detached: needs the original", t.kz(&["verify", "det.cms"]).contains("detached signature"));
-    let v = t.kz(&["verify", "det.cms", "--data", "doc.txt", "--trust", &key("ca_gost2015.cer")]);
-    t.check("detached: verifies with original", v.contains("VALID - all 1"));
+    t.kz(&[
+        "sign",
+        "-k",
+        &key("alice_gost2015.p12"),
+        "doc.txt",
+        "--detached",
+        "-o",
+        "det.cms",
+    ]);
+    t.check(
+        "detached: needs the original",
+        t.kz(&["verify", "det.cms"]).contains("detached signature"),
+    );
+    let v = t.kz(&[
+        "verify",
+        "det.cms",
+        "--data",
+        "doc.txt",
+        "--trust",
+        &key("ca_gost2015.cer"),
+    ]);
+    t.check(
+        "detached: verifies with original",
+        v.contains("VALID - all 1"),
+    );
     std::fs::write(t.path("o.txt"), "other\n").unwrap();
-    t.check("detached: wrong original rejected", t.kz(&["verify", "det.cms", "--data", "o.txt"]).contains("NOT VALID"));
-    let v = t.kz(&["sign", "-k", &key("bob_gost2015.p12"), "det.cms", "--data", "o.txt"]);
-    t.check("detached co-sign: wrong original refused", v.contains("does not match this .cms"));
-    t.kz(&["sign", "-k", &key("bob_gost2015.p12"), "det.cms", "--data", "doc.txt"]);
-    let v = t.kz(&["verify", "det.cms", "--data", "doc.txt", "--trust", &key("ca_gost2015.cer")]);
+    t.check(
+        "detached: wrong original rejected",
+        t.kz(&["verify", "det.cms", "--data", "o.txt"])
+            .contains("NOT VALID"),
+    );
+    let v = t.kz(&[
+        "sign",
+        "-k",
+        &key("bob_gost2015.p12"),
+        "det.cms",
+        "--data",
+        "o.txt",
+    ]);
+    t.check(
+        "detached co-sign: wrong original refused",
+        v.contains("does not match this .cms"),
+    );
+    t.kz(&[
+        "sign",
+        "-k",
+        &key("bob_gost2015.p12"),
+        "det.cms",
+        "--data",
+        "doc.txt",
+    ]);
+    let v = t.kz(&[
+        "verify",
+        "det.cms",
+        "--data",
+        "doc.txt",
+        "--trust",
+        &key("ca_gost2015.cer"),
+    ]);
     t.check("detached co-sign", v.contains("VALID - all 2"));
 
-    let (v, _) = t.kz_env(&["sign", "-k", &key("alice_rsa.p12"), "doc.txt", "-o", "w.cms"], "x");
-    t.check("wrong password message", v.contains("password is probably wrong"));
+    let (v, _) = t.kz_env(
+        &[
+            "sign",
+            "-k",
+            &key("alice_rsa.p12"),
+            "doc.txt",
+            "-o",
+            "w.cms",
+        ],
+        "x",
+    );
+    t.check(
+        "wrong password message",
+        v.contains("password is probably wrong"),
+    );
 
     let b64 = kzsigner::base64_encode(&std::fs::read(t.path("d_rsa.txt.cms")).unwrap());
-    let wrapped: Vec<String> = b64.as_bytes().chunks(76).map(|c| String::from_utf8_lossy(c).into()).collect();
+    let wrapped: Vec<String> = b64
+        .as_bytes()
+        .chunks(76)
+        .map(|c| String::from_utf8_lossy(c).into())
+        .collect();
     std::fs::write(t.path("b64.cms"), wrapped.join("\n") + "\n").unwrap();
     let v = t.kz(&["verify", "b64.cms", "--trust", &key("ca_rsa.cer")]);
     t.check("Base64 .cms accepted", v.contains("VALID - all 2"));
 
     let (_, json) = t.kz_env(&["verify", "d_rsa.txt.cms", "--json"], PASSWORD);
-    t.check("JSON output", json_ok(&json) && json.matches("\"index\": ").count() == 2);
+    t.check(
+        "JSON output",
+        json_ok(&json) && json.matches("\"index\": ").count() == 2,
+    );
 
     t.check(
         "NCA RK's own CA certificate signatures verify (GOST 2004, GOST 2015, RSA)",
@@ -208,15 +324,34 @@ fn end_to_end() {
     // compatibility with files and keys made by NCA's Kalkan library (NCALayer's crypto)
     for a in ["gost2015", "gost2004", "rsa"] {
         let ca = s(&fx.join(format!("ca_{a}.cer")));
-        let v = t.kz(&["verify", &s(&fx.join(format!("cosigned_{a}.cms"))), "--trust", &ca]);
-        t.check(&format!("kalkan {a}: co-signed file verifies"), v.contains("VALID - all 2"));
-        let v = t.kz(&["verify", &s(&fx.join(format!("timestamped_{a}.cms"))), "--trust", &ca]);
-        t.check(&format!("kalkan {a}: timestamped file verifies"), v.contains("FAKE TEST TSA, signature ok"));
+        let v = t.kz(&[
+            "verify",
+            &s(&fx.join(format!("cosigned_{a}.cms"))),
+            "--trust",
+            &ca,
+        ]);
+        t.check(
+            &format!("kalkan {a}: co-signed file verifies"),
+            v.contains("VALID - all 2"),
+        );
+        let v = t.kz(&[
+            "verify",
+            &s(&fx.join(format!("timestamped_{a}.cms"))),
+            "--trust",
+            &ca,
+        ]);
+        t.check(
+            &format!("kalkan {a}: timestamped file verifies"),
+            v.contains("FAKE TEST TSA, signature ok"),
+        );
         let kc = format!("k_{a}.cms");
         std::fs::copy(fx.join(format!("cosigned_{a}.cms")), t.path(&kc)).unwrap();
         t.kz(&["sign", "-k", &s(&fx.join(format!("alice_{a}.p12"))), &kc]);
         let v = t.kz(&["verify", &kc, "--trust", &ca]);
-        t.check(&format!("kalkan {a}: key file opens and co-signs a kalkan file (3 signers)"), v.contains("VALID - all 3"));
+        t.check(
+            &format!("kalkan {a}: key file opens and co-signs a kalkan file (3 signers)"),
+            v.contains("VALID - all 3"),
+        );
     }
     let v = t.kz(&[
         "verify",
@@ -226,7 +361,10 @@ fn end_to_end() {
         "--trust",
         &s(&fx.join("ca_gost2015.cer")),
     ]);
-    t.check("kalkan: detached file verifies with original", v.contains("VALID - all 1"));
+    t.check(
+        "kalkan: detached file verifies with original",
+        v.contains("VALID - all 1"),
+    );
 
     println!("\n{} passed, {} failed", t.pass, t.fail.len());
     let _ = std::fs::remove_dir_all(&dir);

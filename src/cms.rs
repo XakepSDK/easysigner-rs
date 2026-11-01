@@ -87,12 +87,18 @@ pub fn attribute(oid: &str, value: &[u8]) -> Vec<u8> {
 impl SignedData {
     /// The CMS, or None when `raw` is not a signed CMS with at least one signature.
     pub fn try_parse(raw: &[u8]) -> Option<SignedData> {
-        Self::parse_inner(&normalize(raw)).ok().filter(|d| !d.signers.is_empty())
+        Self::parse_inner(&normalize(raw))
+            .ok()
+            .filter(|d| !d.signers.is_empty())
     }
 
     pub fn parse(raw: &[u8]) -> Result<SignedData> {
-        Self::parse_inner(&normalize(raw))
-            .map_err(|e| Error::new(format!("This file is not a CMS/PKCS#7 signed file ({}).", e.0)))
+        Self::parse_inner(&normalize(raw)).map_err(|e| {
+            Error::new(format!(
+                "This file is not a CMS/PKCS#7 signed file ({}).",
+                e.0
+            ))
+        })
     }
 
     /// A ContentInfo with SignedData (also used for timestamp tokens).
@@ -102,13 +108,23 @@ impl SignedData {
         if ci.len() < 2 || ci[0].oid()? != SIGNED_DATA {
             return Err(Error::new("not SignedData"));
         }
-        let sd = ci[1].expect(der::ctx(0))?.inner_any()?.items(der::SEQUENCE)?;
+        let sd = ci[1]
+            .expect(der::ctx(0))?
+            .inner_any()?
+            .items(der::SEQUENCE)?;
         if sd.len() < 4 {
             return Err(Error::new("SignedData too short"));
         }
-        let digest_algs = sd[1].items(der::SET)?.iter().map(|a| a.raw.to_vec()).collect();
+        let digest_algs = sd[1]
+            .items(der::SET)?
+            .iter()
+            .map(|a| a.raw.to_vec())
+            .collect();
         let encap = sd[2].items(der::SEQUENCE)?;
-        let content_type = encap.first().ok_or_else(|| Error::new("no content type"))?.oid()?;
+        let content_type = encap
+            .first()
+            .ok_or_else(|| Error::new("no content type"))?
+            .oid()?;
         let content = match encap.get(1) {
             Some(c) => Some(c.expect(der::ctx(0))?.inner_any()?.octets()?),
             None => None,
@@ -119,7 +135,12 @@ impl SignedData {
                 0xa0 => certs = t.children()?.iter().map(|c| c.raw.to_vec()).collect(),
                 0xa1 => crls = Some(t.raw.to_vec()),
                 der::SET => {
-                    signers = Some(t.children()?.iter().map(SignerInfo::parse).collect::<Result<Vec<_>>>()?)
+                    signers = Some(
+                        t.children()?
+                            .iter()
+                            .map(SignerInfo::parse)
+                            .collect::<Result<Vec<_>>>()?,
+                    )
                 }
                 _ => {}
             }
@@ -136,13 +157,19 @@ impl SignedData {
 
     /// The certificates that parse.
     pub fn certificates(&self) -> Vec<Cert> {
-        self.certs.iter().filter_map(|c| Cert::parse(c).ok()).collect()
+        self.certs
+            .iter()
+            .filter_map(|c| Cert::parse(c).ok())
+            .collect()
     }
 
     /// DER-encoded ContentInfo.
     pub fn encode(&self) -> Vec<u8> {
         let v3 = self.content_type != ID_DATA
-            || self.signers.iter().any(|s| s.sid.first() == Some(&der::ctx_prim(0)));
+            || self
+                .signers
+                .iter()
+                .any(|s| s.sid.first() == Some(&der::ctx_prim(0)));
         let mut encap = der::oid(&self.content_type);
         if let Some(c) = &self.content {
             encap.extend(der::tlv(der::ctx(0), &der::octets(c)));
@@ -156,8 +183,13 @@ impl SignedData {
         if let Some(c) = &self.crls {
             body.extend(c);
         }
-        body.extend(der::set_of(self.signers.iter().map(SignerInfo::encode).collect()));
-        der::seq(&[&der::oid(SIGNED_DATA), &der::tlv(der::ctx(0), &der::tlv(der::SEQUENCE, &body))])
+        body.extend(der::set_of(
+            self.signers.iter().map(SignerInfo::encode).collect(),
+        ));
+        der::seq(&[
+            &der::oid(SIGNED_DATA),
+            &der::tlv(der::ctx(0), &der::tlv(der::SEQUENCE, &body)),
+        ])
     }
 
     /// The certificate a signer names, from this file's certificates.
@@ -202,7 +234,9 @@ impl SignerInfo {
         let sig_alg_t = k.get(i).ok_or_else(short)?;
         let sig = k.get(i + 1).ok_or_else(short)?;
         let unsigned_attrs = match k.get(i + 2) {
-            Some(u) if u.tag == der::ctx(1) => u.children()?.iter().map(|a| a.raw.to_vec()).collect(),
+            Some(u) if u.tag == der::ctx(1) => {
+                u.children()?.iter().map(|a| a.raw.to_vec()).collect()
+            }
             _ => vec![],
         };
         Ok(SignerInfo {
@@ -226,14 +260,19 @@ impl SignerInfo {
         b.extend(&self.sig_alg_raw);
         b.extend(der::octets(&self.signature));
         if !self.unsigned_attrs.is_empty() {
-            b.extend(der::sorted_set(der::ctx(1), &mut self.unsigned_attrs.clone()));
+            b.extend(der::sorted_set(
+                der::ctx(1),
+                &mut self.unsigned_attrs.clone(),
+            ));
         }
         der::tlv(der::SEQUENCE, &b)
     }
 
     pub fn signed(&self) -> Vec<(String, Vec<Vec<u8>>)> {
         match &self.signed_attrs {
-            Some(a) => der::parse(a).map(|t| attributes(t.content)).unwrap_or_default(),
+            Some(a) => der::parse(a)
+                .map(|t| attributes(t.content))
+                .unwrap_or_default(),
             None => vec![],
         }
     }
@@ -244,7 +283,10 @@ impl SignerInfo {
 
     /// First value of a signed attribute.
     pub fn signed_attr(&self, oid: &str) -> Option<Vec<u8>> {
-        self.signed().into_iter().find(|(o, _)| o == oid).and_then(|(_, v)| v.into_iter().next())
+        self.signed()
+            .into_iter()
+            .find(|(o, _)| o == oid)
+            .and_then(|(_, v)| v.into_iter().next())
     }
 
     pub fn signing_time(&self) -> Option<i64> {
@@ -254,11 +296,15 @@ impl SignerInfo {
 
     /// Whether `c` is the certificate this signer names.
     pub fn identifies(&self, c: &Cert) -> bool {
-        let Ok(t) = der::parse(&self.sid) else { return false };
+        let Ok(t) = der::parse(&self.sid) else {
+            return false;
+        };
         if t.tag == der::ctx_prim(0) {
             return c.subject_key_id().is_some_and(|k| k == t.content);
         }
-        let Ok(k) = t.items(der::SEQUENCE) else { return false };
+        let Ok(k) = t.items(der::SEQUENCE) else {
+            return false;
+        };
         k.len() == 2
             && cert::names_equal(k[0].raw, &c.issuer)
             && k[1].uint().is_ok_and(|s| s == c.serial.as_slice())
@@ -293,7 +339,9 @@ pub fn sign_once(
     let digest_oid = key.digest_oid();
     let md = gost::hash(digest_oid, content)?;
     // CAdES-BES signed attributes, the same set NCALayer writes
-    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&gost::sha256(&cert.der))])])]);
+    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&gost::sha256(
+        &cert.der,
+    ))])])]);
     let mut attrs = vec![
         attribute(ATTR_CONTENT_TYPE, &der::oid(content_type)),
         attribute(ATTR_SIGNING_TIME, &time::encode(time::now_ms())),

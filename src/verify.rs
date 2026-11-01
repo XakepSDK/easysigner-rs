@@ -18,13 +18,20 @@ pub enum Outcome {
 }
 
 /// Checks one signer of SignedData over `content` (of type `content_type`) with `cert`'s key.
-pub fn check_signer(si: &SignerInfo, c: &Cert, content: &[u8], content_type: &str) -> Result<Outcome> {
+pub fn check_signer(
+    si: &SignerInfo,
+    c: &Cert,
+    content: &[u8],
+    content_type: &str,
+) -> Result<Outcome> {
     if si.signed_attrs.is_some() {
         let ct = si.signed_attr(cms::ATTR_CONTENT_TYPE).ok_or_else(|| {
             Error::new("The content-type attribute type MUST be present whenever signed attributes are present in signed-data")
         })?;
         if der::parse(&ct)?.oid()? != content_type {
-            return Err(Error::new("content-type attribute value does not match eContentType"));
+            return Err(Error::new(
+                "content-type attribute value does not match eContentType",
+            ));
         }
         let md = si.signed_attr(cms::ATTR_MESSAGE_DIGEST).ok_or_else(|| {
             Error::new("the message-digest signed attribute type MUST be present when there are any signed attributes present")
@@ -34,7 +41,12 @@ pub fn check_signer(si: &SignerInfo, c: &Cert, content: &[u8], content_type: &st
             return Ok(Outcome::DigestMismatch);
         }
     }
-    let ok = c.public_key()?.verify(&si.sig_alg, Some(&si.digest_alg), &si.signed_bytes(content), &si.signature)?;
+    let ok = c.public_key()?.verify(
+        &si.sig_alg,
+        Some(&si.digest_alg),
+        &si.signed_bytes(content),
+        &si.signature,
+    )?;
     Ok(if ok { Outcome::Valid } else { Outcome::Invalid })
 }
 
@@ -49,20 +61,31 @@ pub fn signing_certificate_matches(si: &SignerInfo, c: &Cert) -> Result<bool> {
         },
     };
     let k = der::parse(&v)?.items(der::SEQUENCE)?;
-    let Some(ids) = k.first() else { return Ok(true) };
+    let Some(ids) = k.first() else {
+        return Ok(true);
+    };
     let ids = ids.items(der::SEQUENCE)?;
-    let Some(id) = ids.first() else { return Ok(true) };
+    let Some(id) = ids.first() else {
+        return Ok(true);
+    };
     let f = id.items(der::SEQUENCE)?;
     let (alg, hash) = match (v2, f.first()) {
         (true, Some(a)) if a.tag == der::SEQUENCE => (alg_id(a)?.0, f.get(1)),
         (true, _) => (gost::H_SHA256.to_string(), f.first()),
         (false, _) => (gost::H_SHA1.to_string(), f.first()),
     };
-    let hash = hash.ok_or_else(|| Error::new("ESS certificate id without hash"))?.octets()?;
+    let hash = hash
+        .ok_or_else(|| Error::new("ESS certificate id without hash"))?
+        .octets()?;
     Ok(gost::hash(&alg, &c.der)? == hash)
 }
 
-pub fn verify(raw: &[u8], detached_original: Option<&[u8]>, trust: &TrustStore, ocsp_url: Option<&str>) -> Result<VerifyReport> {
+pub fn verify(
+    raw: &[u8],
+    detached_original: Option<&[u8]>,
+    trust: &TrustStore,
+    ocsp_url: Option<&str>,
+) -> Result<VerifyReport> {
     let d = SignedData::parse(raw)?;
     let mut rep = VerifyReport::default();
     let content: Option<Vec<u8>> = if let Some(c) = &d.content {
@@ -83,13 +106,15 @@ pub fn verify(raw: &[u8], detached_original: Option<&[u8]>, trust: &TrustStore, 
         rep.content_sha256 = Some(crate::hex(&gost::sha256(c)));
     }
     for si in &d.signers {
-        rep.signers.push(check_one(&d, si, content.as_deref(), trust, ocsp_url));
+        rep.signers
+            .push(check_one(&d, si, content.as_deref(), trust, ocsp_url));
     }
     // by time: trusted timestamp if any, else the signer's clock; unknown times last
-    rep.signers.sort_by_key(|s| match s.timestamp_time.or(s.signing_time) {
-        Some(t) => (0, t),
-        None => (1, 0),
-    });
+    rep.signers
+        .sort_by_key(|s| match s.timestamp_time.or(s.signing_time) {
+            Some(t) => (0, t),
+            None => (1, 0),
+        });
     for (k, s) in rep.signers.iter_mut().enumerate() {
         s.index = k + 1;
     }
@@ -100,7 +125,13 @@ pub fn verify(raw: &[u8], detached_original: Option<&[u8]>, trust: &TrustStore, 
     Ok(rep)
 }
 
-fn check_one(d: &SignedData, si: &SignerInfo, content: Option<&[u8]>, trust: &TrustStore, ocsp_url: Option<&str>) -> SignerReport {
+fn check_one(
+    d: &SignedData,
+    si: &SignerInfo,
+    content: Option<&[u8]>,
+    trust: &TrustStore,
+    ocsp_url: Option<&str>,
+) -> SignerReport {
     let mut sr = SignerReport {
         signing_time: si.signing_time(),
         algorithm: Some(cert::alg_name(&si.sig_alg, Some(&si.digest_alg))),
@@ -114,21 +145,35 @@ fn check_one(d: &SignedData, si: &SignerInfo, content: Option<&[u8]>, trust: &Tr
     cert::describe(&mut sr, &c);
     match content {
         Some(content) => check_signature(&mut sr, si, &c, content, &d.content_type),
-        None => sr.signature_error = Some("Not checked: original document not provided (detached signature).".into()),
+        None => {
+            sr.signature_error =
+                Some("Not checked: original document not provided (detached signature).".into())
+        }
     }
 
     tsp::check(&mut sr, si, trust);
     // only a valid timestamp from a trusted TSA may move the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine
     let trusted_time = sr.timestamp_ok == Some(true) && sr.timestamp_trusted == Some(true);
-    let at = if trusted_time { sr.timestamp_time } else { sr.signing_time }.unwrap_or_else(time::now_ms);
+    let at = if trusted_time {
+        sr.timestamp_time
+    } else {
+        sr.signing_time
+    }
+    .unwrap_or_else(time::now_ms);
     let valid_at = c.valid_on(at);
     sr.cert_valid_at_signing = Some(valid_at);
     if !valid_at {
-        sr.warnings.push(format!("The certificate was not valid at the signing time ({}).", time::fmt(Some(at))));
+        sr.warnings.push(format!(
+            "The certificate was not valid at the signing time ({}).",
+            time::fmt(Some(at))
+        ));
     }
     if !trusted_time && sr.signing_time.is_some() {
-        sr.warnings.push("Signing time comes from the signer's own computer clock (no trusted timestamp).".into());
+        sr.warnings.push(
+            "Signing time comes from the signer's own computer clock (no trusted timestamp)."
+                .into(),
+        );
     }
     let chain = trust.check(&c, at);
     sr.chain_ok = chain.ok;
@@ -141,11 +186,20 @@ fn check_one(d: &SignedData, si: &SignerInfo, content: Option<&[u8]>, trust: &Tr
         && sr.chain_ok
         && valid_at
         && sr.timestamp_ok != Some(false)
-        && sr.ocsp_status.as_ref().is_none_or(|s| s.starts_with("GOOD"));
+        && sr
+            .ocsp_status
+            .as_ref()
+            .is_none_or(|s| s.starts_with("GOOD"));
     sr
 }
 
-fn check_signature(sr: &mut SignerReport, si: &SignerInfo, c: &Cert, content: &[u8], content_type: &str) {
+fn check_signature(
+    sr: &mut SignerReport,
+    si: &SignerInfo,
+    c: &Cert,
+    content: &[u8],
+    content_type: &str,
+) {
     match check_signer(si, c, content, content_type) {
         Ok(Outcome::Valid) => match signing_certificate_matches(si, c) {
             Ok(true) => sr.signature_ok = true,

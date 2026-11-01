@@ -7,13 +7,10 @@ use std::process::ExitCode;
 use kzsigner::cert::Cert;
 use kzsigner::{Engine, Error, output};
 
-#[cfg(feature = "gui")]
-mod gui;
-
 const HELP: &str = "\
-Usage: kzsigner [-hV] [COMMAND]
+Usage: kzsigner [-hV] [COMMAND | FILE]
 Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer.
-Run without arguments to open the desktop window.
+Run without arguments, or with just a FILE, to open the desktop window.
 Network is used only with --tsa (NCA timestamp) and --ocsp (NCA revocation check).
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
@@ -69,8 +66,9 @@ Show the certificate inside a key file.
 ";
 
 const HELP_GUI: &str = "\
-Usage: kzsigner gui [-hV] [--trust=CA.cer]...
+Usage: kzsigner gui [-hV] [--trust=CA.cer]... [FILE]
 Open the desktop window (default).
+      FILE             A document to sign, a .cms to check, or a key file.
       --trust=CA.cer   Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
 
@@ -135,17 +133,31 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
                 print_version();
                 return Ok(None);
             }
-            Short('k') | Long("key") if allowed(&["sign", "info"]) => o.key = Some(p.value()?.into()),
-            Short('p') | Long("password") if allowed(&["sign", "info"]) => o.password = Some(p.value()?.string()?),
+            Short('k') | Long("key") if allowed(&["sign", "info"]) => {
+                o.key = Some(p.value()?.into())
+            }
+            Short('p') | Long("password") if allowed(&["sign", "info"]) => {
+                o.password = Some(p.value()?.string()?)
+            }
             Long("alias") if allowed(&["sign", "info"]) => o.alias = Some(p.value()?.string()?),
-            Long("trust") if allowed(&["sign", "info", "verify", "gui"]) => o.trust.push(p.value()?.into()),
-            Short('o') | Long("out") if allowed(&["sign", "extract"]) => o.out = Some(p.value()?.into()),
+            Long("trust") if allowed(&["sign", "info", "verify", "gui"]) => {
+                o.trust.push(p.value()?.into())
+            }
+            Short('o') | Long("out") if allowed(&["sign", "extract"]) => {
+                o.out = Some(p.value()?.into())
+            }
             Long("data") if allowed(&["sign", "verify"]) => o.data = Some(p.value()?.into()),
             Long("detached") if allowed(&["sign"]) => o.detached = true,
             Long("json") if allowed(&["verify"]) => o.json = true,
-            Long("tsa") if allowed(&["sign"]) => o.tsa = Some(optional_url(&mut p, kzsigner::DEFAULT_TSA_URL)?),
-            Long("ocsp") if allowed(&["verify"]) => o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?),
-            Value(v) if o.file.is_none() && allowed(&["sign", "verify", "extract"]) => o.file = Some(v.into()),
+            Long("tsa") if allowed(&["sign"]) => {
+                o.tsa = Some(optional_url(&mut p, kzsigner::DEFAULT_TSA_URL)?)
+            }
+            Long("ocsp") if allowed(&["verify"]) => {
+                o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?)
+            }
+            Value(v) if o.file.is_none() && allowed(&["sign", "verify", "extract", "gui"]) => {
+                o.file = Some(v.into())
+            }
             other => return Err(Fail::Usage(other.unexpected().to_string(), help)),
         }
     }
@@ -176,23 +188,33 @@ fn print_version() {
 fn engine(o: &Opts) -> R<Engine> {
     let mut certs = Vec::new();
     for t in &o.trust {
-        certs.push(Cert::parse_any(&read(t)?).map_err(|e| Fail::User(format!("{}: {e}", t.display())))?);
+        certs.push(
+            Cert::parse_any(&read(t)?).map_err(|e| Fail::User(format!("{}: {e}", t.display())))?,
+        );
     }
     Ok(Engine::new(certs))
 }
 
 fn password(o: &Opts) -> R<String> {
-    if let Some(p) = o.password.clone().or_else(|| std::env::var("KZSIGNER_PASSWORD").ok()) {
+    if let Some(p) = o
+        .password
+        .clone()
+        .or_else(|| std::env::var("KZSIGNER_PASSWORD").ok())
+    {
         return Ok(p);
     }
     if !std::io::stdin().is_terminal() {
-        return Err(Fail::User("No password given (use -p or KZSIGNER_PASSWORD).".into()));
+        return Err(Fail::User(
+            "No password given (use -p or KZSIGNER_PASSWORD).".into(),
+        ));
     }
-    rpassword::prompt_password("Key password: ").map_err(|e| Fail::User(format!("could not read the password: {e}")))
+    rpassword::prompt_password("Key password: ")
+        .map_err(|e| Fail::User(format!("could not read the password: {e}")))
 }
 
 fn need<'a, T>(v: &'a Option<T>, what: &str, help: &'static str) -> R<&'a T> {
-    v.as_ref().ok_or_else(|| Fail::Usage(format!("Missing required {what}"), help))
+    v.as_ref()
+        .ok_or_else(|| Fail::Usage(format!("Missing required {what}"), help))
 }
 
 fn open_key(e: &Engine, o: &Opts, help: &'static str) -> R<kzsigner::p12::Key> {
@@ -206,27 +228,51 @@ fn sign(o: Opts) -> R<u8> {
     let k = open_key(&e, &o, HELP_SIGN)?;
     let input = read(&file)?;
     let original = o.data.as_deref().map(read).transpose()?;
-    let r = e.sign(&input, &k, o.detached, o.tsa.as_deref(), true, original.as_deref())?;
+    let r = e.sign(
+        &input,
+        &k,
+        o.detached,
+        o.tsa.as_deref(),
+        true,
+        original.as_deref(),
+    )?;
     let out = o.out.clone().unwrap_or_else(|| {
-        if r.cosigned { file.clone() } else { PathBuf::from(format!("{}.cms", file.display())) }
+        if r.cosigned {
+            file.clone()
+        } else {
+            PathBuf::from(format!("{}.cms", file.display()))
+        }
     });
     let overwrite = r.cosigned && out == file;
     let bak = PathBuf::from(format!("{}.bak", file.display()));
     if overwrite {
-        std::fs::copy(&file, &bak).map_err(|err| Fail::User(format!("could not write {}: {err}", bak.display())))?;
+        std::fs::copy(&file, &bak)
+            .map_err(|err| Fail::User(format!("could not write {}: {err}", bak.display())))?;
     }
     write(&out, &r.cms)?;
     for w in &r.warnings {
         println!("Warning: {w}");
     }
     let who = e.describe(&k.cert);
-    println!("{} by {}", if r.cosigned { "Signature added" } else { "Signed" }, who.get("CN").unwrap_or("?"));
+    println!(
+        "{} by {}",
+        if r.cosigned {
+            "Signature added"
+        } else {
+            "Signed"
+        },
+        who.get("CN").unwrap_or("?")
+    );
     println!(
         "Output: {}  ({} signature{}{})",
         out.display(),
         r.signer_count,
         if r.signer_count == 1 { "" } else { "s" },
-        if r.timestamped { ", with timestamp" } else { "" }
+        if r.timestamped {
+            ", with timestamp"
+        } else {
+            ""
+        }
     );
     if overwrite {
         println!("Previous version saved as {}", bak.display());
@@ -286,7 +332,11 @@ fn info(o: Opts) -> R<u8> {
     println!("Subject:      {}", f(&s.subject_dn));
     println!("Issuer:       {}", f(&s.issuer_dn));
     println!("Serial:       {}", f(&s.serial_hex));
-    println!("Valid:        {} .. {}", kzsigner::time::fmt(s.not_before), kzsigner::time::fmt(s.not_after));
+    println!(
+        "Valid:        {} .. {}",
+        kzsigner::time::fmt(s.not_before),
+        kzsigner::time::fmt(s.not_after)
+    );
     println!("Key type:     {}", f(&s.algorithm));
     if !s.cert_types.is_empty() {
         println!("NCA type:     {}", s.cert_types.join("/"));
@@ -301,13 +351,15 @@ fn info(o: Opts) -> R<u8> {
 #[cfg(feature = "gui")]
 fn gui(o: Opts) -> R<u8> {
     let e = engine(&o)?;
-    gui::run(e).map_err(Fail::User)?;
+    kzsigner::gui::run(e, o.file).map_err(Fail::User)?;
     Ok(0)
 }
 
 #[cfg(not(feature = "gui"))]
 fn gui(_: Opts) -> R<u8> {
-    Err(Fail::User("This build of kzsigner has no window; use the commands (see --help).".into()))
+    Err(Fail::User(
+        "This build of kzsigner has no window; use the commands (see --help).".into(),
+    ))
 }
 
 /// Whether a window can be shown.
@@ -348,6 +400,14 @@ fn run() -> R<u8> {
         "extract" => (HELP_EXTRACT, extract),
         "info" => (HELP_INFO, info),
         "gui" => (HELP_GUI, gui),
+        // "Open with kzsigner" on a file
+        _ if p.next()?.is_none() && Path::new(&cmd).is_file() && display_available() => {
+            hide_console();
+            return gui(Opts {
+                file: Some(cmd.into()),
+                ..Default::default()
+            });
+        }
         _ => return Err(Fail::Usage(format!("Unmatched argument: '{cmd}'"), HELP)),
     };
     match parse(p, &cmd, help)? {
