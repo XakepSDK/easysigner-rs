@@ -3,6 +3,7 @@
 use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData, SignerInfo};
 use crate::der;
+use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
 use crate::report::{SignerReport, VerifyReport};
 use crate::trust::TrustStore;
@@ -96,7 +97,7 @@ pub fn verify(
         Some(o.to_vec())
     } else {
         rep.warnings.push(
-            "This is a detached signature (the document is not inside the .cms). Provide the original file to check the signatures against it."
+            tr("This is a detached signature (the document is not inside the .cms). Provide the original file to check the signatures against it.")
                 .into(),
         );
         None
@@ -120,7 +121,8 @@ pub fn verify(
     }
     rep.valid = !rep.signers.is_empty() && rep.signers.iter().all(|s| s.valid);
     if rep.signers.is_empty() {
-        rep.warnings.push("The file contains no signatures.".into());
+        rep.warnings
+            .push(tr("The file contains no signatures.").into());
     }
     Ok(rep)
 }
@@ -139,7 +141,7 @@ fn check_one(
     };
     let Some(c) = d.signer_cert(si) else {
         sr.signature_error =
-            Some("The signer's certificate is not included in the .cms, so this signature cannot be checked.".into());
+            Some(tr("The signer's certificate is not included in the .cms, so this signature cannot be checked.").into());
         return sr;
     };
     cert::describe(&mut sr, &c);
@@ -147,7 +149,7 @@ fn check_one(
         Some(content) => check_signature(&mut sr, si, &c, content, &d.content_type),
         None => {
             sr.signature_error =
-                Some("Not checked: original document not provided (detached signature).".into())
+                Some(tr("Not checked: original document not provided (detached signature).").into())
         }
     }
 
@@ -164,14 +166,14 @@ fn check_one(
     let valid_at = c.valid_on(at);
     sr.cert_valid_at_signing = Some(valid_at);
     if !valid_at {
-        sr.warnings.push(format!(
+        sr.warnings.push(trf(
             "The certificate was not valid at the signing time ({}).",
-            time::fmt(Some(at))
+            &[&time::fmt(Some(at))],
         ));
     }
     if !trusted_time && sr.signing_time.is_some() {
         sr.warnings.push(
-            "Signing time comes from the signer's own computer clock (no trusted timestamp)."
+            tr("Signing time comes from the signer's own computer clock (no trusted timestamp).")
                 .into(),
         );
     }
@@ -179,17 +181,14 @@ fn check_one(
     sr.chain_ok = chain.ok;
     sr.chain_status = Some(chain.status);
     sr.chain = chain.path;
+    let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
-        sr.ocsp_status = Some(ocsp::check(&c, chain.issuer.as_ref(), url, trust));
+        let (good, status) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);
+        ocsp_good = good;
+        sr.ocsp_status = Some(status);
     }
-    sr.valid = sr.signature_ok
-        && sr.chain_ok
-        && valid_at
-        && sr.timestamp_ok != Some(false)
-        && sr
-            .ocsp_status
-            .as_ref()
-            .is_none_or(|s| s.starts_with("GOOD"));
+    sr.valid =
+        sr.signature_ok && sr.chain_ok && valid_at && sr.timestamp_ok != Some(false) && ocsp_good;
     sr
 }
 
@@ -205,21 +204,21 @@ fn check_signature(
             Ok(true) => sr.signature_ok = true,
             Ok(false) => {
                 sr.signature_error = Some(
-                    "The signed reference to the signer's certificate does not match the certificate in the file.".into(),
+                    tr("The signed reference to the signer's certificate does not match the certificate in the file.").into(),
                 )
             }
-            Err(e) => sr.signature_error = Some(format!("Signature check failed: {e}")),
+            Err(e) => sr.signature_error = Some(trf("Signature check failed: {}", &[&e])),
         },
         Ok(Outcome::Invalid) => {
             sr.signature_error =
-                Some("Signature does not match the document (the document or signature was changed).".into())
+                Some(tr("Signature does not match the document (the document or signature was changed).").into())
         }
         Ok(Outcome::DigestMismatch) => {
             sr.signature_error = Some(
-                "Signature check failed: the document's content hash does not match the signed hash (the document was changed)."
+                tr("Signature check failed: the document's content hash does not match the signed hash (the document was changed).")
                     .into(),
             )
         }
-        Err(e) => sr.signature_error = Some(format!("Signature check failed: {e}")),
+        Err(e) => sr.signature_error = Some(trf("Signature check failed: {}", &[&e])),
     }
 }

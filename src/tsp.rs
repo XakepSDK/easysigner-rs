@@ -4,6 +4,7 @@ use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData, SignerInfo};
 use crate::der::{self, Tlv};
 use crate::gost::{self, Scheme};
+use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
 use crate::report::SignerReport;
 use crate::trust::TrustStore;
@@ -129,9 +130,9 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
     )?;
     let token = read_response(&resp)?;
     validate(&req, token).map_err(|e| {
-        Error::new(format!(
+        Error::new(trf(
             "The timestamp server's answer does not match the request: {}",
-            e.0
+            &[&e.0],
         ))
     })?;
     si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, token);
@@ -141,9 +142,9 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
 /// The token (a ContentInfo, as encoded) from a TimeStampResp.
 fn read_response(resp: &[u8]) -> Result<&[u8]> {
     let bad = |e: Error| {
-        Error::new(format!(
+        Error::new(trf(
             "The timestamp server's answer is unreadable ({})",
-            e.0
+            &[&e.0],
         ))
     };
     let k = der::parse(resp)
@@ -168,9 +169,9 @@ fn read_response(resp: &[u8]) -> Result<&[u8]> {
                 .filter(|t| t.tag == der::SEQUENCE)
                 .and_then(|t| t.children().ok())
                 .and_then(|c| c.first().and_then(Tlv::text));
-            Err(Error::new(format!(
+            Err(Error::new(trf(
                 "The timestamp server refused the request{}",
-                text.map(|t| format!(": {t}")).unwrap_or_default()
+                &[&text.map(|t| format!(": {t}")).unwrap_or_default()],
             )))
         }
     }
@@ -214,7 +215,7 @@ pub fn check(sr: &mut SignerReport, si: &SignerInfo, trust: &TrustStore) {
     };
     if let Err(e) = check_token(sr, si, &value, trust) {
         sr.timestamp_ok = Some(false);
-        sr.timestamp_info = Some(format!("unreadable timestamp: {}", e.0));
+        sr.timestamp_info = Some(trf("unreadable timestamp: {}", &[&e.0]));
     }
 }
 
@@ -250,7 +251,7 @@ fn check_token(
         tsa_cert
             .as_ref()
             .map(Cert::cn)
-            .unwrap_or_else(|| "unknown TSA".into()),
+            .unwrap_or_else(|| tr("unknown TSA").into()),
     );
     let imprint_ok = gost::hash(&info.imprint_alg, &si.signature).is_ok_and(|h| h == info.imprint);
     let sig_ok = tsa_cert.as_ref().is_some_and(|c| {
@@ -268,12 +269,14 @@ fn check_token(
     sr.timestamp_trusted = Some(chain.ok && purpose_ok);
     let tsa = sr.timestamp_info.clone().unwrap_or_default();
     if !chain.ok {
-        sr.warnings.push(format!(
-            "The timestamp authority '{tsa}' is not a trusted NCA RK TSA."
+        sr.warnings.push(trf(
+            "The timestamp authority '{}' is not a trusted NCA RK TSA.",
+            &[&tsa],
         ));
     } else if !purpose_ok {
-        sr.warnings
-            .push("The timestamp authority's certificate is not issued for timestamping.".into());
+        sr.warnings.push(
+            tr("The timestamp authority's certificate is not issued for timestamping.").into(),
+        );
     }
     Ok(())
 }

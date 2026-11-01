@@ -1,6 +1,7 @@
 //! Opens NCA .p12 key files: PKCS#12 with KZ GOST or RSA keys, as Kalkan writes them (BER,
 //! 3DES-encrypted key, RC2-40-encrypted certificates, SHA-1 MAC), and PBES2 (AES) files.
 
+use crate::i18n::{tr, trf};
 use cipher::{Array, BlockCipherDecrypt, BlockSizeUser, KeyInit};
 use digest::{Digest, FixedOutputReset};
 
@@ -39,13 +40,13 @@ pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Ke
     let mut keys: Vec<Bag<Vec<u8>>> = Vec::new();
     let mut certs: Vec<Bag<Cert>> = Vec::new();
     read_contents(&auth_safe, password, &mut keys, &mut certs).map_err(|e| {
-        Error::new(format!(
+        Error::new(trf(
             "Could not open the key file. The password is probably wrong, or the file uses an unsupported format ({})",
-            e.0
+            &[&e.0],
         ))
     })?;
     if keys.is_empty() {
-        return Err(Error::new("The key file contains no private key."));
+        return Err(Error::new(tr("The key file contains no private key.")));
     }
     let aliases: Vec<String> = keys
         .iter()
@@ -56,14 +57,14 @@ pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Ke
         .map(str::to_string)
         .unwrap_or_else(|| aliases[0].clone());
     let Some(idx) = aliases.iter().position(|a| *a == alias) else {
-        return Err(Error::new(format!(
-            "No key with alias '{alias}'. Available: [{}]",
-            aliases.join(", ")
+        return Err(Error::new(trf(
+            "No key with alias '{}'. Available: [{}]",
+            &[&alias, &aliases.join(", ")],
         )));
     };
     let kb = &keys[idx];
     let private_key = PrivateKey::from_pkcs8(&kb.value)
-        .map_err(|e| Error::new(format!("Unsupported private key type: {}", e.0)))?;
+        .map_err(|e| Error::new(trf("Unsupported private key type: {}", &[&e.0])))?;
     let pool: Vec<Cert> = certs.iter().map(|b| b.value.clone()).collect();
     let mut leaf = None;
     for c in &certs {
@@ -77,7 +78,8 @@ pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Ke
             .find(|c| c.public_key().is_ok_and(|p| private_key.matches(&p)))
             .cloned();
     }
-    let leaf = leaf.ok_or_else(|| Error::new("The key file has no certificate for its key."))?;
+    let leaf =
+        leaf.ok_or_else(|| Error::new(tr("The key file has no certificate for its key.")))?;
     let other_aliases = aliases.iter().filter(|a| **a != alias).cloned().collect();
     Ok(Key {
         alias,
@@ -91,9 +93,9 @@ pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Ke
 /// Checks the MAC and returns the AuthenticatedSafe bytes.
 fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
     let not_p12 = |e: Error| {
-        Error::new(format!(
+        Error::new(trf(
             "Could not open the key file: it is not a PKCS#12 (.p12) key ({})",
-            e.0
+            &[&e.0],
         ))
     };
     let pfx = der::parse(p12)
@@ -112,9 +114,9 @@ fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
     if let Some(mac) = pfx.get(2) {
         let ok = check_mac(mac, &auth_safe, password).unwrap_or(false);
         if !ok {
-            return Err(Error::new(
+            return Err(Error::new(tr(
                 "Could not open the key file. The password is probably wrong.",
-            ));
+            )));
         }
     }
     Ok(auth_safe)

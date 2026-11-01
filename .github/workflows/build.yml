@@ -1,5 +1,7 @@
 # Builds and tests on Linux and Windows: unit tests, the end-to-end checks (tests/e2e.rs), the
-# scripted window test (tests/gui.rs), and a real window start. A push to main whose Cargo.toml
+# scripted window test (tests/gui.rs), and a real window start. Release builds are reproducible
+# (scripts/cargo.sh): each commit is built a second time in another folder and the executables
+# must be byte-identical. A push to main whose Cargo.toml
 # version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,
 # with release-notes/X.Y.Z.md.
 name: build
@@ -23,15 +25,28 @@ jobs:
         id: version
         shell: bash
         run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust (the version pinned in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Linux libraries (file dialogs, virtual display for the window check)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev xvfb libxkbcommon-x11-0 libgl1-mesa-dri
       - name: Test
-        run: cargo test --release
+        shell: bash
+        run: sh scripts/cargo.sh test --release --locked
       - name: Build
-        run: cargo build --release
+        shell: bash
+        run: sh scripts/cargo.sh
+      - name: Same executables when built again in another folder
+        shell: bash
+        run: |
+          git clone -q . "$RUNNER_TEMP/again"
+          (cd "$RUNNER_TEMP/again" && sh scripts/cargo.sh)
+          for f in kzsigner kzsigner-console; do
+            [ "$RUNNER_OS" = Windows ] && f=$f.exe
+            sha256sum "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
+            cmp "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
+          done
       - name: Window opens and keeps running (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -52,16 +67,30 @@ jobs:
         shell: bash
         run: |
           V=${{ steps.version.outputs.version }}
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           mkdir -p dist
           if [ "$RUNNER_OS" = Windows ]; then
             D="kzsigner-$V-windows-x64"; mkdir "$D"
             cp target/release/kzsigner.exe README.md "$D/"
-            7z a -bd -mx=9 "dist/$D.zip" "$D" >/dev/null
+            cp target/release/kzsigner-console.exe "$D/kzsigner.com"
+            # the console launcher: output, and the exit code passed through
+            "$D/kzsigner.com" --version | tee version.txt
+            grep -q "$V" version.txt
+            set +e; "$D/kzsigner.com" verify missing.cms; r=$?; set -e
+            [ $r -eq 1 ]
+            touch -d "@$SOURCE_DATE_EPOCH" "$D" "$D"/*
+            (cd "$D" && sha256sum kzsigner.exe kzsigner.com) > "dist/$D.sha256"
+            7z a -bd -mx=9 "dist/$D.zip" "$D/kzsigner.exe" "$D/kzsigner.com" "$D/README.md" >/dev/null
           else
             D="kzsigner-$V-linux-x64"; mkdir "$D"
-            cp target/release/kzsigner README.md "$D/"
-            tar -cJf "dist/$D.tar.xz" "$D"
+            cp target/release/kzsigner README.md assets/kzsigner.png packaging/linux/kzsigner.desktop packaging/linux/install.sh "$D/"
+            chmod 755 "$D/kzsigner" "$D/install.sh"; chmod 644 "$D/README.md" "$D/kzsigner.png" "$D/kzsigner.desktop"
+            touch -d "@$SOURCE_DATE_EPOCH" "$D" "$D"/*
+            (cd "$D" && sha256sum kzsigner) > "dist/$D.sha256"
+            tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -cf - "$D" | xz -9 -T1 > "dist/$D.tar.xz"
           fi
+          (cd dist && sha256sum *.zip *.tar.xz 2>/dev/null) >> "dist/$D.sha256"
+          cat "dist/$D.sha256"
           ls -la dist "$D"
       - uses: actions/upload-artifact@v4
         with:
@@ -85,4 +114,5 @@ jobs:
         run: |
           V=${{ needs.build.outputs.version }}
           if gh release view "v$V" >/dev/null 2>&1; then echo "v$V already released"; exit 0; fi
+          cat dist/*.sha256 > dist/SHA256SUMS && rm dist/*.sha256
           gh release create "v$V" --target "$GITHUB_SHA" --title "kzsigner $V" --notes-file "release-notes/$V.md" dist/*

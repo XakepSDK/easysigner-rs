@@ -18,7 +18,17 @@ an NCA timestamp (`--tsa`) and the NCA revocation check (`--ocsp`).
 
 Run `kzsigner` with no arguments (or double-click it) for the window, or open a file with it:
 `kzsigner document.pdf` starts on the Sign tab, `kzsigner signed.cms` on the Verify tab. Files can
-also be dropped on the window.
+also be dropped on the window. The window is in Kazakh, Russian or English: it starts in the
+system's language and the menu at the top right switches (the choice is remembered;
+`KZSIGNER_LANG=kk|ru|en` also sets it). The command line stays in English.
+
+On Windows, `kzsigner.exe` is the window and opens without a console. Commands in a terminal
+(`kzsigner sign ...` in cmd or PowerShell) run through `kzsigner.com`, a small console launcher
+next to it that waits for the result; keep the two files together.
+
+On Linux, `sh install.sh` (in the download) installs kzsigner into `~/.local/bin` with an
+applications-menu entry and icon, and offers it in "Open with" for `.cms` and `.p12` files;
+`sh install.sh --uninstall` removes it.
 
 ```
 kzsigner sign document.pdf -k GOSTKNCA_xxx.p12          # -> document.pdf.cms
@@ -40,7 +50,15 @@ The password comes from `-p`, the `KZSIGNER_PASSWORD` environment variable, or a
 cargo build --release              # target/release/kzsigner
 cargo test --release               # unit tests, end-to-end checks, scripted window test
 cargo build --release --no-default-features   # command line only
+sh scripts/cargo.sh                # reproducible release build (what the downloads are)
 ```
+
+Release builds are reproducible: `sh scripts/cargo.sh` (Git Bash on Windows) gives byte-identical
+executables for the same commit on any machine and in any folder. The compiler version is pinned
+in `rust-toolchain.toml`, crates in `Cargo.lock`, and the script keeps build paths and (on
+Windows) link times out of the files. To check a download, build the release's tag and compare
+with `SHA256SUMS`. CI builds every commit twice, in different folders, and fails if the
+executables differ.
 
 On Linux the window needs the GTK 3 development files for the file dialogs (`libgtk-3-dev`), and
 at run time X11 or XWayland with OpenGL (Mesa is enough). The Windows `.exe` cross-builds from
@@ -70,7 +88,12 @@ from small RustCrypto crates.
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
   letters (`assets/`).
-* `main.rs`, `output.rs`: the command line, text and JSON reports.
+* `main.rs`, `output.rs`: the command line, text and JSON reports. `bin/kzsigner-console.rs`:
+  the Windows console launcher (`kzsigner.com`).
+* `i18n.rs`: the window's Kazakh and Russian texts, one table. The Kazakh was not written by a
+  native speaker; corrections are welcome.
+* `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `build.rs` puts it
+  and the version into the Windows `.exe`. `packaging/linux/`: the menu entry and installer.
 
 ## Differences from the Java version
 

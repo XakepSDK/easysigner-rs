@@ -94,9 +94,9 @@ impl SignedData {
 
     pub fn parse(raw: &[u8]) -> Result<SignedData> {
         Self::parse_inner(&normalize(raw)).map_err(|e| {
-            Error::new(format!(
+            Error::new(crate::i18n::trf(
                 "This file is not a CMS/PKCS#7 signed file ({}).",
-                e.0
+                &[&e.0],
             ))
         })
     }

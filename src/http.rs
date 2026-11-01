@@ -1,6 +1,7 @@
 //! The one network call kzsigner makes: an HTTP POST to the NCA timestamp or OCSP server.
 //! NCA's servers speak plain http (the data is signed), so this is a small HTTP/1.1 client.
 
+use crate::i18n::{tr, trf};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
@@ -51,8 +52,9 @@ pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Ve
         match post_once(&url, content_type, body) {
             Ok(Response::Body(b)) => return Ok(b),
             Ok(Response::Status(code)) => {
-                return Err(Error::new(format!(
-                    "The {what} answered HTTP {code} ({url})"
+                return Err(Error::new(trf(
+                    "The {} answered HTTP {} ({})",
+                    &[&tr_what(what), &code, &url],
                 )));
             }
             Ok(Response::Redirect(loc)) => {
@@ -64,15 +66,25 @@ pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Ve
                 };
             }
             Err(e) => {
-                return Err(Error::new(format!(
-                    "Could not reach the {what} at {url}: {e}"
+                return Err(Error::new(trf(
+                    "Could not reach the {} at {}: {}",
+                    &[&tr_what(what), &url, &e],
                 )));
             }
         }
     }
-    Err(Error::new(format!(
-        "Could not reach the {what} at {url}: too many redirects"
+    Err(Error::new(trf(
+        "Could not reach the {} at {}: too many redirects",
+        &[&tr_what(what), &url],
     )))
+}
+
+fn tr_what(what: &str) -> &str {
+    match what {
+        "timestamp server" => tr("timestamp server"),
+        "OCSP server" => tr("OCSP server"),
+        other => other,
+    }
 }
 
 enum Response {

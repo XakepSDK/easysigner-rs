@@ -1,1 +1,3 @@
 tests/fixtures/** binary
+assets/*.rgba binary
+assets/*.ico binary

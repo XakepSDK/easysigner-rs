@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use eframe::egui::{self, Color32, RichText};
 
+use crate::i18n::{self, Lang, tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
 use crate::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
@@ -73,9 +74,16 @@ impl Dialogs for SystemDialogs {
 
 /// Opens the window and runs until it is closed. `file`: a document, .cms or key to start with.
 pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
+    i18n::set(i18n::detect());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("kzsigner")
+            .with_app_id("kzsigner")
+            .with_icon(egui::IconData {
+                rgba: include_bytes!("../assets/kzsigner-64.rgba").to_vec(),
+                width: 64,
+                height: 64,
+            })
             .with_inner_size([760.0, 640.0])
             .with_drag_and_drop(true),
         centered: true,
@@ -92,7 +100,7 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
             Ok(Box::new(Window::new(app)))
         }),
     )
-    .map_err(|e| format!("Could not open the window: {e}"))
+    .map_err(|e| trf("Could not open the window: {}", &[&e]))
 }
 
 struct Window(App);
@@ -268,12 +276,32 @@ impl App {
             self.open_file(&ctx, f);
         }
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.tab, Tab::Sign, RichText::new("Sign").size(16.0));
+            ui.selectable_value(
+                &mut self.tab,
+                Tab::Sign,
+                RichText::new(tr("Sign")).size(16.0),
+            );
             ui.selectable_value(
                 &mut self.tab,
                 Tab::Verify,
-                RichText::new("Verify / Extract").size(16.0),
+                RichText::new(tr("Verify / Extract")).size(16.0),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut lang = i18n::lang();
+                egui::ComboBox::from_id_salt("language")
+                    .selected_text(lang.name())
+                    .show_ui(ui, |ui| {
+                        for l in Lang::ALL {
+                            ui.selectable_value(&mut lang, l, l.name());
+                        }
+                    })
+                    .response
+                    .on_hover_text(tr("Language"));
+                if lang != i18n::lang() {
+                    i18n::save(lang);
+                    self.set_language(&ctx, lang);
+                }
+            });
         });
         ui.separator();
         match self.tab {
@@ -288,7 +316,7 @@ impl App {
             egui::Modal::new(egui::Id::unique("message")).show(&ctx, |ui| {
                 ui.set_max_width(460.0);
                 let title = if error {
-                    Tone::Bad.text(ui, "Error")
+                    Tone::Bad.text(ui, tr("Error"))
                 } else {
                     Tone::Strong.text(ui, "kzsigner")
                 };
@@ -325,7 +353,7 @@ impl App {
                 egui::TextEdit::singleline(&mut text).interactive(false),
             )
             .labelled_by(l.id);
-            if ui.button("Browse…").on_hover_text(label).clicked() {
+            if ui.button(tr("Browse…")).on_hover_text(label).clicked() {
                 chosen = self.dialogs.open(current.as_deref());
             }
         });
@@ -356,11 +384,11 @@ impl App {
 
     fn sign_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        section(ui, "1. Document");
+        section(ui, tr("1. Document"));
         let doc = self.doc.clone();
         if let Some(f) = self.file_field(
             ui,
-            "Document to sign (or a .cms to add your signature to)",
+            tr("Document to sign (or a .cms to add your signature to)"),
             &doc,
         ) {
             self.set_doc(&ctx, f);
@@ -368,19 +396,21 @@ impl App {
         self.doc_note.show(ui);
         if self.doc_is_detached_cms {
             let o = self.sign_original.clone();
-            if let Some(f) = self.file_field(ui, "Original document (only for a detached .cms)", &o)
+            if let Some(f) =
+                self.file_field(ui, tr("Original document (only for a detached .cms)"), &o)
             {
                 self.sign_original = Some(f);
             }
         }
 
-        section(ui, "2. Your key");
+        section(ui, tr("2. Your key"));
         let kf = self.key_file.clone();
-        if let Some(f) = self.file_field(ui, "Key file (.p12), e.g. RSA_… or GOSTKNCA_…", &kf) {
+        if let Some(f) = self.file_field(ui, tr("Key file (.p12), e.g. RSA_… or GOSTKNCA_…"), &kf)
+        {
             self.set_key_file(&ctx, f);
         }
         ui.horizontal(|ui| {
-            let l = ui.label("Password:");
+            let l = ui.label(tr("Password:"));
             let r = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.password)
@@ -395,7 +425,7 @@ impl App {
         if self.aliases.len() > 1 {
             let before = self.alias.clone();
             ui.horizontal(|ui| {
-                ui.label("Key:");
+                ui.label(tr("Key:"));
                 egui::ComboBox::from_id_salt("alias")
                     .selected_text(self.alias.clone().unwrap_or_default())
                     .show_ui(ui, |ui| {
@@ -410,17 +440,17 @@ impl App {
         }
         self.key_note.show(ui);
 
-        section(ui, "3. Options");
+        section(ui, tr("3. Options"));
         ui.add_enabled(
             !self.doc_is_cms,
             egui::Checkbox::new(
                 &mut self.detached,
-                "Detached signature (the .cms will not contain the document)",
+                tr("Detached signature (the .cms will not contain the document)"),
             ),
         );
         ui.checkbox(
             &mut self.timestamp,
-            "Add NCA timestamp (needs internet, sends only a hash)",
+            tr("Add NCA timestamp (needs internet, sends only a hash)"),
         );
         ui.add_space(8.0);
         let can_sign = !self.signing
@@ -428,7 +458,7 @@ impl App {
             && self.key.is_some()
             && (!self.doc_is_detached_cms || self.sign_original.is_some());
         if ui
-            .add_enabled(can_sign, egui::Button::new("Sign…"))
+            .add_enabled(can_sign, egui::Button::new(tr("Sign…")))
             .clicked()
         {
             self.sign(&ctx);
@@ -482,7 +512,7 @@ impl App {
         }
         self.key_request += 1;
         let id = self.key_request;
-        self.key_note = Note(vec![("Opening key…".into(), Tone::Muted)]);
+        self.key_note = Note(vec![(tr("Opening key…").into(), Tone::Muted)]);
         let pw = self.password.clone();
         self.background(ctx, move |e| {
             let r = std::fs::read(&f)
@@ -501,26 +531,28 @@ impl App {
         let text = |t: String| (t, Tone::Plain);
         let mut n = vec![(s.name(), Tone::Strong)];
         if let Some(iin) = s.get("IIN") {
-            n.push(text(format!("IIN {iin}")));
+            n.push(text(trf("IIN {}", &[&iin])));
         }
         if let Some(o) = s.get("O") {
             let bin = s
                 .get("BIN")
-                .map(|b| format!(" (BIN {b})"))
+                .map(|b| trf(" (BIN {})", &[&b]))
                 .unwrap_or_default();
             n.push(text(format!("{o}{bin}")));
         }
-        n.push(text(format!(
+        n.push(text(trf(
             "Valid until {} · {}",
-            time::fmt(s.not_after),
-            s.algorithm.clone().unwrap_or_default()
+            &[
+                &time::fmt(s.not_after),
+                &s.algorithm.clone().unwrap_or_default(),
+            ],
         )));
         let issuer = s.issuer_cn.clone().unwrap_or_default();
         if s.chain_ok {
-            n.push((format!("Issuer: {issuer} ✔"), Tone::Plain));
+            n.push((trf("Issuer: {} ✔", &[&issuer]), Tone::Plain));
         } else {
             n.push((
-                format!("Issuer: {issuer} (not a trusted NCA RK issuer)"),
+                trf("Issuer: {} (not a trusted NCA RK issuer)", &[&issuer]),
                 Tone::Bad,
             ));
         }
@@ -566,29 +598,49 @@ impl App {
             return;
         };
         if let Err(e) = std::fs::write(&out, &r.cms) {
-            self.message = Some((format!("Could not save: {e}"), true));
+            self.message = Some((trf("Could not save: {}", &[&e]), true));
             return;
         }
         let mut m = format!(
-            "{}.\nSaved {}\n{} signature{}{}.",
+            "{}.\n{}\n{}{}.",
             if r.cosigned {
-                "Signature added"
+                tr("Signature added")
             } else {
-                "Signed"
+                tr("Signed")
             },
-            out.display(),
-            r.signer_count,
-            if r.signer_count == 1 { "" } else { "s" },
+            trf("Saved to {}", &[&out.display()]),
+            trf("Signatures in the file: {}", &[&r.signer_count]),
             if r.timestamped {
-                ", with timestamp"
+                tr(", with timestamp")
             } else {
                 ""
             }
         );
         for w in &r.warnings {
-            m.push_str(&format!("\n\nWarning: {w}"));
+            m.push_str("\n\n");
+            m.push_str(&trf("Warning: {}", &[w]));
         }
         self.message = Some((m, false));
+    }
+
+    /// Switches the window's language and redoes what holds translated text: the key details,
+    /// the document check and the verification report.
+    pub fn set_language(&mut self, ctx: &egui::Context, lang: Lang) {
+        i18n::set(lang);
+        if let Some(k) = self.key.clone() {
+            self.key_note = self.describe_key(&k);
+        } else if self.key_file.is_some() && !self.password.is_empty() {
+            self.opened_for = None;
+            self.open_key(ctx);
+        }
+        if let Some(d) = self.doc.clone() {
+            let original = self.sign_original.clone();
+            self.set_doc(ctx, d);
+            self.sign_original = original;
+        }
+        if self.result.is_some() {
+            self.verify(ctx);
+        }
     }
 
     // ------------------------------------------------------------------ Verify tab
@@ -596,12 +648,13 @@ impl App {
     fn verify_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let c = self.cms.clone();
-        if let Some(f) = self.file_field(ui, "Signed .cms file", &c) {
+        if let Some(f) = self.file_field(ui, tr("Signed .cms file"), &c) {
             self.set_cms(&ctx, f);
         }
         if self.show_verify_original {
             let o = self.verify_original.clone();
-            if let Some(f) = self.file_field(ui, "Original document (only for a detached .cms)", &o)
+            if let Some(f) =
+                self.file_field(ui, tr("Original document (only for a detached .cms)"), &o)
             {
                 self.verify_original = Some(f);
                 self.verify(&ctx);
@@ -609,12 +662,12 @@ impl App {
         }
         ui.checkbox(
             &mut self.ocsp,
-            "Check revocation online (OCSP, ocsp.pki.gov.kz)",
+            tr("Check revocation online (OCSP, ocsp.pki.gov.kz)"),
         );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.cms.is_some(), egui::Button::new("Verify"))
+                .add_enabled(self.cms.is_some(), egui::Button::new(tr("Verify")))
                 .clicked()
             {
                 self.verify(&ctx);
@@ -622,7 +675,10 @@ impl App {
             let can_extract =
                 !self.checking && matches!(&self.result, Some(Ok(r)) if r.has_content);
             if ui
-                .add_enabled(can_extract, egui::Button::new("Save original document…"))
+                .add_enabled(
+                    can_extract,
+                    egui::Button::new(tr("Save original document…")),
+                )
                 .clicked()
             {
                 self.extract(&ctx);
@@ -633,7 +689,7 @@ impl App {
             .auto_shrink(false)
             .show(ui, |ui| {
                 if self.checking {
-                    ui.label("Checking…");
+                    ui.label(tr("Checking…"));
                 } else {
                     match &self.result {
                         Some(Ok(r)) => report(ui, r),
@@ -698,10 +754,10 @@ impl App {
         };
         self.message = Some(match std::fs::write(&out, &data) {
             Ok(()) => (
-                format!("Saved {} bytes to\n{}", data.len(), out.display()),
+                trf("Saved {} bytes to\n{}", &[&data.len(), &out.display()]),
                 false,
             ),
-            Err(e) => (format!("Could not save: {e}"), true),
+            Err(e) => (trf("Could not save: {}", &[&e]), true),
         });
     }
 
@@ -719,15 +775,14 @@ impl App {
                             rep.signers.iter().map(SignerReport::name).collect();
                         self.doc_note = Note(vec![
                             (
-                                format!(
-                                    "Already signed by {}: {}.",
-                                    rep.signers.len(),
-                                    names.join(", ")
+                                trf(
+                                    "Already signed ({}): {}.",
+                                    &[&rep.signers.len(), &names.join(", ")],
                                 ),
                                 Tone::Plain,
                             ),
                             (
-                                "Your signature will be added to this file.".into(),
+                                tr("Your signature will be added to this file.").into(),
                                 Tone::Strong,
                             ),
                         ]);
@@ -819,22 +874,23 @@ fn section(ui: &mut egui::Ui, title: &str) {
 pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     let n = r.signers.len();
     if r.valid {
-        let t = format!(
-            "✔ Valid: {n} signature{}, all check out",
-            if n == 1 { "" } else { "s" }
-        );
+        let t = trf("✔ Valid. Signatures: {}, all check out.", &[&n]);
         ui.heading(Tone::Good.text(ui, t));
     } else {
-        ui.heading(Tone::Bad.text(ui, "✖ Not valid (see details)"));
+        ui.heading(Tone::Bad.text(ui, tr("✖ Not valid (see details)")));
     }
     if r.has_content {
-        ui.label(format!(
+        ui.label(trf(
             "Document inside: {} bytes, SHA-256 {}",
-            r.content_size,
-            r.content_sha256.clone().unwrap_or_default()
+            &[
+                &r.content_size,
+                &r.content_sha256.clone().unwrap_or_default(),
+            ],
         ));
     } else if r.detached_provided {
-        ui.label("Detached signature, checked against the original you chose.");
+        ui.label(tr(
+            "Detached signature, checked against the original you chose.",
+        ));
     }
     for w in &r.warnings {
         ui.label(Tone::Warn.text(ui, format!("⚠ {w}")));
@@ -848,9 +904,9 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                     .size(15.0),
             );
             if s.valid {
-                ui.label(Tone::Good.text(ui, "VALID").strong());
+                ui.label(Tone::Good.text(ui, tr("VALID")).strong());
             } else {
-                ui.label(Tone::Bad.text(ui, "NOT VALID").strong());
+                ui.label(Tone::Bad.text(ui, tr("NOT VALID")).strong());
             }
         });
         egui::Grid::new(("signer", s.index))
@@ -863,33 +919,33 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                     ui.end_row();
                 };
                 if let Some(v) = s.get("IIN") {
-                    row("IIN", v.into());
+                    row(tr("IIN"), v.into());
                 }
                 if let Some(o) = s.get("O") {
                     row(
-                        "Organization",
+                        tr("Organization"),
                         format!(
                             "{o}{}",
                             s.get("BIN")
-                                .map(|b| format!(" (BIN {b})"))
+                                .map(|b| trf(" (BIN {})", &[&b]))
                                 .unwrap_or_default()
                         ),
                     );
                 }
                 if let Some(v) = s.get("E") {
-                    row("Email", v.into());
+                    row(tr("Email"), v.into());
                 }
-                row("Signed at", signed_at(s));
+                row(tr("Signed at"), signed_at(s));
                 row(
-                    "Signature",
+                    tr("Signature"),
                     if s.signature_ok {
-                        "Matches the document ✔".into()
+                        tr("Matches the document ✔").into()
                     } else {
                         s.signature_error.clone().unwrap_or_default()
                     },
                 );
                 row(
-                    "Trust",
+                    tr("Trust"),
                     format!(
                         "{}{}",
                         if s.chain_ok { "✔ " } else { "✖ " },
@@ -897,20 +953,24 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                     ),
                 );
                 row(
-                    "Revocation",
-                    s.ocsp_status.clone().unwrap_or("Not checked".into()),
+                    tr("Revocation"),
+                    s.ocsp_status
+                        .clone()
+                        .unwrap_or_else(|| tr("Not checked").into()),
                 );
-                row("Algorithm", s.algorithm.clone().unwrap_or_default());
+                row(tr("Algorithm"), s.algorithm.clone().unwrap_or_default());
                 row(
-                    "Certificate",
-                    format!(
+                    tr("Certificate"),
+                    trf(
                         "serial {}, valid {} – {}",
-                        s.serial_hex.clone().unwrap_or_default(),
-                        time::fmt(s.not_before),
-                        time::fmt(s.not_after)
+                        &[
+                            &s.serial_hex.clone().unwrap_or_default(),
+                            &time::fmt(s.not_before),
+                            &time::fmt(s.not_after),
+                        ],
                     ),
                 );
-                row("Issuer", s.issuer_cn.clone().unwrap_or_default());
+                row(tr("Issuer"), s.issuer_cn.clone().unwrap_or_default());
             });
         for w in &s.warnings {
             ui.label(Tone::Warn.text(ui, format!("⚠ {w}")));
@@ -920,18 +980,21 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
 
 fn signed_at(s: &SignerReport) -> String {
     let Some(ts) = s.timestamp_time else {
-        return format!("{} · signer's own clock", time::fmt(s.signing_time));
+        return trf("{} · signer's own clock", &[&time::fmt(s.signing_time)]);
     };
     let state = if s.timestamp_ok != Some(true) {
-        " (INVALID)"
+        tr(" (INVALID)")
     } else if s.timestamp_trusted == Some(true) {
         " ✔"
     } else {
-        " (TSA not trusted)"
+        tr(" (TSA not trusted)")
     };
-    format!(
-        "{} · timestamp by {}{state}",
-        time::fmt(Some(ts)),
-        s.timestamp_info.clone().unwrap_or_default()
+    trf(
+        "{} · timestamp by {}{}",
+        &[
+            &time::fmt(Some(ts)),
+            &s.timestamp_info.clone().unwrap_or_default(),
+            &state,
+        ],
     )
 }

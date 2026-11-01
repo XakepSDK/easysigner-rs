@@ -1,4 +1,9 @@
 //! kzsigner command line; with no arguments it opens the window.
+//!
+//! On Windows this is a GUI program, so double-clicking it shows no console window. For the
+//! commands it attaches to the console of whatever started it; `kzsigner.com` (the console
+//! launcher in src/bin/kzsigner-console.rs) makes `kzsigner ...` in a terminal wait for it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -373,7 +378,6 @@ fn display_available() -> bool {
 fn run() -> R<u8> {
     if std::env::args_os().len() <= 1 {
         if display_available() {
-            hide_console();
             return gui(Opts::default());
         }
         print!("{HELP}");
@@ -402,7 +406,6 @@ fn run() -> R<u8> {
         "gui" => (HELP_GUI, gui),
         // "Open with kzsigner" on a file
         _ if p.next()?.is_none() && Path::new(&cmd).is_file() && display_available() => {
-            hide_console();
             return gui(Opts {
                 file: Some(cmd.into()),
                 ..Default::default()
@@ -416,20 +419,31 @@ fn run() -> R<u8> {
     }
 }
 
-/// On Windows, started from Explorer (double-click) the console window belongs to kzsigner
-/// alone; let it go so only the window shows. From a terminal it is shared and stays.
-fn hide_console() {
+/// Windows: a GUI program has no console of its own. Attach to the parent's (the terminal, or
+/// kzsigner.com) so output, prompts and Ctrl+C work, keeping any redirected handles.
+fn attach_console() {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
-        let mut ids = [0u32; 2];
-        if GetConsoleProcessList(ids.as_mut_ptr(), 2) == 1 {
-            FreeConsole();
+        use windows_sys::Win32::System::Console::{
+            ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE, SetStdHandle,
+        };
+        let ids = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+        let before = ids.map(|i| GetStdHandle(i));
+        if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
+            for (i, h) in ids.into_iter().zip(before) {
+                if !h.is_null() && h as isize != -1 {
+                    SetStdHandle(i, h);
+                }
+            }
         }
     }
 }
 
 fn main() -> ExitCode {
+    if std::env::args_os().len() > 1 {
+        attach_console();
+    }
     match run() {
         Ok(code) => ExitCode::from(code),
         Err(Fail::User(m)) => {

@@ -95,7 +95,7 @@ fn sign_then_verify_in_the_window() {
     h.get_by_label("Browse…").click();
     settle(&mut h);
     assert!(
-        h.query_by_label_contains("Valid: 1 signature, all check out")
+        h.query_by_label_contains("Valid. Signatures: 1, all check out.")
             .is_some(),
         "report shown"
     );
@@ -107,6 +107,38 @@ fn sign_then_verify_in_the_window() {
     h.get_by_label("Save original document…").click();
     settle(&mut h);
     assert_eq!(std::fs::read(&back).unwrap(), std::fs::read(&doc).unwrap());
+
+    // switch the language from the menu: the report is redone in it
+    // (the choice is remembered in a file under the config folder: keep it in the test folder)
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        std::env::set_var("APPDATA", &dir);
+    }
+    for (name, valid, tab) in [
+        (
+            "Русский",
+            "Действительно. Подписей: 1, все верны.",
+            "Проверить / Извлечь",
+        ),
+        (
+            "Қазақша",
+            "Жарамды. Қолтаңбалар: 1, барлығы дұрыс.",
+            "Тексеру / Шығарып алу",
+        ),
+    ] {
+        h.get_by_value(kzsigner::i18n::lang().name())
+            .click_accesskit();
+        h.run_steps(3);
+        h.get_by_label(name).click();
+        settle(&mut h);
+        assert!(h.query_by_label_contains(valid).is_some(), "{name} report");
+        assert!(h.query_by_label(tab).is_some(), "{name} tab");
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kzsigner/language")).unwrap(),
+        "kk"
+    );
+    kzsigner::i18n::set(kzsigner::i18n::Lang::En);
     println!("GUI OK");
     let _ = std::fs::remove_dir_all(&dir);
 }

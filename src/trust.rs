@@ -2,6 +2,7 @@
 //! certificate path checks against them.
 
 use crate::cert::{self, Cert};
+use crate::i18n::{tr, trf};
 use crate::{Result, time};
 
 /// NCA RK's root and issuing CA certificates, bundled into the executable.
@@ -68,7 +69,7 @@ impl TrustStore {
             },
             Err(e) => Chain {
                 ok: false,
-                status: format!("Certificate path not valid: {e}"),
+                status: trf("Certificate path not valid: {}", &[&e]),
                 path,
                 issuer: first_issuer,
             },
@@ -88,31 +89,30 @@ impl TrustStore {
         loop {
             path.push(cur.cn());
             if !cur.valid_on(at) {
-                return Err(format!(
+                return Err(trf(
                     "certificate '{}' was not valid on {}",
-                    cur.cn(),
-                    time::fmt(Some(at))
+                    &[&cur.cn(), &time::fmt(Some(at))],
                 ));
             }
             let self_signed = cur.self_issued();
             if self.trusted.contains(&cur) && (!is_start || self_signed) {
                 if self_signed && !cur.signed_by(&cur) {
-                    return Err("root certificate signature is invalid".into());
+                    return Err(tr("root certificate signature is invalid").into());
                 }
-                return Ok((true, format!("Issued by a trusted CA: {}", cur.cn())));
+                return Ok((true, trf("Issued by a trusted CA: {}", &[&cur.cn()])));
             }
             let Some(issuer) = self.find_issuer(&cur, &seen) else {
                 if self_signed {
-                    return Err(format!(
+                    return Err(trf(
                         "self-signed certificate '{}' is not a trusted root",
-                        cur.cn()
+                        &[&cur.cn()],
                     ));
                 }
                 return Ok((
                     false,
-                    format!(
+                    trf(
                         "Issuer not found among trusted NCA RK certificates: {}",
-                        cert::cn(&cur.issuer)
+                        &[&cert::cn(&cur.issuer)],
                     ),
                 ));
             };
@@ -124,7 +124,7 @@ impl TrustStore {
             cur = issuer;
             is_start = false;
             if seen.len() > 10 {
-                return Err("certificate path too long".into());
+                return Err(tr("certificate path too long").into());
             }
         }
     }
@@ -141,12 +141,12 @@ impl TrustStore {
 
 fn require_ca(issuer: &Cert) -> std::result::Result<(), String> {
     if !issuer.is_ca() {
-        return Err(format!("issuer '{}' is not a CA", issuer.cn()));
+        return Err(trf("issuer '{}' is not a CA", &[&issuer.cn()]));
     }
     if !issuer.may_sign_certs() {
-        return Err(format!(
+        return Err(trf(
             "issuer '{}' may not sign certificates",
-            issuer.cn()
+            &[&issuer.cn()],
         ));
     }
     Ok(())

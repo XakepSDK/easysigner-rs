@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=kzsigner
+GenericName=Digital signature
+GenericName[ru]=Электронная подпись
+GenericName[kk]=Электрондық қолтаңба
+Comment=Sign and verify .cms files with NCA RK keys
+Comment[ru]=Подписание и проверка файлов .cms ключами НУЦ РК
+Comment[kk]=.cms файлдарына ҚР ҰКО кілттерімен қол қою және тексеру
+Exec=kzsigner %f
+Icon=kzsigner
+Terminal=false
+Categories=Office;Security;Utility;
+MimeType=application/pkcs7-signature;application/pkcs7-mime;application/x-pkcs12;
+Keywords=ЭЦП;ЭЦҚ;NCALayer;cms;p12;signature;подпись;қолтаңба;
+StartupWMClass=kzsigner

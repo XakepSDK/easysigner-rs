@@ -7,6 +7,7 @@ pub mod gost;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod http;
+pub mod i18n;
 pub mod keys;
 pub mod ocsp;
 pub mod output;
@@ -88,7 +89,7 @@ impl Engine {
 
     pub fn extract(&self, cms: &[u8]) -> Result<Vec<u8>> {
         cms::SignedData::parse(cms)?.content.ok_or_else(|| {
-            Error::new("This .cms has no embedded document: it is a detached signature, the original was never inside it.")
+            Error::new(i18n::tr("This .cms has no embedded document: it is a detached signature, the original was never inside it."))
         })
     }
 

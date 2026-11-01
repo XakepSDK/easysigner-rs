@@ -2,6 +2,7 @@
 
 use crate::der::{self, Tlv};
 use crate::gost;
+use crate::i18n::{tr, trf};
 use crate::keys::PublicKey;
 use crate::report::SignerReport;
 use crate::time;
@@ -367,21 +368,20 @@ pub fn key_warnings(c: &Cert) -> Vec<String> {
     let mut w = Vec::new();
     let now = time::now_ms();
     if now > c.not_after {
-        w.push(format!(
+        w.push(trf(
             "The certificate expired on {}.",
-            time::fmt(Some(c.not_after))
+            &[&time::fmt(Some(c.not_after))],
         ));
     }
     if now < c.not_before {
-        w.push(format!(
+        w.push(trf(
             "The certificate is not valid until {}.",
-            time::fmt(Some(c.not_before))
+            &[&time::fmt(Some(c.not_before))],
         ));
     }
     if c.key_usage().is_some_and(|k| !k[KU_NON_REPUDIATION]) {
         w.push(
-            "This certificate has no 'non-repudiation' key usage, so it looks like an authentication (AUTH_) key. \
-             Documents are normally signed with the signing key (RSA_... / GOSTKNCA_... file); some services will reject this signature."
+            tr("This certificate has no 'non-repudiation' key usage, so it looks like an authentication (AUTH_) key. Documents are normally signed with the signing key (RSA_... / GOSTKNCA_... file); some services will reject this signature.")
                 .into(),
         );
     }

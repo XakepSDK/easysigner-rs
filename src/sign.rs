@@ -4,6 +4,7 @@
 use crate::cert;
 use crate::cms::{self, SignedData};
 use crate::der;
+use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::SignResult;
 use crate::{Error, Result, gost, tsp};
@@ -37,15 +38,15 @@ pub fn sign(
                     (o, false)
                 }
                 None => {
-                    return Err(Error::new(
+                    return Err(Error::new(tr(
                         "This .cms has no embedded document (detached signature). Provide the original file to add a signature.",
-                    ));
+                    )));
                 }
             },
         },
     };
     let mut out = cms::sign_once(content, cms::ID_DATA, attach, &key.private_key, &key.cert)
-        .map_err(|e| Error::new(format!("Signing failed: {e}")))?;
+        .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
     if let Some(url) = tsa_url {
         tsp::stamp(&mut out, url, key.private_key.scheme())?;
         r.timestamped = true;
@@ -73,13 +74,14 @@ fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
         match check() {
             Ok(true) => {}
             Ok(false) => {
-                return Err(Error::new(
+                return Err(Error::new(tr(
                     "The original file does not match this .cms: its existing signatures are for a different document.",
-                ));
+                )));
             }
             Err(e) => {
-                return Err(Error::new(format!(
-                    "Could not check the original file against the .cms: {e}"
+                return Err(Error::new(trf(
+                    "Could not check the original file against the .cms: {}",
+                    &[&e],
                 )));
             }
         }

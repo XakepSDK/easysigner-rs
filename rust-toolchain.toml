@@ -1,0 +1,5 @@
+# The exact compiler for reproducible builds: the same source and toolchain give
+# byte-identical executables (see scripts/cargo.sh).
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"

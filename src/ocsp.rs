@@ -2,6 +2,7 @@
 
 use crate::cert::{self, Cert};
 use crate::der::{self, Tlv};
+use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
 use crate::trust::TrustStore;
 use crate::{Error, Result, gost, http, time};
@@ -10,14 +11,18 @@ pub const DEFAULT_URL: &str = "http://ocsp.pki.gov.kz";
 const NONCE: &str = "1.3.6.1.5.5.7.48.1.2";
 const BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 
-/// A status line starting with GOOD, REVOKED, UNKNOWN or ERROR.
-pub fn check(c: &Cert, issuer: Option<&Cert>, url: &str, trust: &TrustStore) -> String {
+/// Whether the certificate is known not to be revoked, and a status line (in English: starting
+/// with GOOD, REVOKED, UNKNOWN or ERROR).
+pub fn check(c: &Cert, issuer: Option<&Cert>, url: &str, trust: &TrustStore) -> (bool, String) {
     let Some(issuer) = issuer else {
-        return "UNKNOWN (issuer certificate not available)".into();
+        return (
+            false,
+            tr("UNKNOWN (issuer certificate not available)").into(),
+        );
     };
     match check_inner(c, issuer, url, trust) {
         Ok(s) => s,
-        Err(e) => format!("ERROR: could not check OCSP ({e})"),
+        Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e])),
     }
 }
 
@@ -41,7 +46,7 @@ fn issuer_hashes(issuer: &Cert, alg: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     ))
 }
 
-fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<String> {
+fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<(bool, String)> {
     let alg = cert_id_hash(issuer);
     let (name_hash, key_hash) = issuer_hashes(issuer, alg)?;
     let cert_id = der::seq(&[
@@ -70,7 +75,10 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
         .ok_or_else(|| Error::new("empty OCSP response"))?
         .small_int()?;
     if status != 0 {
-        return Ok(format!("ERROR: OCSP server answered status {status}"));
+        return Ok((
+            false,
+            trf("ERROR: OCSP server answered status {}", &[&status]),
+        ));
     }
     let rb = resp
         .get(1)
@@ -95,7 +103,7 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
         _ => vec![],
     };
     if let Some(problem) = check_responder(tbs_t.raw, &sig_alg, sig, &certs, issuer, trust) {
-        return Ok(format!("ERROR: {problem}"));
+        return Ok((false, trf("ERROR: {}", &[&problem])));
     }
 
     let rd = tbs_t.items(der::SEQUENCE)?;
@@ -113,7 +121,10 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .and_then(|t| t.expect(der::OCTET_STRING).ok())
             .map(|t| t.content.to_vec());
         if echoed != nonce && nested.as_deref() != Some(&nonce[..]) {
-            return Ok("ERROR: OCSP response is not for this request (nonce mismatch)".into());
+            return Ok((
+                false,
+                tr("ERROR: OCSP response is not for this request (nonce mismatch)").into(),
+            ));
         }
     }
     for s in responses {
@@ -135,21 +146,27 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .map(|t| t.inner().and_then(|x| x.time()))
             .transpose()?;
         if next_update.is_some_and(|n| n < time::now_ms()) {
-            return Ok("ERROR: OCSP answer is out of date".into());
+            return Ok((false, tr("ERROR: OCSP answer is out of date").into()));
         }
         return Ok(match k[1].tag {
-            0x80 => format!(
-                "GOOD (not revoked, checked {})",
-                time::fmt(Some(time::now_ms()))
+            0x80 => (
+                true,
+                trf(
+                    "GOOD (not revoked, checked {})",
+                    &[&time::fmt(Some(time::now_ms()))],
+                ),
             ),
             0xa1 => {
                 let when = k[1].children()?.first().map(|t| t.time()).transpose()?;
-                format!("REVOKED on {}", time::fmt(when))
+                (false, trf("REVOKED on {}", &[&time::fmt(when)]))
             }
-            _ => "UNKNOWN (the OCSP server does not know this certificate)".into(),
+            _ => (
+                false,
+                tr("UNKNOWN (the OCSP server does not know this certificate)").into(),
+            ),
         });
     }
-    Ok("UNKNOWN (no answer for this certificate)".into())
+    Ok((false, tr("UNKNOWN (no answer for this certificate)").into()))
 }
 
 fn extension(exts: &Tlv, oid: &str) -> Result<Option<Vec<u8>>> {
@@ -189,17 +206,17 @@ fn check_responder(
             return None;
         }
         if !cert::names_equal(&c.issuer, &issuer.subject) {
-            return Some("OCSP responder was not issued by the certificate's CA".into());
+            return Some(tr("OCSP responder was not issued by the certificate's CA").into());
         }
         if !c.has_eku(cert::EKU_OCSP_SIGNING) {
-            return Some("OCSP responder certificate is not issued for OCSP signing".into());
+            return Some(tr("OCSP responder certificate is not issued for OCSP signing").into());
         }
         let chain = trust.check(c, time::now_ms());
         return if chain.ok {
             None
         } else {
-            Some(format!("OCSP responder is not trusted ({})", chain.status))
+            Some(trf("OCSP responder is not trusted ({})", &[&chain.status]))
         };
     }
-    Some("OCSP response signature is invalid".into())
+    Some(tr("OCSP response signature is invalid").into())
 }
