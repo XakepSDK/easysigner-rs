@@ -1,0 +1,15 @@
+# The Android app: a thin library that Android's NativeActivity loads (libkzsigner_android.so).
+# Everything else is the kzsigner crate (src/android.rs); the APK is made by scripts/apk.sh.
+[package]
+name = "kzsigner-android"
+version = "0.1.0-dev"
+edition = "2024"
+publish = false
+
+[lib]
+name = "kzsigner_android"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+kzsigner = { path = "..", default-features = false, features = ["gui"] }

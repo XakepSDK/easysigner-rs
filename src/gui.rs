@@ -45,16 +45,42 @@ impl Tone {
 
 /// File choosers: the system's own, or scripted ones in tests.
 pub trait Dialogs {
-    fn open(&mut self, start: Option<&Path>) -> Option<PathBuf>;
+    /// A file for the file field `field`. A chooser that can't answer at once (Android's)
+    /// returns None and hands the file over later through [`Dialogs::poll`].
+    fn open(&mut self, field: &'static str, start: Option<&Path>) -> Option<PathBuf>;
     /// The save location; the system dialog asks before replacing a file.
     fn save(&mut self, suggested: &Path) -> Option<PathBuf>;
+    /// Called after `path` (from [`Dialogs::save`]) was written.
+    fn saved(&mut self, _path: &Path) {}
+    /// Shows a saved file: its folder on the desktop, the share sheet on a phone.
+    fn reveal(&mut self, path: &Path) {
+        show_in_folder(path);
+    }
+    /// Shows or hides the on-screen keyboard.
+    fn keyboard(&mut self, _show: bool) {}
+    /// What happened since the last frame: chosen files, files opened from other apps.
+    fn poll(&mut self) -> Option<DialogEvent> {
+        None
+    }
+}
+
+/// See [`Dialogs::poll`].
+pub enum DialogEvent {
+    /// A file chosen for the file field with this id.
+    Picked(&'static str, PathBuf),
+    /// A file opened in kzsigner from another app.
+    Open(PathBuf),
+    /// A message for the user: (text, is error).
+    Message(String, bool),
 }
 
 /// The operating system's file dialogs.
+#[cfg(not(target_os = "android"))]
 pub struct SystemDialogs;
 
+#[cfg(not(target_os = "android"))]
 impl Dialogs for SystemDialogs {
-    fn open(&mut self, start: Option<&Path>) -> Option<PathBuf> {
+    fn open(&mut self, _field: &'static str, start: Option<&Path>) -> Option<PathBuf> {
         let mut d = rfd::FileDialog::new();
         if let Some(dir) = start.and_then(Path::parent) {
             d = d.set_directory(dir);
@@ -75,6 +101,7 @@ impl Dialogs for SystemDialogs {
 }
 
 /// Opens the window and runs until it is closed. `file`: a document, .cms or key to start with.
+#[cfg(not(target_os = "android"))]
 pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
     i18n::set(i18n::detect());
     let options = eframe::NativeOptions {
@@ -106,14 +133,17 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
     .map_err(|e| trf("Could not open the window: {}", &[&e]))
 }
 
+#[cfg(not(target_os = "android"))]
 struct Window(App);
 
+#[cfg(not(target_os = "android"))]
 impl Window {
     fn new(app: App) -> Window {
         Window(app)
     }
 }
 
+#[cfg(not(target_os = "android"))]
 impl eframe::App for Window {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| self.0.ui(ui));
@@ -204,6 +234,9 @@ pub struct App {
     path_fields: std::collections::HashMap<&'static str, PathField>,
     /// A file given on the command line, opened on the first frame.
     pub pending_open: Option<PathBuf>,
+    /// A file chosen for a file field (by its id) that the field has not taken yet.
+    picked: Option<(&'static str, PathBuf)>,
+    keyboard_shown: bool,
     pub screen: Screen,
     /// A message box: (text, is error).
     pub message: Option<(String, bool)>,
@@ -263,6 +296,8 @@ impl App {
             fonts_installed: false,
             path_fields: Default::default(),
             pending_open: None,
+            picked: None,
+            keyboard_shown: false,
             screen: Screen::Start,
             message: None,
             done: None,
@@ -336,6 +371,18 @@ impl App {
         }
         if let Some(f) = self.pending_open.take() {
             self.open_file(&ctx, f);
+        }
+        while let Some(e) = self.dialogs.poll() {
+            match e {
+                DialogEvent::Picked(field, f) => self.picked = Some((field, f)),
+                DialogEvent::Open(f) => self.open_file(&ctx, f),
+                DialogEvent::Message(m, error) => self.message = Some((m, error)),
+            }
+        }
+        let typing = ctx.egui_wants_keyboard_input();
+        if typing != self.keyboard_shown {
+            self.keyboard_shown = typing;
+            self.dialogs.keyboard(typing);
         }
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -799,8 +846,13 @@ impl App {
         }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
-            if ui.add(primary_button(tr("Show in folder"))).clicked() {
-                show_in_folder(&d.saved);
+            let reveal = if cfg!(target_os = "android") {
+                tr("Share")
+            } else {
+                tr("Show in folder")
+            };
+            if ui.add(primary_button(reveal)).clicked() {
+                self.dialogs.reveal(&d.saved);
             }
             if ui
                 .add(
@@ -831,7 +883,13 @@ impl App {
         label: &str,
         current: &Option<PathBuf>,
     ) -> Option<PathBuf> {
-        let mut chosen = None;
+        let mut chosen = match self.picked.take() {
+            Some((f, p)) if f == id => Some(p),
+            other => {
+                self.picked = other;
+                None
+            }
+        };
         let l = ui.label(label);
         let field = self.path_fields.entry(id).or_default();
         if field.shown != *current {
@@ -867,7 +925,7 @@ impl App {
                 }
             }
             if ui.button(tr("Browse…")).on_hover_text(label).clicked() {
-                chosen = dialogs.open(current.as_deref());
+                chosen = dialogs.open(id, current.as_deref());
             }
         });
         chosen
@@ -1083,6 +1141,7 @@ impl App {
             self.message = Some((trf("Could not save: {}", &[&e]), true));
             return;
         }
+        self.dialogs.saved(&out);
         let doc_name = doc
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -1269,6 +1328,11 @@ impl App {
             return;
         };
         self.message = Some(match std::fs::write(&out, &data) {
+            // Android's own "Save as" comes next and says where it went
+            Ok(()) if cfg!(target_os = "android") => {
+                self.dialogs.saved(&out);
+                return;
+            }
             Ok(()) => (
                 trf("Saved {} bytes to\n{}", &[&data.len(), &out.display()]),
                 false,

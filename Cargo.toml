@@ -29,8 +29,7 @@ getrandom = { version = "0.4", features = ["sys_rng"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lexopt = "0.3"
 rpassword = "7"
-eframe = { version = "0.37", optional = true, default-features = false, features = ["x11", "wayland"] }
-rfd = { version = "0.17", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
+eframe = { version = "0.37", optional = true, default-features = false }
 ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
 cbc = "0.2.1"
@@ -42,8 +41,17 @@ qrcodegen = "1.8"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde_json = "1"
 
-[target.'cfg(not(windows))'.dependencies]
-eframe = { version = "0.37", optional = true, default-features = false, features = ["glow"] }
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = { version = "0.17", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.37", optional = true, default-features = false, features = ["android-native-activity", "glow"] }
+jni = "0.22"
+ndk-context = "0.1"
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+
+[target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
+eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland"] }
 wgpu = { version = "30", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
@@ -51,6 +59,10 @@ wgpu = { version = "30", optional = true, default-features = false }
 eframe = { version = "0.37", optional = true, default-features = false, features = ["wgpu_no_default_features"] }
 wgpu = { version = "30", optional = true, default-features = false, features = ["dx12", "wgsl", "std"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
+
+[workspace]
+members = ["android"]
+default-members = ["."]
 
 [profile.release]
 opt-level = "z"

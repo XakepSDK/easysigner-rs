@@ -1486,8 +1486,10 @@ dependencies = [
  "getrandom 0.4.3",
  "gost94",
  "hmac",
+ "jni",
  "lexopt",
  "lopdf",
+ "ndk-context",
  "num-bigint",
  "num-traits",
  "pbkdf2",
@@ -1505,8 +1507,16 @@ dependencies = [
  "ureq",
  "wgpu",
  "windows-sys 0.61.2",
+ "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "kzsigner-android"
+version = "0.1.0-dev"
+dependencies = [
+ "kzsigner",
 ]
 
 [[package]]

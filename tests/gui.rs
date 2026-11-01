@@ -24,7 +24,7 @@ impl Scripted {
 }
 
 impl Dialogs for Scripted {
-    fn open(&mut self, _: Option<&Path>) -> Option<PathBuf> {
+    fn open(&mut self, _: &'static str, _: Option<&Path>) -> Option<PathBuf> {
         self.0.lock().unwrap().pop_front()
     }
     fn save(&mut self, _: &Path) -> Option<PathBuf> {
