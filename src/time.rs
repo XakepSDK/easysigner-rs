@@ -1,4 +1,6 @@
-//! Times as milliseconds since 1970 (UTC): ASN.1 parsing and encoding, and display.
+//! Times as milliseconds since 1970 (UTC): ASN.1 parsing and encoding, and display. The
+//! calendar is chrono's; this file only reads and writes the ASN.1 time formats, including the
+//! looser BER forms (no seconds, fractions, offsets) that DER-only parsers refuse.
 
 use crate::{Error, Result};
 
@@ -9,36 +11,8 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// (year, month, day, hour, minute, second, millisecond) in UTC.
-pub fn parts(ms: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
-    let secs = ms.div_euclid(1000);
-    let (y, mo, d) = civil_from_days(secs.div_euclid(86400));
-    let s = secs.rem_euclid(86400);
-    (y, mo, d, s / 3600, s / 60 % 60, s % 60, ms.rem_euclid(1000))
+fn utc(ms: i64) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default()
 }
 
 fn bad_time() -> Error {
@@ -92,18 +66,18 @@ pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
         }
         _ => return Err(bad_time()),
     }
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || sec > 60 {
-        return Err(bad_time());
-    }
-    let secs = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec - offset_min * 60;
-    Ok(secs * 1000 + ms)
+    // chrono checks the date (no 31 February) and time; a leap second 60 counts as 59
+    let t = chrono::NaiveDate::from_ymd_opt(y as i32, mo as u32, d as u32)
+        .and_then(|day| day.and_hms_opt(h as u32, mi as u32, sec.min(59) as u32))
+        .ok_or_else(bad_time)?;
+    Ok(t.and_utc().timestamp_millis() + ms - offset_min * 60 * 1000)
 }
 
 /// The DER time NCALayer and Bouncy Castle write: UTCTime for 1950..2049, else GeneralizedTime.
 pub fn encode(ms: i64) -> Vec<u8> {
-    let (y, mo, d, h, mi, s, _) = parts(ms);
-    if (1950..2050).contains(&y) {
-        let t = format!("{:02}{mo:02}{d:02}{h:02}{mi:02}{s:02}Z", y % 100);
+    let t = utc(ms);
+    if (1950..2050).contains(&chrono::Datelike::year(&t)) {
+        let t = t.format("%y%m%d%H%M%SZ").to_string();
         crate::der::tlv(crate::der::UTC_TIME, t.as_bytes())
     } else {
         encode_generalized(ms)
@@ -111,20 +85,18 @@ pub fn encode(ms: i64) -> Vec<u8> {
 }
 
 pub fn encode_generalized(ms: i64) -> Vec<u8> {
-    let (y, mo, d, h, mi, s, _) = parts(ms);
-    let t = format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}Z");
+    let t = utc(ms).format("%Y%m%d%H%M%SZ").to_string();
     crate::der::tlv(crate::der::GENERALIZED_TIME, t.as_bytes())
 }
 
 /// ISO-8601 UTC, like Java's Instant.toString: 2026-11-01T10:00:00Z (with .SSS when not 0).
 pub fn iso(ms: i64) -> String {
-    let (y, mo, d, h, mi, s, f) = parts(ms);
-    let frac = if f == 0 {
-        String::new()
+    let t = utc(ms);
+    if ms.rem_euclid(1000) == 0 {
+        t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
     } else {
-        format!(".{f:03}")
-    };
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}{frac}Z")
+        t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    }
 }
 
 /// Local time for people: 2026-11-01 15:00:00 +05:00.
@@ -149,6 +121,15 @@ pub fn fmt(ms: Option<i64>) -> String {
 mod tests {
     use super::*;
 
+    fn iso_ms(year: i32) -> i64 {
+        chrono::NaiveDate::from_ymd_opt(year, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+    }
+
     #[test]
     fn round_trip() {
         let t = parse_asn1(crate::der::UTC_TIME, b"261031000029Z").unwrap();
@@ -158,5 +139,12 @@ mod tests {
         let g = parse_asn1(crate::der::GENERALIZED_TIME, b"20261031000029.5Z").unwrap();
         assert_eq!(iso(g), "2026-10-31T00:00:29.500Z");
         assert_eq!(iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            iso(parse_asn1(crate::der::UTC_TIME, b"2602031200+0500").unwrap()),
+            "2026-02-03T07:00:00Z"
+        );
+        assert!(parse_asn1(crate::der::UTC_TIME, b"260231000000Z").is_err());
+        assert_eq!(&encode_generalized(g)[2..], b"20261031000029Z");
+        assert_eq!(&encode(iso_ms(2051))[..1], &[crate::der::GENERALIZED_TIME]);
     }
 }
