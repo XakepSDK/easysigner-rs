@@ -248,8 +248,11 @@ fn pdf_signing_and_cards_in_the_window() {
     settle(&mut h);
 
     // sign inside the PDF
-    h.get_by_label("Inside the PDF").click();
+    // the whole box picks the option, its text too, not only the radio button
+    h.get_by_label("Still opens as a normal PDF. Only for PDF files.")
+        .click();
     h.run();
+    assert_eq!(h.state().sign_as, kzsigner::gui::SignAs::Pdf);
     let out = dir.join("plain-signed.pdf");
     dialogs.next(out.clone());
     h.get_by_label("Sign").click();

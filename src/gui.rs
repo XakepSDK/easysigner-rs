@@ -225,6 +225,8 @@ pub struct App {
     key_note: Note,
     /// The opened key's holder, for the line under the key.
     key_holder: Option<String>,
+    /// The opened key is from a trusted NCA RK issuer and has no warnings.
+    key_ok: bool,
     pub detached: bool,
     pub timestamp: bool,
     pub sign_as: SignAs,
@@ -275,6 +277,7 @@ impl App {
             doc_note: Note::default(),
             key_note: Note::default(),
             key_holder: None,
+            key_ok: false,
             detached: false,
             timestamp: true,
             sign_as: SignAs::Cms,
@@ -543,7 +546,8 @@ impl App {
                 }
             }
             if self.key.is_some() {
-                banner(ui, Tone::Good, |ui| self.key_note.show(ui));
+                let tone = if self.key_ok { Tone::Good } else { Tone::Warn };
+                banner(ui, tone, |ui| self.key_note.show(ui));
             } else {
                 self.key_note.show(ui);
             }
@@ -608,37 +612,72 @@ impl App {
                 !locked || kind == DocKind::Card,
             ),
         ];
+        // the three boxes as tall as the tallest one was on the last frame
+        let height_id = egui::Id::unique("how_to_save_height");
+        let height = ui
+            .ctx()
+            .data(|d| d.get_temp::<f32>(height_id))
+            .unwrap_or(60.0);
+        let mut tallest: f32 = 0.0;
         ui.columns(3, |cols| {
             for (i, (value, title, desc, enabled)) in options.into_iter().enumerate() {
                 let ui = &mut cols[i];
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    let selected = self.sign_as == value;
-                    let stroke = if selected {
-                        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill)
+                    let id = ui.scope_id().with(("how", i));
+                    let hovered =
+                        enabled && ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+                    let v = ui.visuals();
+                    let stroke = if self.sign_as == value {
+                        egui::Stroke::new(2.0, v.selection.bg_fill)
+                    } else if hovered {
+                        egui::Stroke::new(1.0, v.widgets.hovered.fg_stroke.color)
                     } else {
-                        ui.visuals().widgets.noninteractive.bg_stroke
+                        v.widgets.noninteractive.bg_stroke
                     };
-                    egui::Frame::new()
+                    let frame = egui::Frame::new()
                         .stroke(stroke)
                         .corner_radius(8.0)
                         .inner_margin(10.0)
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.set_min_height(76.0);
+                            ui.set_min_height(height);
                             ui.add_enabled_ui(enabled, |ui| {
-                                ui.radio_value(
-                                    &mut self.sign_as,
-                                    value,
-                                    RichText::new(title).strong(),
-                                );
-                                ui.add(
-                                    egui::Label::new(Tone::Muted.text(ui, desc).size(12.5)).wrap(),
-                                );
-                            });
+                                ui.vertical(|ui| {
+                                    ui.radio_value(
+                                        &mut self.sign_as,
+                                        value,
+                                        RichText::new(title).strong(),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(Tone::Muted.text(ui, desc).size(12.5))
+                                            .wrap()
+                                            .selectable(false),
+                                    );
+                                })
+                                .response
+                                .rect
+                                .height()
+                            })
+                            .inner
                         });
+                    tallest = tallest.max(frame.inner);
+                    // the whole box picks the option, not only its radio button
+                    let r = ui.interact(frame.response.rect, id, egui::Sense::click());
+                    if enabled {
+                        if r.clicked() {
+                            self.sign_as = value;
+                        }
+                        if r.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                    }
                 });
             }
         });
+        if (tallest - height).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(height_id, tallest));
+            ui.ctx().request_repaint();
+        }
         ui.add_space(6.0);
         if self.sign_as == SignAs::Card && kind != DocKind::Card {
             ui.horizontal(|ui| {
@@ -1319,7 +1358,9 @@ impl App {
                             self.alias = Some(k.alias.clone());
                         }
                         self.key_note = self.describe_key(&k);
-                        self.key_holder = Some(self.engine.describe(&k.cert).name());
+                        let d = self.engine.describe(&k.cert);
+                        self.key_holder = Some(d.name());
+                        self.key_ok = d.chain_ok && self.engine.key_warnings(&k.cert).is_empty();
                         self.alias = Some(k.alias.clone());
                         self.opened_for = Some(key_request(&f, Some(&k.alias), &pw_hash));
                         self.key = Some(Arc::new(*k));
@@ -1334,7 +1375,29 @@ impl App {
                 self.signing = false;
                 match r {
                     Ok(r) => self.save_signed(&doc, sign_as, r),
-                    Err(e) => self.message = Some((e, true)),
+                    Err(e) => {
+                        // NCA's time (on by default) and a card's key check need the internet
+                        let offline_hint =
+                            e.contains(DEFAULT_TSA_URL) || e.contains(DEFAULT_OCSP_URL);
+                        let e = if offline_hint && sign_as == SignAs::Card {
+                            format!(
+                                "{e}\n\n{}",
+                                tr(
+                                    "A printable card needs the internet: it gets the official time and the key check from NCA. Check the connection and try again, or save a signature file instead."
+                                )
+                            )
+                        } else if offline_hint {
+                            format!(
+                                "{e}\n\n{}",
+                                tr(
+                                    "Getting the official time from NCA needs the internet. Check the connection and try again, or turn off the NCA time under More options."
+                                )
+                            )
+                        } else {
+                            e
+                        };
+                        self.message = Some((e, true));
+                    }
                 }
             }
             Msg::Verified(id, r) => {
@@ -1521,10 +1584,14 @@ fn file_title(ui: &mut egui::Ui, f: &Path) {
 
 /// Opens the folder with `f` in the system's file manager.
 fn show_in_folder(f: &Path) {
+    // explorer wants /select,"C:\a b\c.cms" as one argument, quoted only around the path
     #[cfg(windows)]
-    let r = std::process::Command::new("explorer")
-        .arg(format!("/select,{}", f.display()))
-        .spawn();
+    let r = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", f.display()))
+            .spawn()
+    };
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg("-R").arg(f).spawn();
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -1548,6 +1615,9 @@ fn failure_reason(r: &VerifyReport) -> String {
             .signature_error
             .clone()
             .unwrap_or_else(|| tr("The document was changed after it was signed.").into());
+    }
+    if s.cert_valid_at_signing == Some(false) {
+        return tr("The signer's key was not valid when the document was signed (expired, or not yet valid).").into();
     }
     if !s.chain_ok {
         return trf(
