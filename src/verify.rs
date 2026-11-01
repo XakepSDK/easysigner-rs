@@ -210,9 +210,10 @@ fn check_one(
     sr.chain = chain.path;
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
-        let (good, status) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);
+        let (good, status, answer) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);
         ocsp_good = good;
         sr.ocsp_status = Some(status);
+        sr.ocsp_answer = Some(answer);
     }
     sr.valid =
         sr.signature_ok && sr.chain_ok && valid_at && sr.timestamp_ok != Some(false) && ocsp_good;

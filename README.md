@@ -29,9 +29,14 @@ revocation check (`--ocsp`, always for a card, whose signatures keep the answer)
 
 ## Use
 
-Run `kzsigner` with no arguments (or double-click it) for the window, or open a file with it:
-`kzsigner document.pdf` starts on the Sign tab, `kzsigner signed.cms` on the Verify tab. Files can
-also be dropped on the window. The window is in Kazakh, Russian or English: it starts in the
+Run `kzsigner` with no arguments (or double-click it) for the window. It starts with two choices,
+**Sign a document** and **Check a signed file**, each on a screen of its own in plain words; the
+technical details are folded away. A file opened with it (`kzsigner document.pdf`) or dropped on
+the window goes where it belongs: a document to signing, a signed file (.cms, signed PDF, card)
+to checking, a key file to the key field. Safe by default: signing adds NCA's official time and
+checking asks NCA whether the keys were revoked (both need internet; they can be turned off
+under More options). When NCA cannot be reached, a check says the signatures are valid but not
+checked for revocation, rather than failing. The window is in Kazakh, Russian or English: it starts in the
 system's language and the menu at the top right switches (the choice is remembered;
 `KZSIGNER_LANG=kk|ru|en` also sets it). The command line stays in English.
 
@@ -174,9 +179,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
   refused. Test PDFs are in `tests/fixtures/pdf`.
-* `tests/gui.rs`: drives the window without a display (egui_kittest): picks a document and key,
-  types the password, signs, verifies the result and saves the document back out; and signs a
-  PDF inside, checks it and a card, and saves the card's document.
+* `tests/gui.rs`: drives the window without a display (egui_kittest): from the start screen picks
+  a document and key, types the password, signs, checks the result, saves the document back out
+  and switches languages; signs a PDF inside, checks it and a card, saves the card's document;
+  and opens a signed PDF from the start, which goes to checking.
 * `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken: .cms, .p12, plain and
   signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
 * `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later

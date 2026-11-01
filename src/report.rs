@@ -29,6 +29,9 @@ pub struct SignerReport {
     pub cert_valid_at_signing: Option<bool>,
     /// None when not checked.
     pub ocsp_status: Option<String>,
+    /// The OCSP answer when checked: "good", "revoked", "unknown", or "" when none came (no
+    /// network, a broken or untrusted response).
+    pub ocsp_answer: Option<&'static str>,
     pub warnings: Vec<String>,
     pub cert_der: Option<Vec<u8>>,
     /// What kind of signature this is, when not a plain .cms signer (e.g. a PDF signature).

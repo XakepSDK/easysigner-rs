@@ -108,3 +108,22 @@ fn certified_pdfs_that_allow_no_changes_are_not_signed() {
     };
     assert!(err.0.contains("DocMDP"), "{}", err.0);
 }
+
+#[test]
+fn a_cms_holding_a_pdf_is_checked_as_a_cms() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = Engine::new(vec![]);
+    let rsa = key(&e, "alice_rsa.p12");
+    let pdf = std::fs::read(fx.join("plain.pdf")).unwrap();
+    let cms = e.sign(&pdf, &rsa, false, None, false, None).unwrap().cms;
+    assert!(!e.is_pdf(&cms));
+    let r = e.verify(&cms, None, None).unwrap();
+    assert!(!r.is_pdf);
+    assert_eq!(r.signers.len(), 1);
+    assert!(
+        r.signers[0].signature_ok,
+        "{:?}",
+        r.signers[0].signature_error
+    );
+    assert_eq!(e.extract(&cms).unwrap(), pdf);
+}

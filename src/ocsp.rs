@@ -11,18 +11,25 @@ pub const DEFAULT_URL: &str = "http://ocsp.pki.gov.kz";
 const NONCE: &str = "1.3.6.1.5.5.7.48.1.2";
 const BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 
-/// Whether the certificate is known not to be revoked, and a status line (in English: starting
-/// with GOOD, REVOKED, UNKNOWN or ERROR).
-pub fn check(c: &Cert, issuer: Option<&Cert>, url: &str, trust: &TrustStore) -> (bool, String) {
+/// Whether the certificate is known not to be revoked, a status line (in English: starting
+/// with GOOD, REVOKED, UNKNOWN or ERROR), and the answer: "good", "revoked", "unknown", or
+/// "" when there was none (no issuer, no network, a broken or untrusted response).
+pub fn check(
+    c: &Cert,
+    issuer: Option<&Cert>,
+    url: &str,
+    trust: &TrustStore,
+) -> (bool, String, &'static str) {
     let Some(issuer) = issuer else {
         return (
             false,
             tr("UNKNOWN (issuer certificate not available)").into(),
+            "",
         );
     };
     match fetch(c, issuer, url, trust) {
-        Ok(a) => (a.good, a.status),
-        Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e])),
+        Ok(a) => (a.good, a.status, a.cert_status),
+        Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e]), ""),
     }
 }
 

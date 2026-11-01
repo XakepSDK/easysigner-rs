@@ -1,4 +1,5 @@
-//! The desktop window: Sign and Verify / Extract tabs. All crypto runs off the UI thread.
+//! The desktop window: a start screen with two choices (sign, check), each on its own screen.
+//! All crypto runs off the UI thread.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -85,7 +86,8 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
                 width: 64,
                 height: 64,
             })
-            .with_inner_size([760.0, 640.0])
+            .with_inner_size([780.0, 720.0])
+            .with_min_inner_size([620.0, 480.0])
             .with_drag_and_drop(true),
         centered: true,
         ..Default::default()
@@ -118,10 +120,15 @@ impl eframe::App for Window {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
+/// The screen the window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Screen {
+    /// Two big choices: sign or check.
+    Start,
     Sign,
-    Verify,
+    /// What signing made, and where it was saved.
+    Signed,
+    Check,
 }
 
 /// A note under a field: lines of text with a tone each.
@@ -134,7 +141,7 @@ impl Note {
     }
     fn show(&self, ui: &mut egui::Ui) {
         for (t, tone) in &self.0 {
-            ui.label(tone.text(ui, t));
+            ui.add(egui::Label::new(tone.text(ui, t)).wrap());
         }
     }
 }
@@ -169,6 +176,22 @@ pub enum SignAs {
     Card,
 }
 
+/// A finished signing, for the Signed screen.
+#[derive(Clone, Debug)]
+pub struct Done {
+    /// Where the signed file was saved.
+    pub saved: PathBuf,
+    /// The document's file name.
+    pub doc_name: String,
+    pub signer: String,
+    pub cosigned: bool,
+    pub timestamped: bool,
+    pub sign_as: SignAs,
+    pub detached: bool,
+    pub signer_count: usize,
+    pub warnings: Vec<String>,
+}
+
 /// The window's state and behaviour, without the native window around it (tests drive it).
 pub struct App {
     engine: Arc<Engine>,
@@ -181,11 +204,16 @@ pub struct App {
     path_fields: std::collections::HashMap<&'static str, PathField>,
     /// A file given on the command line, opened on the first frame.
     pub pending_open: Option<PathBuf>,
-    pub tab: Tab,
+    pub screen: Screen,
     /// A message box: (text, is error).
     pub message: Option<(String, bool)>,
+    /// The last signing, shown on the Signed screen.
+    pub done: Option<Done>,
+    /// The document was opened from the start screen: if it turns out to be signed already,
+    /// show the check instead.
+    route_signed_to_check: bool,
 
-    // Sign tab
+    // signing
     pub doc: Option<PathBuf>,
     pub sign_original: Option<PathBuf>,
     pub key_file: Option<PathBuf>,
@@ -195,6 +223,8 @@ pub struct App {
     alias: Option<String>,
     doc_note: Note,
     key_note: Note,
+    /// The opened key's holder, for the line under the key.
+    key_holder: Option<String>,
     pub detached: bool,
     pub timestamp: bool,
     pub sign_as: SignAs,
@@ -209,7 +239,7 @@ pub struct App {
     key_request: u64,
     opened_for: Option<String>,
 
-    // Verify tab
+    // checking
     pub cms: Option<PathBuf>,
     pub verify_original: Option<PathBuf>,
     show_verify_original: bool,
@@ -231,8 +261,10 @@ impl App {
             fonts_installed: false,
             path_fields: Default::default(),
             pending_open: None,
-            tab: Tab::Sign,
+            screen: Screen::Start,
             message: None,
+            done: None,
+            route_signed_to_check: false,
             doc: None,
             sign_original: None,
             key_file: None,
@@ -242,8 +274,9 @@ impl App {
             alias: None,
             doc_note: Note::default(),
             key_note: Note::default(),
+            key_holder: None,
             detached: false,
-            timestamp: false,
+            timestamp: true,
             sign_as: SignAs::Cms,
             card_qr: false,
             card_lang: CardLang::Ru,
@@ -258,7 +291,7 @@ impl App {
             cms: None,
             verify_original: None,
             show_verify_original: false,
-            ocsp: false,
+            ocsp: true,
             verify_request: 0,
             result: None,
             checking: false,
@@ -293,7 +326,7 @@ impl App {
         }
         while let Ok(m) = self.rx.try_recv() {
             self.busy -= 1;
-            self.handle(m);
+            self.handle(&ctx, m);
         }
         if self.busy > 0 {
             ctx.set_cursor_icon(egui::CursorIcon::Progress);
@@ -311,17 +344,59 @@ impl App {
         if let Some(f) = dropped.into_iter().find(|p| !p.as_os_str().is_empty()) {
             self.open_file(&ctx, f);
         }
+        self.header(ui);
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                match self.screen {
+                    Screen::Start => self.start_screen(ui),
+                    Screen::Sign => self.sign_screen(ui),
+                    Screen::Signed => self.signed_screen(ui),
+                    Screen::Check => self.check_screen(ui),
+                }
+            });
+        if let Some((text, error)) = self.message.clone() {
+            egui::Modal::new(egui::Id::unique("message")).show(&ctx, |ui| {
+                ui.set_max_width(460.0);
+                let title = if error {
+                    Tone::Bad.text(ui, tr("Something went wrong"))
+                } else {
+                    Tone::Strong.text(ui, "kzsigner")
+                };
+                ui.label(title.strong().size(16.0));
+                ui.add_space(6.0);
+                ui.label(text);
+                ui.add_space(10.0);
+                if ui.add(primary_button(tr("OK"))).clicked() {
+                    self.message = None;
+                }
+            });
+        }
+    }
+
+    /// Back, the screen's title and the language menu.
+    fn header(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.tab,
-                Tab::Sign,
-                RichText::new(tr("Sign")).size(16.0),
-            );
-            ui.selectable_value(
-                &mut self.tab,
-                Tab::Verify,
-                RichText::new(tr("Verify / Extract")).size(16.0),
-            );
+            ui.set_min_height(32.0);
+            if self.screen == Screen::Start {
+                ui.label(RichText::new("kzsigner").strong().size(18.0));
+            } else {
+                if ui
+                    .button(RichText::new(format!("‹ {}", tr("Back"))).size(15.0))
+                    .clicked()
+                {
+                    self.screen = Screen::Start;
+                }
+                let title = match self.screen {
+                    Screen::Check => tr("Check a signed file"),
+                    _ => tr("Sign a document"),
+                };
+                ui.add_space(8.0);
+                ui.label(RichText::new(title).strong().size(18.0));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut lang = i18n::lang();
                 egui::ComboBox::from_id_salt("language")
@@ -339,32 +414,371 @@ impl App {
                 }
             });
         });
-        ui.separator();
-        match self.tab {
-            Tab::Sign => {
-                egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .show(ui, |ui| self.sign_tab(ui));
+    }
+
+    // ------------------------------------------------------------------ Start
+
+    fn start_screen(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(tr("What do you want to do?"))
+                .size(22.0)
+                .strong(),
+        );
+        ui.add_space(14.0);
+        ui.columns(2, |cols| {
+            let left = egui::Layout::top_down(egui::Align::Min);
+            if cols[0].with_layout(left, |ui| choice_card(
+                ui,
+                "start_sign",
+                tr("Sign a document"),
+                tr("Put your electronic signature (ЭЦП) on a contract, a letter or any other file."),
+                true,
+            )).inner
+            .clicked()
+            {
+                self.screen = Screen::Sign;
             }
-            Tab::Verify => self.verify_tab(ui),
-        }
-        if let Some((text, error)) = self.message.clone() {
-            egui::Modal::new(egui::Id::unique("message")).show(&ctx, |ui| {
-                ui.set_max_width(460.0);
-                let title = if error {
-                    Tone::Bad.text(ui, tr("Error"))
+            if cols[1].with_layout(left, |ui| choice_card(
+                ui,
+                "start_check",
+                tr("Check a signed file"),
+                tr("See who signed it and when, and whether it was changed. Get the document out of a .cms file."),
+                false,
+            )).inner
+            .clicked()
+            {
+                self.screen = Screen::Check;
+            }
+        });
+        ui.add_space(18.0);
+        card(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(14.0);
+                ui.label(RichText::new(tr("Or drop a file onto this window")).size(16.0));
+                ui.add_space(4.0);
+                ui.label(Tone::Muted.text(
+                    ui,
+                    tr("A document opens for signing, a signed file is checked, and a key file (.p12) is remembered for signing."),
+                ));
+                ui.add_space(14.0);
+            });
+        });
+    }
+
+    // ------------------------------------------------------------------ Sign
+
+    fn sign_screen(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        card(ui, |ui| {
+            step(ui, tr("1 · Document"));
+            if let Some(d) = &self.doc {
+                file_title(ui, d);
+            }
+            let doc = self.doc.clone();
+            if let Some(f) = self.file_field(ui, "doc", tr("Document to sign"), &doc) {
+                self.set_doc(&ctx, f);
+            }
+            self.doc_note.show(ui);
+            if self.doc_is_detached_cms {
+                ui.add_space(4.0);
+                let o = self.sign_original.clone();
+                if let Some(f) = self.file_field(
+                    ui,
+                    "sign_original",
+                    tr("This signature file does not contain the document. Choose the signed document:"),
+                    &o,
+                ) {
+                    self.sign_original = Some(f);
+                }
+            }
+        });
+        ui.add_space(10.0);
+        card(ui, |ui| {
+            step(ui, tr("2 · Your signature key"));
+            let kf = self.key_file.clone();
+            if let Some(f) = self.file_field(
+                ui,
+                "key",
+                tr("Key file (.p12), for example GOSTKNCA_… or RSA_…"),
+                &kf,
+            ) {
+                self.set_key_file(&ctx, f);
+            }
+            ui.horizontal(|ui| {
+                let l = ui.label(tr("Password"));
+                let r = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.password)
+                            .password(!self.show_password)
+                            .desired_width(240.0),
+                    )
+                    .labelled_by(l.id);
+                if r.lost_focus() {
+                    self.open_key(&ctx);
+                }
+                let hint = if self.show_password {
+                    tr("Hide password")
                 } else {
-                    Tone::Strong.text(ui, "kzsigner")
+                    tr("Show password")
                 };
-                ui.label(title.strong());
-                ui.add_space(6.0);
-                ui.label(text);
-                ui.add_space(8.0);
-                if ui.button("OK").clicked() {
-                    self.message = None;
+                if eye_button(ui, self.show_password, hint).clicked() {
+                    self.show_password = !self.show_password;
                 }
             });
+            if self.aliases.len() > 1 {
+                let before = self.alias.clone();
+                ui.horizontal(|ui| {
+                    ui.label(tr("Key in the file:"));
+                    egui::ComboBox::from_id_salt("alias")
+                        .selected_text(self.alias.clone().unwrap_or_default())
+                        .show_ui(ui, |ui| {
+                            for a in self.aliases.clone() {
+                                ui.selectable_value(&mut self.alias, Some(a.clone()), a);
+                            }
+                        });
+                });
+                if self.alias != before {
+                    self.open_key(&ctx);
+                }
+            }
+            if self.key.is_some() {
+                banner(ui, Tone::Good, |ui| self.key_note.show(ui));
+            } else {
+                self.key_note.show(ui);
+            }
+        });
+        ui.add_space(10.0);
+        card(ui, |ui| {
+            step(ui, tr("3 · How to save the signed document"));
+            self.how_to_save(ui);
+        });
+        ui.add_space(12.0);
+        let can_sign = !self.signing
+            && self.doc.is_some()
+            && self.key.is_some()
+            && (!self.doc_is_detached_cms || self.sign_original.is_some());
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if self.signing {
+                    tr("Signing…")
+                } else {
+                    tr("Sign")
+                };
+                if ui.add_enabled(can_sign, primary_button(label)).clicked() {
+                    self.sign(&ctx);
+                }
+                let hint = if self.doc.is_none() {
+                    tr("Choose the document first.")
+                } else if self.key.is_none() {
+                    tr("Choose your key file and type its password.")
+                } else if self.doc_is_detached_cms && self.sign_original.is_none() {
+                    tr("Choose the signed document.")
+                } else {
+                    ""
+                };
+                ui.label(Tone::Muted.text(ui, hint));
+            });
+        });
+    }
+
+    /// The three ways to sign, and their options.
+    fn how_to_save(&mut self, ui: &mut egui::Ui) {
+        let kind = self.doc_kind;
+        // a signed file keeps its own kind: a .cms gets another .cms signature, and so on
+        let locked = matches!(kind, DocKind::Cms | DocKind::Card | DocKind::SignedPdf);
+        let pdf_ok = matches!(kind, DocKind::Pdf | DocKind::SignedPdf);
+        let options = [
+            (
+                SignAs::Cms,
+                tr("Signature file"),
+                tr("Saves a .cms file, like NCALayer and eGov. Recommended."),
+                !locked || kind == DocKind::Cms,
+            ),
+            (
+                SignAs::Pdf,
+                tr("Inside the PDF"),
+                tr("Still opens as a normal PDF. Only for PDF files."),
+                pdf_ok && (!locked || kind == DocKind::SignedPdf),
+            ),
+            (
+                SignAs::Card,
+                tr("Printable card"),
+                tr("A PDF that shows the document and who signed it, to print or send."),
+                !locked || kind == DocKind::Card,
+            ),
+        ];
+        ui.columns(3, |cols| {
+            for (i, (value, title, desc, enabled)) in options.into_iter().enumerate() {
+                let ui = &mut cols[i];
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    let selected = self.sign_as == value;
+                    let stroke = if selected {
+                        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill)
+                    } else {
+                        ui.visuals().widgets.noninteractive.bg_stroke
+                    };
+                    egui::Frame::new()
+                        .stroke(stroke)
+                        .corner_radius(8.0)
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_min_height(76.0);
+                            ui.add_enabled_ui(enabled, |ui| {
+                                ui.radio_value(
+                                    &mut self.sign_as,
+                                    value,
+                                    RichText::new(title).strong(),
+                                );
+                                ui.add(
+                                    egui::Label::new(Tone::Muted.text(ui, desc).size(12.5)).wrap(),
+                                );
+                            });
+                        });
+                });
+            }
+        });
+        ui.add_space(6.0);
+        if self.sign_as == SignAs::Card && kind != DocKind::Card {
+            ui.horizontal(|ui| {
+                ui.label(tr("Card language:"));
+                egui::ComboBox::from_id_salt("card_lang")
+                    .selected_text(card_lang_name(self.card_lang))
+                    .show_ui(ui, |ui| {
+                        for l in [CardLang::Ru, CardLang::Kk, CardLang::KkRu] {
+                            ui.selectable_value(&mut self.card_lang, l, card_lang_name(l));
+                        }
+                    });
+            });
         }
+        egui::CollapsingHeader::new(tr("More options"))
+            .id_salt("more_options")
+            .show(ui, |ui| {
+                if self.sign_as == SignAs::Card {
+                    ui.add_enabled(
+                        false,
+                        egui::Checkbox::new(
+                            &mut true,
+                            tr("Official signing time and key check from NCA (always on a card; needs internet)"),
+                        ),
+                    );
+                    if kind != DocKind::Card {
+                        ui.checkbox(
+                            &mut self.card_qr,
+                            tr("Also print the signatures as QR codes"),
+                        );
+                    }
+                } else {
+                    ui.checkbox(
+                        &mut self.timestamp,
+                        tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
+                    );
+                }
+                if self.sign_as == SignAs::Cms {
+                    ui.add_enabled(
+                        !self.doc_is_cms,
+                        egui::Checkbox::new(
+                            &mut self.detached,
+                            tr("Keep the document out of the signature file (then send both files together)"),
+                        ),
+                    );
+                }
+            });
+    }
+
+    // ------------------------------------------------------------------ Signed
+
+    fn signed_screen(&mut self, ui: &mut egui::Ui) {
+        let Some(d) = self.done.clone() else {
+            self.screen = Screen::Start;
+            return;
+        };
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            ui.label(Tone::Good.text(ui, "✔").size(48.0));
+            ui.label(
+                RichText::new(if d.cosigned {
+                    tr("Signature added")
+                } else {
+                    tr("Signed")
+                })
+                .size(24.0)
+                .strong(),
+            );
+            ui.add_space(6.0);
+            let when = if d.timestamped {
+                tr("The signing time is confirmed by NCA.")
+            } else {
+                tr("The signing time comes from this computer's clock.")
+            };
+            ui.add(
+                egui::Label::new(format!(
+                    "{} {}",
+                    trf("{} is signed by {}.", &[&d.doc_name, &d.signer]),
+                    when
+                ))
+                .wrap(),
+            );
+            if d.signer_count > 1 {
+                ui.label(trf("Signatures in the file now: {}", &[&d.signer_count]));
+            }
+            ui.add_space(12.0);
+        });
+        card(ui, |ui| {
+            file_title(ui, &d.saved);
+            ui.label(
+                Tone::Muted.text(
+                    ui,
+                    trf(
+                        "Saved in {}",
+                        &[&d.saved
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default()],
+                    ),
+                ),
+            );
+            let what = match d.sign_as {
+                SignAs::Cms if d.detached => tr(
+                    "Send this .cms file together with the document: it holds only your signature.",
+                ),
+                SignAs::Cms => {
+                    tr("Send this .cms file: it holds both the document and your signature.")
+                }
+                SignAs::Pdf => {
+                    tr("This PDF opens in any PDF viewer and carries your signature inside it.")
+                }
+                SignAs::Card => tr(
+                    "This PDF shows the document and its signatures; the original file and the signatures are attached inside it.",
+                ),
+            };
+            ui.add(egui::Label::new(what).wrap());
+        });
+        for w in &d.warnings {
+            ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
+        }
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            if ui.add(primary_button(tr("Show in folder"))).clicked() {
+                show_in_folder(&d.saved);
+            }
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(tr("Sign another document")).size(15.0))
+                        .min_size(egui::vec2(0.0, 36.0)),
+                )
+                .clicked()
+            {
+                self.doc = None;
+                self.doc_note = Note::default();
+                self.doc_kind = DocKind::Other;
+                self.doc_is_cms = false;
+                self.doc_is_detached_cms = false;
+                self.sign_original = None;
+                self.screen = Screen::Sign;
+            }
+        });
     }
 
     // ------------------------------------------------------------------ fields
@@ -420,172 +834,26 @@ impl App {
         chosen
     }
 
-    /// A dropped or command-line file: a key goes to the key field, a signed .cms to the
-    /// Verify tab (unless the Sign tab is open, where it is co-signed), anything else is signed.
-    /// (A PDF goes to the Sign tab: it may be a document to sign, a signed PDF or a card.)
+    /// A dropped or command-line file: a key goes to the key field, a signed file is checked
+    /// (unless a document is being signed, where it is co-signed), anything else is signed.
+    /// (A PDF is signed: it may be a document to sign, a signed PDF or a card.)
     pub fn open_file(&mut self, ctx: &egui::Context, f: PathBuf) {
         let ext = f
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         if ext == "p12" || ext == "pfx" {
-            self.tab = Tab::Sign;
+            if self.screen != Screen::Sign {
+                self.screen = Screen::Sign;
+            }
             self.set_key_file(ctx, f);
-        } else if self.tab == Tab::Verify
-            || (self.doc.is_none() && self.cms.is_none() && ext == "cms")
-        {
-            self.tab = Tab::Verify;
+        } else if self.screen == Screen::Check || (self.screen != Screen::Sign && ext == "cms") {
+            self.screen = Screen::Check;
             self.set_cms(ctx, f);
         } else {
+            self.route_signed_to_check = self.screen == Screen::Start;
+            self.screen = Screen::Sign;
             self.set_doc(ctx, f);
-        }
-    }
-
-    // ------------------------------------------------------------------ Sign tab
-
-    fn sign_tab(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        section(ui, tr("1. Document"));
-        let doc = self.doc.clone();
-        if let Some(f) = self.file_field(
-            ui,
-            "doc",
-            tr("Document to sign (or a .cms to add your signature to)"),
-            &doc,
-        ) {
-            self.set_doc(&ctx, f);
-        }
-        self.doc_note.show(ui);
-        if self.doc_is_detached_cms {
-            let o = self.sign_original.clone();
-            if let Some(f) = self.file_field(
-                ui,
-                "sign_original",
-                tr("Original document (only for a detached .cms)"),
-                &o,
-            ) {
-                self.sign_original = Some(f);
-            }
-        }
-
-        section(ui, tr("2. Your key"));
-        let kf = self.key_file.clone();
-        if let Some(f) = self.file_field(
-            ui,
-            "key",
-            tr("Key file (.p12), e.g. RSA_… or GOSTKNCA_…"),
-            &kf,
-        ) {
-            self.set_key_file(&ctx, f);
-        }
-        ui.horizontal(|ui| {
-            let l = ui.label(tr("Password:"));
-            let r = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.password)
-                        .password(!self.show_password)
-                        .desired_width(220.0),
-                )
-                .labelled_by(l.id);
-            if r.lost_focus() {
-                self.open_key(&ctx);
-            }
-            let hint = if self.show_password {
-                tr("Hide password")
-            } else {
-                tr("Show password")
-            };
-            if eye_button(ui, self.show_password, hint).clicked() {
-                self.show_password = !self.show_password;
-            }
-        });
-        if self.aliases.len() > 1 {
-            let before = self.alias.clone();
-            ui.horizontal(|ui| {
-                ui.label(tr("Key:"));
-                egui::ComboBox::from_id_salt("alias")
-                    .selected_text(self.alias.clone().unwrap_or_default())
-                    .show_ui(ui, |ui| {
-                        for a in self.aliases.clone() {
-                            ui.selectable_value(&mut self.alias, Some(a.clone()), a);
-                        }
-                    });
-            });
-            if self.alias != before {
-                self.open_key(&ctx);
-            }
-        }
-        self.key_note.show(ui);
-
-        section(ui, tr("3. Options"));
-        let kind = self.doc_kind;
-        ui.add_enabled_ui(!matches!(kind, DocKind::Cms | DocKind::Card), |ui| {
-            ui.radio_value(&mut self.sign_as, SignAs::Cms, tr("Signature file (.cms)"));
-            ui.add_enabled_ui(matches!(kind, DocKind::Pdf | DocKind::SignedPdf), |ui| {
-                ui.radio_value(
-                    &mut self.sign_as,
-                    SignAs::Pdf,
-                    tr("Inside the PDF (opens in any PDF viewer; PDF documents only)"),
-                );
-            });
-            ui.radio_value(
-                &mut self.sign_as,
-                SignAs::Card,
-                tr("Document card (a PDF with the document, its signatures and their details)"),
-            );
-        });
-        ui.indent("sign_as_options", |ui| match self.sign_as {
-            SignAs::Cms => {
-                ui.add_enabled(
-                    !self.doc_is_cms,
-                    egui::Checkbox::new(
-                        &mut self.detached,
-                        tr("Detached signature (the .cms will not contain the document)"),
-                    ),
-                );
-            }
-            SignAs::Pdf => {}
-            SignAs::Card => {
-                ui.checkbox(
-                    &mut self.card_qr,
-                    tr("Print the signatures as QR codes too"),
-                );
-                ui.horizontal(|ui| {
-                    ui.label(tr("Card language:"));
-                    egui::ComboBox::from_id_salt("card_lang")
-                        .selected_text(card_lang_name(self.card_lang))
-                        .show_ui(ui, |ui| {
-                            for l in [CardLang::Ru, CardLang::Kk, CardLang::KkRu] {
-                                ui.selectable_value(&mut self.card_lang, l, card_lang_name(l));
-                            }
-                        });
-                });
-            }
-        });
-        if self.sign_as == SignAs::Card {
-            ui.add_enabled(
-                false,
-                egui::Checkbox::new(
-                    &mut true,
-                    tr("Add NCA timestamp and revocation answer (a card always has them; needs internet)"),
-                ),
-            );
-        } else {
-            ui.checkbox(
-                &mut self.timestamp,
-                tr("Add NCA timestamp (needs internet, sends only a hash)"),
-            );
-        }
-        ui.add_space(8.0);
-        let can_sign = !self.signing
-            && self.doc.is_some()
-            && self.key.is_some()
-            && (!self.doc_is_detached_cms || self.sign_original.is_some());
-        if ui
-            .add_enabled(can_sign, egui::Button::new(tr("Sign…")))
-            .clicked()
-        {
-            self.sign(&ctx);
         }
     }
 
@@ -776,26 +1044,22 @@ impl App {
             self.message = Some((trf("Could not save: {}", &[&e]), true));
             return;
         }
-        let mut m = format!(
-            "{}.\n{}\n{}{}.",
-            if r.cosigned {
-                tr("Signature added")
-            } else {
-                tr("Signed")
-            },
-            trf("Saved to {}", &[&out.display()]),
-            trf("Signatures in the file: {}", &[&r.signer_count]),
-            if r.timestamped {
-                tr(", with timestamp")
-            } else {
-                ""
-            }
-        );
-        for w in &r.warnings {
-            m.push_str("\n\n");
-            m.push_str(&trf("Warning: {}", &[w]));
-        }
-        self.message = Some((m, false));
+        let doc_name = doc
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.done = Some(Done {
+            saved: out,
+            doc_name,
+            signer: self.key_holder.clone().unwrap_or_default(),
+            cosigned: r.cosigned,
+            timestamped: r.timestamped || sign_as == SignAs::Card,
+            sign_as,
+            detached: sign_as == SignAs::Cms && self.detached && !self.doc_is_cms,
+            signer_count: r.signer_count,
+            warnings: r.warnings,
+        });
+        self.screen = Screen::Signed;
     }
 
     /// Switches the window's language and redoes what holds translated text: the key details,
@@ -818,71 +1082,90 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------------ Verify tab
+    // ------------------------------------------------------------------ Check
 
-    fn verify_tab(&mut self, ui: &mut egui::Ui) {
+    fn check_screen(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let c = self.cms.clone();
-        if let Some(f) = self.file_field(
-            ui,
-            "cms",
-            tr("Signed file (.cms, signed PDF or document card)"),
-            &c,
-        ) {
-            self.set_cms(&ctx, f);
-        }
-        if self.show_verify_original {
-            let o = self.verify_original.clone();
+        card(ui, |ui| {
+            if let Some(c) = &self.cms {
+                file_title(ui, c);
+            }
+            let c = self.cms.clone();
             if let Some(f) = self.file_field(
                 ui,
-                "verify_original",
-                tr("Original document (only for a detached .cms)"),
-                &o,
+                "cms",
+                tr("Signed file (.cms, signed PDF or document card)"),
+                &c,
             ) {
-                self.verify_original = Some(f);
-                self.verify(&ctx);
+                self.set_cms(&ctx, f);
+            }
+            if self.show_verify_original {
+                let o = self.verify_original.clone();
+                if let Some(f) = self.file_field(
+                    ui,
+                    "verify_original",
+                    tr("This signature file does not contain the document. Choose the signed document:"),
+                    &o,
+                ) {
+                    self.verify_original = Some(f);
+                    self.verify(&ctx);
+                }
+            }
+            egui::CollapsingHeader::new(tr("More options"))
+                .id_salt("check_options")
+                .show(ui, |ui| {
+                    if ui
+                        .checkbox(
+                            &mut self.ocsp,
+                            tr("Check online that the signers' keys were not revoked (needs internet)"),
+                        )
+                        .changed()
+                        && self.cms.is_some()
+                    {
+                        self.verify(&ctx);
+                    }
+                });
+        });
+        ui.add_space(10.0);
+        if self.checking {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(tr("Checking…"));
+            });
+            return;
+        }
+        match &self.result {
+            Some(Ok(r)) => {
+                let r = r.clone();
+                report(ui, &r);
+                let can_extract = r.has_content && !r.is_pdf;
+                if can_extract {
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        if ui.add(primary_button(tr("Save the document…"))).clicked() {
+                            self.extract(&ctx);
+                        }
+                    });
+                }
+            }
+            Some(Err(e)) => {
+                let e = e.clone();
+                banner(ui, Tone::Bad, |ui| {
+                    ui.label(
+                        RichText::new(tr("This file could not be checked"))
+                            .strong()
+                            .size(18.0),
+                    );
+                    ui.add(egui::Label::new(e).wrap());
+                });
+            }
+            None => {
+                ui.label(Tone::Muted.text(
+                    ui,
+                    tr("Choose a signed file above, or drop it onto this window."),
+                ));
             }
         }
-        ui.checkbox(
-            &mut self.ocsp,
-            tr("Check revocation online (OCSP, ocsp.pki.gov.kz)"),
-        );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.cms.is_some(), egui::Button::new(tr("Verify")))
-                .clicked()
-            {
-                self.verify(&ctx);
-            }
-            let can_extract =
-                !self.checking && matches!(&self.result, Some(Ok(r)) if r.has_content && !r.is_pdf);
-            if ui
-                .add_enabled(
-                    can_extract,
-                    egui::Button::new(tr("Save original document…")),
-                )
-                .clicked()
-            {
-                self.extract(&ctx);
-            }
-        });
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                if self.checking {
-                    ui.label(tr("Checking…"));
-                } else {
-                    match &self.result {
-                        Some(Ok(r)) => report(ui, r),
-                        Some(Err(e)) => {
-                            ui.label(Tone::Bad.text(ui, e));
-                        }
-                        None => {}
-                    }
-                }
-            });
     }
 
     pub fn set_cms(&mut self, ctx: &egui::Context, file: PathBuf) {
@@ -957,10 +1240,25 @@ impl App {
 
     // ------------------------------------------------------------------ results
 
-    fn handle(&mut self, m: Msg) {
+    fn handle(&mut self, ctx: &egui::Context, m: Msg) {
         match m {
             Msg::DocChecked(id, r) => {
                 if id != self.doc_request {
+                    return;
+                }
+                let route = std::mem::take(&mut self.route_signed_to_check);
+                if route
+                    && matches!(
+                        &r,
+                        Ok((DocKind::Cms | DocKind::SignedPdf | DocKind::Card, _))
+                    )
+                    && let Some(f) = self.doc.take()
+                {
+                    // a signed file opened from the start: the person most likely wants to see
+                    // who signed it (adding a signature is one click away, from Sign)
+                    self.screen = Screen::Check;
+                    self.doc_note = Note::default();
+                    self.set_cms(ctx, f);
                     return;
                 }
                 match r {
@@ -1021,11 +1319,15 @@ impl App {
                             self.alias = Some(k.alias.clone());
                         }
                         self.key_note = self.describe_key(&k);
+                        self.key_holder = Some(self.engine.describe(&k.cert).name());
                         self.alias = Some(k.alias.clone());
                         self.opened_for = Some(key_request(&f, Some(&k.alias), &pw_hash));
                         self.key = Some(Arc::new(*k));
                     }
-                    Err(e) => self.key_note = Note::error(&e),
+                    Err(e) => {
+                        self.key_holder = None;
+                        self.key_note = Note::error(&e);
+                    }
                 }
             }
             Msg::Signed(doc, sign_as, r) => {
@@ -1117,148 +1419,346 @@ fn eye_button(ui: &mut egui::Ui, open: bool, hint: &str) -> egui::Response {
     r
 }
 
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(10.0);
-    ui.label(RichText::new(title).strong().size(15.0));
-    ui.add_space(2.0);
+/// A rounded panel around a group of fields.
+fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let v = ui.visuals();
+    egui::Frame::new()
+        .fill(v.faint_bg_color)
+        .stroke(v.widgets.noninteractive.bg_stroke)
+        .corner_radius(10.0)
+        .inner_margin(14.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 6.0;
+            add(ui)
+        })
+        .inner
 }
 
-/// The verification report, as shown in the Verify tab.
+/// A coloured box for a verdict or an opened key.
+fn banner<R>(ui: &mut egui::Ui, tone: Tone, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let dark = ui.visuals().dark_mode;
+    let (fill, stroke) = match (tone, dark) {
+        (Tone::Good, false) => ((0xea, 0xf5, 0xee), (0xb9, 0xdc, 0xc6)),
+        (Tone::Good, true) => ((0x16, 0x2e, 0x20), (0x2c, 0x5a, 0x3e)),
+        (Tone::Bad, false) => ((0xfc, 0xec, 0xea), (0xef, 0xc3, 0xbc)),
+        (Tone::Bad, true) => ((0x3a, 0x1d, 0x1a), (0x6e, 0x33, 0x2b)),
+        (_, false) => ((0xfd, 0xf5, 0xe1), (0xe8, 0xd3, 0x9a)),
+        (_, true) => ((0x36, 0x2c, 0x12), (0x66, 0x55, 0x22)),
+    };
+    let c = |(r, g, b): (u8, u8, u8)| Color32::from_rgb(r, g, b);
+    egui::Frame::new()
+        .fill(c(fill))
+        .stroke(egui::Stroke::new(1.0, c(stroke)))
+        .corner_radius(10.0)
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+/// A step's heading inside a card.
+fn step(ui: &mut egui::Ui, title: &str) {
+    ui.label(Tone::Muted.text(ui, title).strong().size(13.5));
+}
+
+/// The main action of a screen.
+fn primary_button(text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(16.0).strong())
+        .min_size(egui::vec2(120.0, 38.0))
+}
+
+/// A big clickable choice with a title and a line of explanation.
+fn choice_card(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    text: &str,
+    first: bool,
+) -> egui::Response {
+    let v = ui.visuals().clone();
+    let id = ui.scope_id().with(id);
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    let stroke = if hovered || first {
+        egui::Stroke::new(2.0, v.selection.bg_fill)
+    } else {
+        v.widgets.noninteractive.bg_stroke
+    };
+    let inner = egui::Frame::new()
+        .fill(v.faint_bg_color)
+        .stroke(stroke)
+        .corner_radius(12.0)
+        .inner_margin(18.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.set_min_height(120.0);
+            ui.add(egui::Label::new(RichText::new(title).size(19.0).strong()).selectable(false));
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(Tone::Muted.text(ui, text).size(14.0))
+                    .wrap()
+                    .selectable(false),
+            );
+        });
+    let r = ui.interact(inner.response.rect, id, egui::Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
+    if r.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    r
+}
+
+/// A chosen file: its name large, its folder small.
+fn file_title(ui: &mut egui::Ui, f: &Path) {
+    let name = f
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| f.display().to_string());
+    ui.label(RichText::new(name).size(16.0).strong());
+}
+
+/// Opens the folder with `f` in the system's file manager.
+fn show_in_folder(f: &Path) {
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", f.display()))
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg("-R").arg(f).spawn();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open")
+        .arg(f.parent().unwrap_or(Path::new(".")))
+        .spawn();
+    let _ = r;
+}
+
+/// The main reason a check failed, in a sentence.
+fn failure_reason(r: &VerifyReport) -> String {
+    let Some(s) = r.signers.iter().find(|s| !s.valid) else {
+        return r
+            .warnings
+            .first()
+            .cloned()
+            .unwrap_or_else(|| tr("This file has no signatures.").into());
+    };
+    if !s.signature_ok {
+        return s
+            .signature_error
+            .clone()
+            .unwrap_or_else(|| tr("The document was changed after it was signed.").into());
+    }
+    if !s.chain_ok {
+        return trf(
+            "The signer's key was not issued by NCA RK: {}",
+            &[&s.chain_status.clone().unwrap_or_default()],
+        );
+    }
+    if let Some(o) = &s.ocsp_status {
+        return trf("The signer's key check failed: {}", &[o]);
+    }
+    tr("A signature failed the checks; see the details below.").into()
+}
+
+/// Every failing signature is otherwise fine and only lacks a revocation answer (no network,
+/// or the OCSP server could not be used): a warning, not a verdict against the document.
+fn revocation_unchecked(r: &VerifyReport) -> bool {
+    let failing: Vec<&SignerReport> = r.signers.iter().filter(|s| !s.valid).collect();
+    !failing.is_empty()
+        && failing.iter().all(|s| {
+            s.signature_ok
+                && s.chain_ok
+                && s.timestamp_ok != Some(false)
+                && s.cert_valid_at_signing != Some(false)
+                && s.ocsp_answer == Some("")
+        })
+}
+
+/// The result of a check: a verdict, then each signer.
 pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     let n = r.signers.len();
     if r.valid {
-        let t = trf("✔ Valid. Signatures: {}, all check out.", &[&n]);
-        ui.heading(Tone::Good.text(ui, t));
+        banner(ui, Tone::Good, |ui| {
+            let title = if n == 1 {
+                tr("✔ The signature is valid").to_string()
+            } else {
+                trf("✔ All {} signatures are valid", &[&n])
+            };
+            ui.label(Tone::Good.text(ui, title).size(20.0).strong());
+            let text = if r.card_document.is_some() {
+                tr(
+                    "The document inside the card has not been changed since it was signed, and the keys were issued by NCA RK.",
+                )
+            } else {
+                tr(
+                    "The document has not been changed since it was signed, and the keys were issued by NCA RK.",
+                )
+            };
+            ui.add(egui::Label::new(text).wrap());
+        });
+    } else if revocation_unchecked(r) {
+        banner(ui, Tone::Warn, |ui| {
+            ui.label(
+                Tone::Warn
+                    .text(ui, tr("⚠ Valid, but not checked for revocation"))
+                    .size(20.0)
+                    .strong(),
+            );
+            ui.add(
+                egui::Label::new(tr(
+                    "The document has not been changed and the keys were issued by NCA RK, but NCA's revocation service could not be reached, so it is not known whether a key was revoked. Check the internet connection and open the file again.",
+                ))
+                .wrap(),
+            );
+        });
     } else {
-        ui.heading(Tone::Bad.text(ui, tr("✖ Not valid (see details)")));
-    }
-    if let Some(name) = &r.card_document {
-        ui.label(trf(
-            "Document card. Document inside: {}, {} bytes, SHA-256 {}",
-            &[
-                name,
-                &r.content_size,
-                &r.content_sha256.clone().unwrap_or_default(),
-            ],
-        ));
-    } else if r.is_pdf {
-        ui.label(trf(
-            "Signed PDF: {} bytes, SHA-256 {}",
-            &[
-                &r.content_size,
-                &r.content_sha256.clone().unwrap_or_default(),
-            ],
-        ));
-    } else if r.has_content {
-        ui.label(trf(
-            "Document inside: {} bytes, SHA-256 {}",
-            &[
-                &r.content_size,
-                &r.content_sha256.clone().unwrap_or_default(),
-            ],
-        ));
-    } else if r.detached_provided {
-        ui.label(tr(
-            "Detached signature, checked against the original you chose.",
-        ));
+        banner(ui, Tone::Bad, |ui| {
+            ui.label(
+                Tone::Bad
+                    .text(ui, tr("✖ Do not trust this document"))
+                    .size(20.0)
+                    .strong(),
+            );
+            ui.add(egui::Label::new(failure_reason(r)).wrap());
+        });
     }
     for w in &r.warnings {
-        ui.label(Tone::Warn.text(ui, format!("⚠ {w}")));
+        ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
     }
     for s in &r.signers {
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{}. {}", s.index, s.name()))
-                    .strong()
-                    .size(15.0),
-            );
-            if s.valid {
-                ui.label(Tone::Good.text(ui, tr("VALID")).strong());
-            } else {
-                ui.label(Tone::Bad.text(ui, tr("NOT VALID")).strong());
+        ui.add_space(8.0);
+        card(ui, |ui| signer(ui, r, s));
+    }
+}
+
+fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
+    ui.horizontal(|ui| {
+        let mark = if s.valid {
+            Tone::Good.text(ui, "✔")
+        } else {
+            Tone::Bad.text(ui, "✖")
+        };
+        ui.label(mark.size(16.0));
+        ui.label(RichText::new(s.name()).strong().size(16.0));
+    });
+    egui::Grid::new(("signer", s.index))
+        .num_columns(2)
+        .spacing([14.0, 4.0])
+        .show(ui, |ui| {
+            let mut row = |k: &str, v: String, tone: Tone| {
+                ui.label(Tone::Muted.text(ui, k));
+                ui.add(egui::Label::new(tone.text(ui, v)).wrap());
+                ui.end_row();
+            };
+            if let Some(v) = s.get("IIN") {
+                row(tr("IIN"), v.into(), Tone::Plain);
             }
+            if let Some(o) = s.get("O") {
+                let bin = s
+                    .get("BIN")
+                    .map(|b| trf(" · BIN {}", &[&b]))
+                    .unwrap_or_default();
+                row(tr("Organization"), format!("{o}{bin}"), Tone::Plain);
+            }
+            row(tr("Signed on"), signed_on(s), Tone::Plain);
+            let (doc, tone) = if s.signature_ok {
+                (tr("Not changed since signing ✔").to_string(), Tone::Good)
+            } else {
+                (s.signature_error.clone().unwrap_or_default(), Tone::Bad)
+            };
+            row(tr("Document"), doc, tone);
+            let (key, tone) = if s.chain_ok {
+                (tr("Issued by NCA RK ✔").to_string(), Tone::Good)
+            } else {
+                (s.chain_status.clone().unwrap_or_default(), Tone::Bad)
+            };
+            row(tr("Key"), key, tone);
+            let (rev, tone) = match (&s.ocsp_status, s.ocsp_answer) {
+                (Some(o), Some("good")) => (o.clone(), Tone::Good),
+                (Some(o), Some("")) => (o.clone(), Tone::Warn),
+                (Some(o), _) if s.valid => (o.clone(), Tone::Plain),
+                (Some(o), _) => (o.clone(), Tone::Bad),
+                (None, _) => (
+                    tr("Not checked (the online check is off in More options)").into(),
+                    Tone::Muted,
+                ),
+            };
+            row(tr("Revoked?"), rev, tone);
         });
-        egui::Grid::new(("signer", s.index))
-            .num_columns(2)
-            .spacing([12.0, 3.0])
-            .show(ui, |ui| {
-                let mut row = |k: &str, v: String| {
-                    ui.label(Tone::Muted.text(ui, k));
-                    ui.add(egui::Label::new(v).wrap());
-                    ui.end_row();
-                };
-                if let Some(k) = &s.kind {
-                    row(tr("Type"), k.clone());
-                }
-                for n in &s.notes {
-                    row(tr("Covers"), n.clone());
-                }
-                if let Some(v) = s.get("IIN") {
-                    row(tr("IIN"), v.into());
-                }
-                if let Some(o) = s.get("O") {
+    for w in &s.warnings {
+        ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
+    }
+    egui::CollapsingHeader::new(tr("Technical details"))
+        .id_salt(("details", s.index))
+        .show(ui, |ui| {
+            egui::Grid::new(("tech", s.index))
+                .num_columns(2)
+                .spacing([14.0, 3.0])
+                .show(ui, |ui| {
+                    let mut row = |k: &str, v: String| {
+                        ui.label(Tone::Muted.text(ui, k));
+                        ui.add(egui::Label::new(v).wrap());
+                        ui.end_row();
+                    };
+                    if let Some(k) = &s.kind {
+                        row(tr("Type"), k.clone());
+                    }
+                    for n in &s.notes {
+                        row(tr("Covers"), n.clone());
+                    }
+                    if let Some(name) = &r.card_document {
+                        row(tr("Document in the card"), name.clone());
+                    }
+                    if let Some(h) = &r.content_sha256 {
+                        row(
+                            tr("Document fingerprint"),
+                            trf("{} bytes, SHA-256 {}", &[&r.content_size, h]),
+                        );
+                    }
+                    if let Some(v) = s.get("E") {
+                        row(tr("Email"), v.into());
+                    }
+                    row(tr("Time"), signed_at(s));
+                    row(tr("Algorithm"), s.algorithm.clone().unwrap_or_default());
                     row(
-                        tr("Organization"),
-                        format!(
-                            "{o}{}",
-                            s.get("BIN")
-                                .map(|b| trf(" (BIN {})", &[&b]))
-                                .unwrap_or_default()
+                        tr("Certificate"),
+                        trf(
+                            "serial {}, valid {} – {}",
+                            &[
+                                &s.serial_hex.clone().unwrap_or_default(),
+                                &time::fmt(s.not_before),
+                                &time::fmt(s.not_after),
+                            ],
                         ),
                     );
-                }
-                if let Some(v) = s.get("E") {
-                    row(tr("Email"), v.into());
-                }
-                row(tr("Signed at"), signed_at(s));
-                row(
-                    tr("Signature"),
-                    if s.signature_ok {
-                        tr("Matches the document ✔").into()
-                    } else {
-                        s.signature_error.clone().unwrap_or_default()
-                    },
-                );
-                row(
-                    tr("Trust"),
-                    format!(
-                        "{}{}",
-                        if s.chain_ok { "✔ " } else { "✖ " },
-                        s.chain_status.clone().unwrap_or("-".into())
-                    ),
-                );
-                row(
-                    tr("Revocation"),
-                    s.ocsp_status
-                        .clone()
-                        .unwrap_or_else(|| tr("Not checked").into()),
-                );
-                row(tr("Algorithm"), s.algorithm.clone().unwrap_or_default());
-                row(
-                    tr("Certificate"),
-                    trf(
-                        "serial {}, valid {} – {}",
-                        &[
-                            &s.serial_hex.clone().unwrap_or_default(),
-                            &time::fmt(s.not_before),
-                            &time::fmt(s.not_after),
-                        ],
-                    ),
-                );
-                row(tr("Issuer"), s.issuer_cn.clone().unwrap_or_default());
-            });
-        for w in &s.warnings {
-            ui.label(Tone::Warn.text(ui, format!("⚠ {w}")));
-        }
-    }
+                    row(tr("Issuer"), s.issuer_cn.clone().unwrap_or_default());
+                });
+        });
 }
 
 fn card_lang_name(l: CardLang) -> &'static str {
     match l {
-        CardLang::Ru => "Русский",
-        CardLang::Kk => "Қазақша",
-        CardLang::KkRu => "Қазақша / Русский",
+        CardLang::Ru => tr("Russian"),
+        CardLang::Kk => tr("Kazakh"),
+        CardLang::KkRu => tr("Kazakh and Russian"),
+    }
+}
+
+/// When it was signed, in plain words.
+fn signed_on(s: &SignerReport) -> String {
+    match s.timestamp_time {
+        Some(ts) if s.timestamp_ok == Some(true) && s.timestamp_trusted == Some(true) => {
+            trf("{} · time confirmed by NCA", &[&time::fmt(Some(ts))])
+        }
+        Some(ts) => trf(
+            "{} · time stamp not confirmed (see details)",
+            &[&time::fmt(Some(ts))],
+        ),
+        None => trf(
+            "{} · time from the signer's computer",
+            &[&time::fmt(s.signing_time)],
+        ),
     }
 }
 

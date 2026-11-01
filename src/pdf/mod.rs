@@ -30,6 +30,10 @@ const ROOM_WITH_TIMESTAMP: usize = 24 * 1024;
 const RANGE_PLACEHOLDER: i64 = 9_999_999_999;
 
 pub fn is_pdf(data: &[u8]) -> bool {
+    // a .cms holding a PDF has "%PDF-" near its start too
+    if data.first() == Some(&0x30) && cms::SignedData::try_parse(data).is_some() {
+        return false;
+    }
     find(&data[..data.len().min(1024)], b"%PDF-").is_some()
 }
 
