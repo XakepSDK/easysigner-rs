@@ -42,7 +42,7 @@ jobs:
         run: |
           git clone -q . "$RUNNER_TEMP/again"
           (cd "$RUNNER_TEMP/again" && sh scripts/cargo.sh)
-          for f in kzsigner kzsigner-console; do
+          for f in kzsigner; do
             [ "$RUNNER_OS" = Windows ] && f=$f.exe
             sha256sum "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
             cmp "target/release/$f" "$RUNNER_TEMP/again/target/release/$f"
@@ -62,6 +62,10 @@ jobs:
           $p = Start-Process -PassThru -FilePath target\release\kzsigner.exe -ArgumentList gui
           Start-Sleep -Seconds 8
           if ($p.HasExited) { Write-Error "the window closed with exit code $($p.ExitCode)"; exit 1 }
+          # started like a double-click, it must not keep a console window (conhost) of its own
+          [Environment]::OSVersion.Version
+          $con = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | Where-Object { $_.Name -match 'conhost|OpenConsole' }
+          if ($con) { Write-Error "kzsigner still has a console window"; Stop-Process -Id $p.Id; exit 1 }
           Stop-Process -Id $p.Id
       - name: Package
         shell: bash
@@ -72,15 +76,14 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             D="kzsigner-$V-windows-x64"; mkdir "$D"
             cp target/release/kzsigner.exe README.md "$D/"
-            cp target/release/kzsigner-console.exe "$D/kzsigner.com"
-            # the console launcher: output, and the exit code passed through
-            "$D/kzsigner.com" --version | tee version.txt
+            # a console program: output, and the exit code
+            "$D/kzsigner.exe" --version | tee version.txt
             grep -q "$V" version.txt
-            set +e; "$D/kzsigner.com" verify missing.cms; r=$?; set -e
+            set +e; "$D/kzsigner.exe" verify missing.cms; r=$?; set -e
             [ $r -eq 1 ]
             touch -d "@$SOURCE_DATE_EPOCH" "$D" "$D"/*
-            (cd "$D" && sha256sum kzsigner.exe kzsigner.com) > "dist/$D.sha256"
-            7z a -bd -mx=9 "dist/$D.zip" "$D/kzsigner.exe" "$D/kzsigner.com" "$D/README.md" >/dev/null
+            (cd "$D" && sha256sum kzsigner.exe) > "dist/$D.sha256"
+            7z a -bd -mx=9 "dist/$D.zip" "$D/kzsigner.exe" "$D/README.md" >/dev/null
           else
             D="kzsigner-$V-linux-x64"; mkdir "$D"
             cp target/release/kzsigner README.md assets/kzsigner.png packaging/linux/kzsigner.desktop packaging/linux/install.sh "$D/"

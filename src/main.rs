@@ -1,9 +1,10 @@
 //! kzsigner command line; with no arguments it opens the window.
 //!
-//! On Windows this is a GUI program, so double-clicking it shows no console window. For the
-//! commands it attaches to the console of whatever started it; `kzsigner.com` (the console
-//! launcher in src/bin/kzsigner-console.rs) makes `kzsigner ...` in a terminal wait for it.
-#![cfg_attr(windows, windows_subsystem = "windows")]
+//! On Windows this is one console program, so a terminal waits for it and gets its output and
+//! exit code. Its manifest (build.rs) asks for no console of its own when started from
+//! Explorer (`consoleAllocationPolicy` "detached", Windows 11 24H2 and later), so double-clicking
+//! shows only the window. Older Windows ignore that and open a console first; the window then
+//! lets it go at once (a brief flash).
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -378,6 +379,7 @@ fn display_available() -> bool {
 fn run() -> R<u8> {
     if std::env::args_os().len() <= 1 {
         if display_available() {
+            hide_console();
             return gui(Opts::default());
         }
         print!("{HELP}");
@@ -406,6 +408,7 @@ fn run() -> R<u8> {
         "gui" => (HELP_GUI, gui),
         // "Open with kzsigner" on a file
         _ if p.next()?.is_none() && Path::new(&cmd).is_file() && display_available() => {
+            hide_console();
             return gui(Opts {
                 file: Some(cmd.into()),
                 ..Default::default()
@@ -419,31 +422,21 @@ fn run() -> R<u8> {
     }
 }
 
-/// Windows: a GUI program has no console of its own. Attach to the parent's (the terminal, or
-/// kzsigner.com) so output, prompts and Ctrl+C work, keeping any redirected handles.
-fn attach_console() {
+/// Windows before 11 24H2 opens a console for kzsigner when it is started from Explorer. That
+/// console is kzsigner's alone (a terminal's is shared with the shell): close it so only the
+/// window stays. From a terminal, or with no console at all (24H2 and later), nothing happens.
+fn hide_console() {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::Console::{
-            ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
-            STD_OUTPUT_HANDLE, SetStdHandle,
-        };
-        let ids = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
-        let before = ids.map(|i| GetStdHandle(i));
-        if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
-            for (i, h) in ids.into_iter().zip(before) {
-                if !h.is_null() && h as isize != -1 {
-                    SetStdHandle(i, h);
-                }
-            }
+        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+        let mut ids = [0u32; 2];
+        if GetConsoleProcessList(ids.as_mut_ptr(), 2) == 1 {
+            FreeConsole();
         }
     }
 }
 
 fn main() -> ExitCode {
-    if std::env::args_os().len() > 1 {
-        attach_console();
-    }
     match run() {
         Ok(code) => ExitCode::from(code),
         Err(Fail::User(m)) => {

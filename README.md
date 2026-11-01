@@ -22,9 +22,10 @@ also be dropped on the window. The window is in Kazakh, Russian or English: it s
 system's language and the menu at the top right switches (the choice is remembered;
 `KZSIGNER_LANG=kk|ru|en` also sets it). The command line stays in English.
 
-On Windows, `kzsigner.exe` is the window and opens without a console. Commands in a terminal
-(`kzsigner sign ...` in cmd or PowerShell) run through `kzsigner.com`, a small console launcher
-next to it that waits for the result; keep the two files together.
+On Windows, `kzsigner.exe` is one file for both: a terminal waits for it and gets its output
+and exit code, and double-clicking shows only the window. On Windows 11 24H2 and later no
+console appears at all (its manifest sets `consoleAllocationPolicy` to `detached`); older
+Windows flash a console for a moment before the window opens.
 
 On Linux, `sh install.sh` (in the download) installs kzsigner into `~/.local/bin` with an
 applications-menu entry and icon, and offers it in "Open with" for `.cms` and `.p12` files;
@@ -93,8 +94,7 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
   letters (`assets/`).
-* `main.rs`, `output.rs`: the command line, text and JSON reports. `bin/kzsigner-console.rs`:
-  the Windows console launcher (`kzsigner.com`).
+* `main.rs`, `output.rs`: the command line, text and JSON reports.
 * `i18n.rs`: the window's Kazakh and Russian texts, one table. The Kazakh was not written by a
   native speaker; corrections are welcome.
 * `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `build.rs` puts it
