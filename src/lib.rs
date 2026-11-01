@@ -33,7 +33,7 @@ pub fn version() -> &'static str {
 }
 
 pub fn crypto_version() -> &'static str {
-    "built in (KZ GOST and RSA in Rust; GOST hashes from RustCrypto)"
+    "built in (KZ GOST in Rust; hashes, ciphers and RSA from RustCrypto)"
 }
 
 /// What the command line and the window use: open a key, sign, verify, extract.
@@ -140,41 +140,15 @@ pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16
-            | (*c.get(1).unwrap_or(&0) as u32) << 8
-            | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..4 {
-            if i <= c.len() {
-                out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
 /// Standard Base64 without whitespace; padding optional. None if it is not Base64.
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim_end_matches('=');
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0);
-    for ch in s.bytes() {
-        let v = B64.iter().position(|&b| b == ch)? as u32;
-        acc = acc << 6 | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    if s.len() % 4 == 1 {
-        return None;
-    }
-    Some(out)
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(s.trim_end_matches('='))
+        .ok()
 }

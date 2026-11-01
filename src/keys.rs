@@ -1,7 +1,9 @@
 //! Public and private keys (KZ GOST and RSA) and the signatures made with them.
 
 use num_bigint::BigUint;
-use num_traits::One;
+use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
+use rsa::traits::PublicKeyParts;
+use rsa::{Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
 
 use crate::der::{self, Tlv};
 use crate::gost::{self, Curve, Scheme};
@@ -13,10 +15,7 @@ pub enum PublicKey {
         x: BigUint,
         y: BigUint,
     },
-    Rsa {
-        n: BigUint,
-        e: BigUint,
-    },
+    Rsa(RsaPublicKey),
     Other(String),
 }
 
@@ -26,17 +25,7 @@ pub enum PrivateKey {
         scheme: Scheme,
         d: BigUint,
     },
-    Rsa(RsaPrivate),
-}
-
-pub struct RsaPrivate {
-    pub n: BigUint,
-    e: BigUint,
-    p: BigUint,
-    q: BigUint,
-    dp: BigUint,
-    dq: BigUint,
-    qinv: BigUint,
+    Rsa(RsaPrivateKey),
 }
 
 fn param_set(params: Option<&Tlv>) -> Result<String> {
@@ -78,14 +67,9 @@ impl PublicKey {
             });
         }
         if oid == gost::RSA_ENCRYPTION {
-            let k = der::parse(bits)?.items(der::SEQUENCE)?;
-            if k.len() < 2 {
-                return Err(Error::new("malformed RSA public key"));
-            }
-            return Ok(PublicKey::Rsa {
-                n: BigUint::from_bytes_be(k[0].uint()?),
-                e: BigUint::from_bytes_be(k[1].uint()?),
-            });
+            let k = RsaPublicKey::from_pkcs1_der(bits)
+                .map_err(|e| Error::new(format!("malformed RSA public key: {e}")))?;
+            return Ok(PublicKey::Rsa(k));
         }
         Ok(PublicKey::Other(oid))
     }
@@ -107,10 +91,14 @@ impl PublicKey {
                 let h = gost::hash(sc.digest_oid, data)?;
                 Ok(curve.verify(x, y, &h, sig))
             }
-            PublicKey::Rsa { n, e } => {
+            PublicKey::Rsa(k) => {
                 let digest = rsa_digest(sig_alg, digest_alg)?;
                 let h = gost::hash(digest, data)?;
-                Ok(rsa_verify(n, e, digest, &h, sig))
+                // DigestInfo with NULL parameters, or without them (both are seen)
+                let without_null = der::seq(&[&der::seq(&[&der::oid(digest)]), &der::octets(&h)]);
+                Ok([digest_info(digest, &h), without_null]
+                    .iter()
+                    .any(|di| k.verify(Pkcs1v15Sign::new_unprefixed(), di, sig).is_ok()))
             }
             PublicKey::Other(oid) => Err(Error::new(format!("Unsupported key algorithm {oid}"))),
         }
@@ -148,35 +136,6 @@ fn digest_info(digest_oid: &str, h: &[u8]) -> Vec<u8> {
     der::seq(&[&der::alg_null(digest_oid), &der::octets(h)])
 }
 
-fn rsa_verify(n: &BigUint, e: &BigUint, digest_oid: &str, h: &[u8], sig: &[u8]) -> bool {
-    let k = n.bits().div_ceil(8) as usize;
-    if sig.len() != k {
-        return false;
-    }
-    let s = BigUint::from_bytes_be(sig);
-    if &s >= n {
-        return false;
-    }
-    let mut em = s.modpow(e, n).to_bytes_be();
-    while em.len() < k {
-        em.insert(0, 0);
-    }
-    // 00 01 FF..FF 00 DigestInfo
-    if em.len() < 11 || em[0] != 0 || em[1] != 1 {
-        return false;
-    }
-    let Some(zero) = em[2..].iter().position(|&b| b != 0xff) else {
-        return false;
-    };
-    if zero < 8 || em[2 + zero] != 0 {
-        return false;
-    }
-    let di = &em[3 + zero..];
-    // with NULL parameters, or without them (both are seen)
-    let without_null = der::seq(&[&der::seq(&[&der::oid(digest_oid)]), &der::octets(h)]);
-    di == digest_info(digest_oid, h).as_slice() || di == without_null.as_slice()
-}
-
 impl PrivateKey {
     /// From a PKCS#8 PrivateKeyInfo.
     pub fn from_pkcs8(pki: &[u8]) -> Result<PrivateKey> {
@@ -197,20 +156,9 @@ impl PrivateKey {
             return Ok(PrivateKey::Gost { curve, scheme, d });
         }
         if oid == gost::RSA_ENCRYPTION {
-            let f = der::parse(&key)?.items(der::SEQUENCE)?;
-            if f.len() < 9 {
-                return Err(Error::new("malformed RSA private key"));
-            }
-            let n = |i: usize| -> Result<BigUint> { Ok(BigUint::from_bytes_be(f[i].uint()?)) };
-            return Ok(PrivateKey::Rsa(RsaPrivate {
-                n: n(1)?,
-                e: n(2)?,
-                p: n(4)?,
-                q: n(5)?,
-                dp: n(6)?,
-                dq: n(7)?,
-                qinv: n(8)?,
-            }));
+            let k = RsaPrivateKey::from_pkcs1_der(&key)
+                .map_err(|e| Error::new(format!("malformed RSA private key: {e}")))?;
+            return Ok(PrivateKey::Rsa(k));
         }
         Err(Error::new(format!("Unsupported private key type {oid}")))
     }
@@ -241,7 +189,14 @@ impl PrivateKey {
         let h = gost::hash(self.digest_oid(), data)?;
         match self {
             PrivateKey::Gost { curve, scheme, d } => curve.sign(d, &h, scheme.size),
-            PrivateKey::Rsa(k) => k.sign(gost::H_SHA256, &h),
+            // blinded, with the system's random generator
+            PrivateKey::Rsa(k) => k
+                .sign_with_rng(
+                    &mut getrandom::rand_core::UnwrapErr(getrandom::SysRng),
+                    Pkcs1v15Sign::new_unprefixed(),
+                    &digest_info(gost::H_SHA256, &h),
+                )
+                .map_err(|e| Error::new(format!("RSA signing failed: {e}"))),
         }
     }
 
@@ -252,53 +207,8 @@ impl PrivateKey {
                 curve.name == c2.name
                     && curve.public(d).is_some_and(|(px, py)| &px == x && &py == y)
             }
-            (PrivateKey::Rsa(k), PublicKey::Rsa { n, .. }) => &k.n == n,
+            (PrivateKey::Rsa(k), PublicKey::Rsa(p)) => k.n() == p.n() && k.e() == p.e(),
             _ => false,
         }
     }
-}
-
-impl RsaPrivate {
-    fn sign(&self, digest_oid: &str, h: &[u8]) -> Result<Vec<u8>> {
-        let k = self.n.bits().div_ceil(8) as usize;
-        let di = digest_info(digest_oid, h);
-        if k < di.len() + 11 {
-            return Err(Error::new("RSA key too short"));
-        }
-        let mut em = vec![0u8, 1];
-        em.resize(k - di.len() - 1, 0xff);
-        em.push(0);
-        em.extend(&di);
-        let m = BigUint::from_bytes_be(&em);
-        // blinded CRT: s = (m·r^e)^d · r^-1
-        let r = gost::random_below(&self.n)?;
-        let r_inv = mod_inverse(&r, &self.n).ok_or_else(|| Error::new("RSA blinding failed"))?;
-        let mb = (&m * r.modpow(&self.e, &self.n)) % &self.n;
-        let s1 = mb.modpow(&self.dp, &self.p);
-        let s2 = mb.modpow(&self.dq, &self.q);
-        let hh = (&self.qinv * ((&s1 + &self.p) - (&s2 % &self.p))) % &self.p;
-        let sb = s2 + hh * &self.q;
-        let s = (sb * r_inv) % &self.n;
-        // check before releasing (a CRT fault would leak the key)
-        if s.modpow(&self.e, &self.n) != m {
-            return Err(Error::new("RSA signature self-check failed"));
-        }
-        let mut out = s.to_bytes_be();
-        while out.len() < k {
-            out.insert(0, 0);
-        }
-        Ok(out)
-    }
-}
-
-fn mod_inverse(a: &BigUint, m: &BigUint) -> Option<BigUint> {
-    use num_bigint::BigInt;
-    use num_integer::Integer;
-    let e = BigInt::from(a.clone()).extended_gcd(&BigInt::from(m.clone()));
-    if !e.gcd.is_one() {
-        return None;
-    }
-    let mi = BigInt::from(m.clone());
-    let x = ((e.x % &mi) + &mi) % &mi;
-    x.to_biguint()
 }

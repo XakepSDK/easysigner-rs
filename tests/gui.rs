@@ -64,12 +64,29 @@ fn sign_then_verify_in_the_window() {
     dialogs.next(doc.clone());
     h.get_all_by_label("Browse…").next().unwrap().click();
     settle(&mut h);
-    dialogs.next(fx.join("alice_gost2015.p12"));
-    h.get_all_by_label("Browse…").nth(1).unwrap().click();
+    // the key's path is pasted into its field (with the quotes Windows' "Copy as path" adds)
+    let key_field = h.get_by_label("Key file (.p12), e.g. RSA_… or GOSTKNCA_…");
+    key_field.focus();
+    key_field.type_text(&format!("\"{}\"", fx.join("alice_gost2015.p12").display()));
+    h.run();
+    h.key_press(egui::Key::Enter);
     settle(&mut h);
+    assert_eq!(h.state().key_file, Some(fx.join("alice_gost2015.p12")));
     let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
     pw.focus();
     pw.type_text("Qwerty12");
+    h.run();
+    // the eye shows the password as plain text, and hides it again
+    h.get_by_label("Show password").click();
+    h.run();
+    assert!(
+        h.query_by_role(egui::accesskit::Role::PasswordInput)
+            .is_none()
+    );
+    h.get_by_label("Hide password").click();
+    h.run();
+    let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
+    pw.focus();
     h.run();
     h.key_press(egui::Key::Enter);
     settle(&mut h);

@@ -154,6 +154,8 @@ pub struct App {
     rx: Receiver<Msg>,
     busy: usize,
     fonts_installed: bool,
+    /// The text in each file field, by field id, while it is being typed.
+    path_fields: std::collections::HashMap<&'static str, PathField>,
     /// A file given on the command line, opened on the first frame.
     pub pending_open: Option<PathBuf>,
     pub tab: Tab,
@@ -165,6 +167,7 @@ pub struct App {
     pub sign_original: Option<PathBuf>,
     pub key_file: Option<PathBuf>,
     pub password: String,
+    show_password: bool,
     aliases: Vec<String>,
     alias: Option<String>,
     doc_note: Note,
@@ -199,6 +202,7 @@ impl App {
             rx,
             busy: 0,
             fonts_installed: false,
+            path_fields: Default::default(),
             pending_open: None,
             tab: Tab::Sign,
             message: None,
@@ -206,6 +210,7 @@ impl App {
             sign_original: None,
             key_file: None,
             password: String::new(),
+            show_password: false,
             aliases: vec![],
             alias: None,
             doc_note: Note::default(),
@@ -333,28 +338,52 @@ impl App {
 
     // ------------------------------------------------------------------ fields
 
-    /// A file field: label, path, Browse button. Returns a newly chosen file.
+    /// A file field: label, path, Browse button. The path can also be typed or pasted; it is
+    /// taken when the field loses focus or Enter is pressed. Returns a newly chosen file.
     fn file_field(
         &mut self,
         ui: &mut egui::Ui,
+        id: &'static str,
         label: &str,
         current: &Option<PathBuf>,
     ) -> Option<PathBuf> {
         let mut chosen = None;
         let l = ui.label(label);
-        ui.horizontal(|ui| {
-            let mut text = current
+        let field = self.path_fields.entry(id).or_default();
+        if field.shown != *current {
+            // chosen another way (Browse, drop, command line): show it
+            field.text = current
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
+            field.shown = current.clone();
+        }
+        let dialogs = &mut self.dialogs;
+        ui.horizontal(|ui| {
             let w = ui.available_width() - 90.0;
-            ui.add_sized(
-                [w.max(100.0), 22.0],
-                egui::TextEdit::singleline(&mut text).interactive(false),
-            )
-            .labelled_by(l.id);
+            let r = ui
+                .add_sized(
+                    [w.max(100.0), 22.0],
+                    egui::TextEdit::singleline(&mut field.text),
+                )
+                .labelled_by(l.id);
+            if r.lost_focus() {
+                // "Copy as path" in Windows Explorer adds quotes
+                let typed = field.text.trim().trim_matches('"').trim();
+                let typed = (!typed.is_empty()).then(|| PathBuf::from(typed));
+                if typed.is_some() && typed != *current {
+                    chosen = typed;
+                } else if typed.is_none() {
+                    // emptied: put back the current file
+                    field.shown = current.clone();
+                    field.text = current
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                }
+            }
             if ui.button(tr("Browse…")).on_hover_text(label).clicked() {
-                chosen = self.dialogs.open(current.as_deref());
+                chosen = dialogs.open(current.as_deref());
             }
         });
         chosen
@@ -388,6 +417,7 @@ impl App {
         let doc = self.doc.clone();
         if let Some(f) = self.file_field(
             ui,
+            "doc",
             tr("Document to sign (or a .cms to add your signature to)"),
             &doc,
         ) {
@@ -396,17 +426,24 @@ impl App {
         self.doc_note.show(ui);
         if self.doc_is_detached_cms {
             let o = self.sign_original.clone();
-            if let Some(f) =
-                self.file_field(ui, tr("Original document (only for a detached .cms)"), &o)
-            {
+            if let Some(f) = self.file_field(
+                ui,
+                "sign_original",
+                tr("Original document (only for a detached .cms)"),
+                &o,
+            ) {
                 self.sign_original = Some(f);
             }
         }
 
         section(ui, tr("2. Your key"));
         let kf = self.key_file.clone();
-        if let Some(f) = self.file_field(ui, tr("Key file (.p12), e.g. RSA_… or GOSTKNCA_…"), &kf)
-        {
+        if let Some(f) = self.file_field(
+            ui,
+            "key",
+            tr("Key file (.p12), e.g. RSA_… or GOSTKNCA_…"),
+            &kf,
+        ) {
             self.set_key_file(&ctx, f);
         }
         ui.horizontal(|ui| {
@@ -414,12 +451,20 @@ impl App {
             let r = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.password)
-                        .password(true)
+                        .password(!self.show_password)
                         .desired_width(220.0),
                 )
                 .labelled_by(l.id);
             if r.lost_focus() {
                 self.open_key(&ctx);
+            }
+            let hint = if self.show_password {
+                tr("Hide password")
+            } else {
+                tr("Show password")
+            };
+            if eye_button(ui, self.show_password, hint).clicked() {
+                self.show_password = !self.show_password;
             }
         });
         if self.aliases.len() > 1 {
@@ -648,14 +693,17 @@ impl App {
     fn verify_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let c = self.cms.clone();
-        if let Some(f) = self.file_field(ui, tr("Signed .cms file"), &c) {
+        if let Some(f) = self.file_field(ui, "cms", tr("Signed .cms file"), &c) {
             self.set_cms(&ctx, f);
         }
         if self.show_verify_original {
             let o = self.verify_original.clone();
-            if let Some(f) =
-                self.file_field(ui, tr("Original document (only for a detached .cms)"), &o)
-            {
+            if let Some(f) = self.file_field(
+                ui,
+                "verify_original",
+                tr("Original document (only for a detached .cms)"),
+                &o,
+            ) {
                 self.verify_original = Some(f);
                 self.verify(&ctx);
             }
@@ -862,6 +910,45 @@ fn install_fonts(ctx: &egui::Context) {
             .insert(family, vec!["text".into(), "symbols".into()]);
     }
     ctx.set_fonts(fonts);
+}
+
+#[derive(Default)]
+struct PathField {
+    text: String,
+    /// The path the text was last set from.
+    shown: Option<PathBuf>,
+}
+
+/// A small button with an eye (crossed out while the password is hidden).
+fn eye_button(ui: &mut egui::Ui, open: bool, hint: &str) -> egui::Response {
+    let r = ui
+        .add_sized([30.0, 22.0], egui::Button::new(""))
+        .on_hover_text(hint);
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, hint));
+    let c = r.rect.center();
+    let color = ui.style().interact(&r).fg_stroke.color;
+    let stroke = egui::Stroke::new(1.5, color);
+    let p = ui.painter();
+    // the eye: two arcs meeting at the corners, and the iris
+    let (w, h) = (9.0, 5.5);
+    let arc = |sign: f32| -> Vec<egui::Pos2> {
+        (0..=16)
+            .map(|i| {
+                let t = i as f32 / 16.0 * std::f32::consts::PI;
+                egui::pos2(c.x - w * t.cos(), c.y + sign * h * t.sin())
+            })
+            .collect()
+    };
+    p.add(egui::Shape::line(arc(-1.0), stroke));
+    p.add(egui::Shape::line(arc(1.0), stroke));
+    p.circle_filled(c, 2.6, color);
+    if !open {
+        p.line_segment(
+            [c + egui::vec2(-8.0, 6.5), c + egui::vec2(8.0, -6.5)],
+            stroke,
+        );
+    }
+    r
 }
 
 fn section(ui: &mut egui::Ui, title: &str) {

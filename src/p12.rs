@@ -2,8 +2,11 @@
 //! 3DES-encrypted key, RC2-40-encrypted certificates, SHA-1 MAC), and PBES2 (AES) files.
 
 use crate::i18n::{tr, trf};
-use cipher::{Array, BlockCipherDecrypt, BlockSizeUser, KeyInit};
+use cipher::block_padding::Pkcs7;
+use cipher::{BlockCipherDecrypt, BlockModeDecrypt, InnerIvInit, KeyInit};
+use digest::block_api::BlockSizeUser;
 use digest::{Digest, FixedOutputReset};
+use pkcs12::kdf::{Pkcs12KeyType, derive_key};
 
 use crate::cert::Cert;
 use crate::der::{self, Tlv};
@@ -137,7 +140,7 @@ fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
                 &pw,
                 &salt,
                 iter,
-                3,
+                Pkcs12KeyType::Mac,
                 <$h as digest::OutputSizeUser>::output_size(),
             );
             let mut h =
@@ -270,72 +273,28 @@ fn bmp_password(p: &str) -> Vec<u8> {
     out
 }
 
-/// The PKCS#12 key derivation (RFC 7292 appendix B).
-fn kdf<D: Digest + FixedOutputReset>(
+/// The PKCS#12 key derivation (RFC 7292 appendix B), from RustCrypto's pkcs12 crate.
+fn kdf<D: Digest + FixedOutputReset + BlockSizeUser>(
     pw: &[u8],
     salt: &[u8],
     iterations: u32,
-    id: u8,
+    id: Pkcs12KeyType,
     n: usize,
 ) -> Vec<u8> {
-    let u = <D as digest::OutputSizeUser>::output_size();
-    // the hash's block size: 128 bytes for the SHA-384/512 family, 64 for the others
-    let v = if u > 32 { 128 } else { 64 };
-    let fill = |src: &[u8]| -> Vec<u8> {
-        if src.is_empty() {
-            return vec![];
-        }
-        let len = v * src.len().div_ceil(v);
-        (0..len).map(|i| src[i % src.len()]).collect()
-    };
-    let mut i_buf = fill(salt);
-    i_buf.extend(fill(pw));
-    let d = vec![id; v];
-    let mut out = Vec::with_capacity(n);
-    let mut h = D::new();
-    while out.len() < n {
-        Digest::update(&mut h, &d);
-        Digest::update(&mut h, &i_buf);
-        let mut a = h.finalize_reset().to_vec();
-        for _ in 1..iterations.max(1) {
-            Digest::update(&mut h, &a);
-            a = h.finalize_reset().to_vec();
-        }
-        let b: Vec<u8> = (0..v).map(|i| a[i % u]).collect();
-        for block in i_buf.chunks_mut(v) {
-            // block = block + b + 1 (mod 2^(8v))
-            let mut carry = 1u16;
-            for j in (0..v).rev() {
-                let s = block[j] as u16 + b[j] as u16 + carry;
-                block[j] = s as u8;
-                carry = s >> 8;
-            }
-        }
-        out.extend(&a);
-    }
-    out.truncate(n);
-    out
+    derive_key::<D>(pw, salt, id, iterations.clamp(1, i32::MAX as u32) as i32, n)
 }
 
-fn cbc_decrypt<C: BlockCipherDecrypt>(c: &C, iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
-    let bs = <C as BlockSizeUser>::block_size();
-    if data.is_empty() || !data.len().is_multiple_of(bs) || iv.len() != bs {
-        return Err(Error::new("bad encrypted data length"));
-    }
-    let mut prev = iv.to_vec();
-    let mut out = Vec::with_capacity(data.len());
-    for chunk in data.chunks(bs) {
-        let mut block = Array::try_from(chunk).map_err(|_| Error::new("block"))?;
-        c.decrypt_block(&mut block);
-        out.extend(block.iter().zip(&prev).map(|(a, b)| a ^ b));
-        prev = chunk.to_vec();
-    }
-    let pad = *out.last().unwrap() as usize;
-    if pad == 0 || pad > bs || out[out.len() - pad..].iter().any(|&b| b as usize != pad) {
-        return Err(Error::new("bad padding (wrong password?)"));
-    }
-    out.truncate(out.len() - pad);
-    Ok(out)
+/// CBC decryption with PKCS#7 padding (RustCrypto's cbc crate).
+fn cbc_decrypt<C: BlockCipherDecrypt>(c: C, iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    let d =
+        cbc::Decryptor::<C>::inner_iv_slice_init(c, iv).map_err(|_| Error::new("bad IV length"))?;
+    let mut buf = data.to_vec();
+    let n = d
+        .decrypt_padded::<Pkcs7>(&mut buf)
+        .map_err(|_| Error::new("bad padding (wrong password?)"))?
+        .len();
+    buf.truncate(n);
+    Ok(buf)
 }
 
 fn new_cipher<C: KeyInit>(key: &[u8]) -> Result<C> {
@@ -353,20 +312,20 @@ fn decrypt(alg: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
     let salt = p[0].octets()?;
     let iter = p[1].small_int()? as u32;
     let pw = bmp_password(password);
-    let key = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, 1, n);
-    let iv = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, 2, n);
+    let key = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::EncryptionKey, n);
+    let iv = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::Iv, n);
     match oid.as_str() {
         "1.2.840.113549.1.12.1.3" => {
-            cbc_decrypt(&new_cipher::<des::TdesEde3>(&key(24))?, &iv(8), data)
+            cbc_decrypt(new_cipher::<des::TdesEde3>(&key(24))?, &iv(8), data)
         }
         "1.2.840.113549.1.12.1.4" => {
-            cbc_decrypt(&new_cipher::<des::TdesEde2>(&key(16))?, &iv(8), data)
+            cbc_decrypt(new_cipher::<des::TdesEde2>(&key(16))?, &iv(8), data)
         }
         "1.2.840.113549.1.12.1.5" => {
-            cbc_decrypt(&rc2::Rc2::new_with_eff_key_len(&key(16), 128), &iv(8), data)
+            cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(16), 128), &iv(8), data)
         }
         "1.2.840.113549.1.12.1.6" => {
-            cbc_decrypt(&rc2::Rc2::new_with_eff_key_len(&key(5), 40), &iv(8), data)
+            cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(5), 40), &iv(8), data)
         }
         o => Err(Error::new(format!("unsupported key file encryption {o}"))),
     }
@@ -411,11 +370,11 @@ fn pbes2(params: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
         o => return Err(Error::new(format!("unsupported PBKDF2 function {o}"))),
     }
     match key_len {
-        16 => cbc_decrypt(&new_cipher::<aes::Aes128>(&key)?, &iv, data),
-        32 => cbc_decrypt(&new_cipher::<aes::Aes256>(&key)?, &iv, data),
+        16 => cbc_decrypt(new_cipher::<aes::Aes128>(&key)?, &iv, data),
+        32 => cbc_decrypt(new_cipher::<aes::Aes256>(&key)?, &iv, data),
         _ if enc_oid == "1.2.840.113549.3.7" => {
-            cbc_decrypt(&new_cipher::<des::TdesEde3>(&key)?, &iv, data)
+            cbc_decrypt(new_cipher::<des::TdesEde3>(&key)?, &iv, data)
         }
-        _ => cbc_decrypt(&new_cipher::<aes::Aes192>(&key)?, &iv, data),
+        _ => cbc_decrypt(new_cipher::<aes::Aes192>(&key)?, &iv, data),
     }
 }

@@ -66,24 +66,29 @@ Linux with `cargo build --release --target x86_64-pc-windows-gnu` (MinGW); CI bu
 
 ## How it is put together
 
-All of the cryptography that is specific to Kazakhstan is in this repository; generic pieces come
-from small RustCrypto crates.
+All of the cryptography that is specific to Kazakhstan is in this repository; everything generic
+comes from established crates: RustCrypto for hashes, HMAC, PBKDF2, the PKCS#12 key derivation,
+DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP and `base64`.
 
 * `gost.rs`: the KZ profiles of the GOST algorithms. GOST 34.311-95 is GOST R 34.11-94 with the
   test S-box (RustCrypto `gost94`), GOST 34.11-2015 is Streebog (`streebog`). GOST 34.10
   signatures on the CryptoPro-A, TC26 256-A and TC26 512-A curves are implemented here (Jacobian
   coordinates on `num-bigint`), with NCA's little-endian conventions for keys and signatures.
-* `keys.rs`: KZ GOST and RSA keys; RSA PKCS#1 v1.5 signing (blinded, CRT, self-checked) and
-  verification.
+* `keys.rs`: KZ GOST and RSA keys; RSA PKCS#1 v1.5 signing and verification with the `rsa`
+  crate.
 * `p12.rs`: PKCS#12 key files as Kalkan writes them (BER, 3DES key bag, RC2-40 certificate bag,
-  SHA-1 MAC), and PBES2/AES files.
+  SHA-1 MAC), and PBES2/AES files. The file structure is read here because Kalkan writes BER,
+  which the RustCrypto `pkcs12`/`der` crates do not read; the key derivation and ciphers are
+  theirs.
 * `der.rs`: a small ASN.1 reader (DER and BER) and DER writer that keeps raw encodings, so signed
-  parts are hashed and copied byte for byte.
+  parts are hashed and copied byte for byte (NCALayer and Kalkan files are not always strict DER,
+  which the `der` crate requires).
 * `cms.rs`, `sign.rs`: CAdES-BES signing with the attributes NCALayer writes (content type,
   signing time, signingCertificateV2, message digest), co-signing by merging signers.
 * `verify.rs`, `tsp.rs`, `ocsp.rs`, `trust.rs`: signature, signing-certificate binding,
   timestamps (CAdES-T), certificate paths built only from trusted certificates, OCSP.
-* `http.rs`: a minimal HTTP/1.1 POST client for the timestamp and OCSP servers.
+* `http.rs`: the POST to the timestamp and OCSP servers, with `ureq` (plain http, which NCA's
+  servers use; a proxy from the environment is honoured).
 * `gui.rs`: the window ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
@@ -102,8 +107,8 @@ from small RustCrypto crates.
 * A timestamp's signing-certificate reference must match the TSA certificate.
 * A file can be given on the command line (or with "Open with") to start the window with it.
 * RSA-PSS signatures are not supported (NCA does not use them).
-* The big-number arithmetic is not constant-time. Keys never leave the computer, and RSA signing is
-  blinded, but this is a difference from Bouncy Castle.
+* The GOST curve arithmetic is on `num-bigint`, which is not constant-time (no maintained Rust
+  crate implements KZ GOST 34.10). Keys never leave the computer. RSA uses the `rsa` crate.
 
 ## Tests
 
