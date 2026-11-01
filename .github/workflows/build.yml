@@ -4,13 +4,44 @@
 # must be byte-identical. A push to main whose Cargo.toml
 # version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,
 # with release-notes/X.Y.Z.md.
+#
+# To save CI minutes: commits that only touch documentation start nothing, a newer push
+# cancels the run still going for the same branch, and the Android job (APK, rebuild check,
+# emulator) runs only when the app's Android parts, the window, the crates or this file
+# change, for a release, or when started by hand (Actions > build > Run workflow).
 name: build
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE*']
   pull_request:
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE*']
   workflow_dispatch:
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      android: ${{ steps.c.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
+      - id: c
+        env:
+          BEFORE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          android=true
+          case "$V" in *-*)
+            if [ "${{ github.event_name }}" != workflow_dispatch ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              git diff --name-only "$BEFORE" HEAD | tee changed.txt
+              grep -qE '^(android/|src/android\.rs|src/gui\.rs|src/i18n\.rs|scripts/apk\.sh|scripts/cargo\.sh|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
+            fi ;;
+          esac
+          echo "android=$android" | tee -a "$GITHUB_OUTPUT"
   build:
     strategy:
       fail-fast: false
@@ -133,6 +164,8 @@ jobs:
           name: kzsigner-${{ runner.os }}-x64
           path: dist/
   android:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
