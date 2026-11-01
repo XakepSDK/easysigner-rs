@@ -31,6 +31,10 @@ pub struct SignerReport {
     pub ocsp_status: Option<String>,
     pub warnings: Vec<String>,
     pub cert_der: Option<Vec<u8>>,
+    /// What kind of signature this is, when not a plain .cms signer (e.g. a PDF signature).
+    pub kind: Option<String>,
+    /// Facts about the signature that are not problems (e.g. what part of a PDF it covers).
+    pub notes: Vec<String>,
 }
 
 impl SignerReport {
@@ -52,6 +56,10 @@ impl SignerReport {
 #[derive(Clone, Debug, Default)]
 pub struct VerifyReport {
     pub valid: bool,
+    /// The file was a PDF with signatures inside it (the content fields describe the PDF).
+    pub is_pdf: bool,
+    /// The file was a document card (ddcard); the name of the original document inside it.
+    pub card_document: Option<String>,
     pub has_content: bool,
     pub content_size: u64,
     pub content_sha256: Option<String>,
@@ -63,6 +71,7 @@ pub struct VerifyReport {
 /// Outcome of signing: the new .cms bytes and what happened.
 #[derive(Clone, Debug, Default)]
 pub struct SignResult {
+    /// The signed output: a .cms, or the PDF with the signature inside it.
     pub cms: Vec<u8>,
     pub cosigned: bool,
     pub signer_count: usize,

@@ -20,9 +20,37 @@ pub fn check(c: &Cert, issuer: Option<&Cert>, url: &str, trust: &TrustStore) -> 
             tr("UNKNOWN (issuer certificate not available)").into(),
         );
     };
-    match check_inner(c, issuer, url, trust) {
-        Ok(s) => s,
+    match fetch(c, issuer, url, trust) {
+        Ok(a) => (a.good, a.status),
         Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e])),
+    }
+}
+
+/// An OCSP answer about one certificate.
+pub struct Answer {
+    /// Known not to be revoked.
+    pub good: bool,
+    /// For people (in English: starting with GOOD, REVOKED, UNKNOWN or ERROR).
+    pub status: String,
+    /// "good", "revoked" or "unknown" (empty on an error).
+    pub cert_status: &'static str,
+    pub this_update: Option<i64>,
+    /// The certificate that signed the response.
+    pub responder: Option<Cert>,
+    /// The OCSPResponse, as received.
+    pub raw: Vec<u8>,
+}
+
+impl Answer {
+    fn error(status: String, raw: &[u8]) -> Answer {
+        Answer {
+            good: false,
+            status,
+            cert_status: "",
+            this_update: None,
+            responder: None,
+            raw: raw.to_vec(),
+        }
     }
 }
 
@@ -46,7 +74,8 @@ fn issuer_hashes(issuer: &Cert, alg: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     ))
 }
 
-fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<(bool, String)> {
+/// Asks the OCSP server at `url` about `c`, and checks the answer.
+pub fn fetch(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<Answer> {
     let alg = cert_id_hash(issuer);
     let (name_hash, key_hash) = issuer_hashes(issuer, alg)?;
     let cert_id = der::seq(&[
@@ -68,16 +97,32 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
     ]);
     let req = der::seq(&[&tbs]);
     let body = http::post(url, "application/ocsp-request", &req, "OCSP server")?;
+    evaluate(&body, c, issuer, Some(&nonce), trust)
+}
 
-    let resp = der::parse(&body)?.items(der::SEQUENCE)?;
+/// Checks an OCSP response kept inside a signature (no nonce, and its age is judged by whoever
+/// reads it).
+pub fn read_embedded(raw: &[u8], c: &Cert, issuer: &Cert, trust: &TrustStore) -> Result<Answer> {
+    evaluate(raw, c, issuer, None, trust)
+}
+
+/// `nonce`: the one sent, for a fresh answer; None for a stored one.
+fn evaluate(
+    body: &[u8],
+    c: &Cert,
+    issuer: &Cert,
+    nonce: Option<&[u8]>,
+    trust: &TrustStore,
+) -> Result<Answer> {
+    let resp = der::parse(body)?.items(der::SEQUENCE)?;
     let status = resp
         .first()
         .ok_or_else(|| Error::new("empty OCSP response"))?
         .small_int()?;
     if status != 0 {
-        return Ok((
-            false,
+        return Ok(Answer::error(
             trf("ERROR: OCSP server answered status {}", &[&status]),
+            body,
         ));
     }
     let rb = resp
@@ -102,9 +147,10 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .collect(),
         _ => vec![],
     };
-    if let Some(problem) = check_responder(tbs_t.raw, &sig_alg, sig, &certs, issuer, trust) {
-        return Ok((false, trf("ERROR: {}", &[&problem])));
-    }
+    let responder = match check_responder(tbs_t.raw, &sig_alg, sig, &certs, issuer, trust) {
+        Ok(r) => r,
+        Err(problem) => return Ok(Answer::error(trf("ERROR: {}", &[&problem]), body)),
+    };
 
     let rd = tbs_t.items(der::SEQUENCE)?;
     let mut i = 0;
@@ -113,7 +159,8 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
     }
     let responses = rd[i + 2].items(der::SEQUENCE)?;
     let mut nonce_ok = false;
-    if let Some(ext) = rd.get(i + 3).filter(|t| t.tag == der::ctx(1))
+    if let Some(nonce) = nonce
+        && let Some(ext) = rd.get(i + 3).filter(|t| t.tag == der::ctx(1))
         && let Some(echoed) = extension(ext, NONCE)?
     {
         // accept the RFC form (nested OCTET STRING) and the bare nonce some responders echo
@@ -121,10 +168,10 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .ok()
             .and_then(|t| t.expect(der::OCTET_STRING).ok())
             .map(|t| t.content.to_vec());
-        if echoed != nonce && nested.as_deref() != Some(&nonce[..]) {
-            return Ok((
-                false,
+        if echoed != nonce && nested.as_deref() != Some(nonce) {
+            return Ok(Answer::error(
                 tr("ERROR: OCSP response is not for this request (nonce mismatch)").into(),
+                body,
             ));
         }
         nonce_ok = true;
@@ -147,38 +194,58 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .find(|t| t.tag == der::ctx(0))
             .map(|t| t.inner().and_then(|x| x.time()))
             .transpose()?;
-        // Without our nonce echoed back, only freshness shows that the answer is not an old one
-        // replayed: it must be within its validity period (nextUpdate), or, without one, made
-        // within the last hour.
-        let now = time::now_ms();
         let this_update = k.get(2).map(|t| t.time()).transpose()?;
-        let skew = 5 * 60 * 1000;
-        let fresh = match next_update {
-            Some(n) => n >= now,
-            None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
-        };
-        if !fresh || this_update.is_some_and(|t| t > now + skew) {
-            return Ok((false, tr("ERROR: OCSP answer is out of date").into()));
+        if nonce.is_some() {
+            // Without our nonce echoed back, only freshness shows that the answer is not an old
+            // one replayed: it must be within its validity period (nextUpdate), or, without one,
+            // made within the last hour.
+            let now = time::now_ms();
+            let skew = 5 * 60 * 1000;
+            let fresh = match next_update {
+                Some(n) => n >= now,
+                None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
+            };
+            if !fresh || this_update.is_some_and(|t| t > now + skew) {
+                return Ok(Answer::error(
+                    tr("ERROR: OCSP answer is out of date").into(),
+                    body,
+                ));
+            }
         }
-        return Ok(match k[1].tag {
+        let checked = if nonce.is_some() {
+            Some(time::now_ms())
+        } else {
+            this_update
+        };
+        let (good, cert_status, status) = match k[1].tag {
             0x80 => (
                 true,
-                trf(
-                    "GOOD (not revoked, checked {})",
-                    &[&time::fmt(Some(time::now_ms()))],
-                ),
+                "good",
+                trf("GOOD (not revoked, checked {})", &[&time::fmt(checked)]),
             ),
             0xa1 => {
                 let when = k[1].children()?.first().map(|t| t.time()).transpose()?;
-                (false, trf("REVOKED on {}", &[&time::fmt(when)]))
+                (false, "revoked", trf("REVOKED on {}", &[&time::fmt(when)]))
             }
             _ => (
                 false,
+                "unknown",
                 tr("UNKNOWN (the OCSP server does not know this certificate)").into(),
             ),
+        };
+        return Ok(Answer {
+            good,
+            status,
+            cert_status,
+            this_update,
+            responder: Some(responder),
+            raw: body.to_vec(),
         });
     }
-    Ok((false, tr("UNKNOWN (no answer for this certificate)").into()))
+    Ok(Answer::error(
+        tr("UNKNOWN (no answer for this certificate)").into(),
+        body,
+    ))
 }
 
 fn extension(exts: &Tlv, oid: &str) -> Result<Option<Vec<u8>>> {
@@ -196,7 +263,7 @@ fn extension(exts: &Tlv, oid: &str) -> Result<Option<Vec<u8>>> {
 }
 
 /// The response must be signed by the issuing CA itself, or by a responder certificate that the
-/// CA issued for OCSP signing. Returns a problem description, or None.
+/// CA issued for OCSP signing. Returns the signer, or a problem description.
 fn check_responder(
     tbs: &[u8],
     sig_alg: &str,
@@ -204,7 +271,7 @@ fn check_responder(
     certs: &[Cert],
     issuer: &Cert,
     trust: &TrustStore,
-) -> Option<String> {
+) -> std::result::Result<Cert, String> {
     let candidates = std::iter::once(issuer).chain(certs.iter());
     for c in candidates {
         let signed = c
@@ -215,20 +282,20 @@ fn check_responder(
             continue;
         }
         if c == issuer {
-            return None;
+            return Ok(c.clone());
         }
         if !cert::names_equal(&c.issuer, &issuer.subject) {
-            return Some(tr("OCSP responder was not issued by the certificate's CA").into());
+            return Err(tr("OCSP responder was not issued by the certificate's CA").into());
         }
         if !c.has_eku(cert::EKU_OCSP_SIGNING) {
-            return Some(tr("OCSP responder certificate is not issued for OCSP signing").into());
+            return Err(tr("OCSP responder certificate is not issued for OCSP signing").into());
         }
         let chain = trust.check(c, time::now_ms());
         return if chain.ok {
-            None
+            Ok(c.clone())
         } else {
-            Some(trf("OCSP responder is not trusted ({})", &[&chain.status]))
+            Err(trf("OCSP responder is not trusted ({})", &[&chain.status]))
         };
     }
-    Some(tr("OCSP response signature is invalid").into())
+    Err(tr("OCSP response signature is invalid").into())
 }

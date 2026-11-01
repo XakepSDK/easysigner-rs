@@ -8,6 +8,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::i18n::{self, Lang, tr, trf};
 use crate::p12::Key;
+use crate::pdf::card::CardLang;
 use crate::report::{SignResult, SignerReport, VerifyReport};
 use crate::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
 
@@ -139,11 +140,33 @@ impl Note {
 }
 
 enum Msg {
-    DocChecked(u64, Result<Option<VerifyReport>, String>),
+    DocChecked(u64, Result<(DocKind, Option<VerifyReport>), String>),
     KeyOpened(u64, PathBuf, String, Result<Box<Key>, String>),
-    Signed(PathBuf, Result<SignResult, String>),
+    Signed(PathBuf, SignAs, Result<SignResult, String>),
     Verified(u64, Result<VerifyReport, String>),
-    Extracted(PathBuf, Result<Vec<u8>, String>),
+    /// (file, suggested name for the saved document, bytes)
+    Extracted(PathBuf, Option<String>, Result<Vec<u8>, String>),
+}
+
+/// What the chosen document is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DocKind {
+    Other,
+    Cms,
+    Pdf,
+    SignedPdf,
+    Card,
+}
+
+/// What signing makes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SignAs {
+    /// A .cms file.
+    Cms,
+    /// The signature inside the PDF (PAdES).
+    Pdf,
+    /// A document card (ddcard).
+    Card,
 }
 
 /// The window's state and behaviour, without the native window around it (tests drive it).
@@ -174,6 +197,10 @@ pub struct App {
     key_note: Note,
     pub detached: bool,
     pub timestamp: bool,
+    pub sign_as: SignAs,
+    pub card_qr: bool,
+    pub card_lang: CardLang,
+    doc_kind: DocKind,
     key: Option<Arc<Key>>,
     doc_is_detached_cms: bool,
     doc_is_cms: bool,
@@ -217,6 +244,10 @@ impl App {
             key_note: Note::default(),
             detached: false,
             timestamp: false,
+            sign_as: SignAs::Cms,
+            card_qr: false,
+            card_lang: CardLang::Ru,
+            doc_kind: DocKind::Other,
             key: None,
             doc_is_detached_cms: false,
             doc_is_cms: false,
@@ -391,6 +422,7 @@ impl App {
 
     /// A dropped or command-line file: a key goes to the key field, a signed .cms to the
     /// Verify tab (unless the Sign tab is open, where it is co-signed), anything else is signed.
+    /// (A PDF goes to the Sign tab: it may be a document to sign, a signed PDF or a card.)
     pub fn open_file(&mut self, ctx: &egui::Context, f: PathBuf) {
         let ext = f
             .extension()
@@ -486,17 +518,64 @@ impl App {
         self.key_note.show(ui);
 
         section(ui, tr("3. Options"));
-        ui.add_enabled(
-            !self.doc_is_cms,
-            egui::Checkbox::new(
-                &mut self.detached,
-                tr("Detached signature (the .cms will not contain the document)"),
-            ),
-        );
-        ui.checkbox(
-            &mut self.timestamp,
-            tr("Add NCA timestamp (needs internet, sends only a hash)"),
-        );
+        let kind = self.doc_kind;
+        ui.add_enabled_ui(!matches!(kind, DocKind::Cms | DocKind::Card), |ui| {
+            ui.radio_value(&mut self.sign_as, SignAs::Cms, tr("Signature file (.cms)"));
+            ui.add_enabled_ui(matches!(kind, DocKind::Pdf | DocKind::SignedPdf), |ui| {
+                ui.radio_value(
+                    &mut self.sign_as,
+                    SignAs::Pdf,
+                    tr("Inside the PDF (opens in any PDF viewer; PDF documents only)"),
+                );
+            });
+            ui.radio_value(
+                &mut self.sign_as,
+                SignAs::Card,
+                tr("Document card (a PDF with the document, its signatures and their details)"),
+            );
+        });
+        ui.indent("sign_as_options", |ui| match self.sign_as {
+            SignAs::Cms => {
+                ui.add_enabled(
+                    !self.doc_is_cms,
+                    egui::Checkbox::new(
+                        &mut self.detached,
+                        tr("Detached signature (the .cms will not contain the document)"),
+                    ),
+                );
+            }
+            SignAs::Pdf => {}
+            SignAs::Card => {
+                ui.checkbox(
+                    &mut self.card_qr,
+                    tr("Print the signatures as QR codes too"),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(tr("Card language:"));
+                    egui::ComboBox::from_id_salt("card_lang")
+                        .selected_text(card_lang_name(self.card_lang))
+                        .show_ui(ui, |ui| {
+                            for l in [CardLang::Ru, CardLang::Kk, CardLang::KkRu] {
+                                ui.selectable_value(&mut self.card_lang, l, card_lang_name(l));
+                            }
+                        });
+                });
+            }
+        });
+        if self.sign_as == SignAs::Card {
+            ui.add_enabled(
+                false,
+                egui::Checkbox::new(
+                    &mut true,
+                    tr("Add NCA timestamp and revocation answer (a card always has them; needs internet)"),
+                ),
+            );
+        } else {
+            ui.checkbox(
+                &mut self.timestamp,
+                tr("Add NCA timestamp (needs internet, sends only a hash)"),
+            );
+        }
         ui.add_space(8.0);
         let can_sign = !self.signing
             && self.doc.is_some()
@@ -516,6 +595,7 @@ impl App {
         let request = self.doc_request;
         self.doc_is_detached_cms = false;
         self.doc_is_cms = false;
+        self.doc_kind = DocKind::Other;
         self.sign_original = None;
         self.doc_note = Note::default();
         self.background(ctx, move |e| {
@@ -523,9 +603,20 @@ impl App {
                 .map_err(|err| format!("{}: {err}", file.display()))
                 .and_then(|data| {
                     if e.is_signed_cms(&data) {
-                        e.verify(&data, None, None).map(Some).map_err(|x| x.0)
+                        let rep = e.verify(&data, None, None).map_err(|x| x.0)?;
+                        Ok((DocKind::Cms, Some(rep)))
+                    } else if e.card_original(&data).is_some() {
+                        let rep = e.verify(&data, None, None).map_err(|x| x.0)?;
+                        Ok((DocKind::Card, Some(rep)))
+                    } else if e.is_pdf(&data) {
+                        match e.verify(&data, None, None) {
+                            Ok(rep) if !rep.signers.is_empty() => {
+                                Ok((DocKind::SignedPdf, Some(rep)))
+                            }
+                            _ => Ok((DocKind::Pdf, None)),
+                        }
                     } else {
-                        Ok(None)
+                        Ok((DocKind::Other, None))
                     }
                 });
             Msg::DocChecked(request, r)
@@ -615,6 +706,9 @@ impl App {
         };
         let det = self.detached && !self.doc_is_cms;
         let tsa = self.timestamp.then(|| DEFAULT_TSA_URL.to_string());
+        let sign_as = self.sign_as;
+        let (qr, lang) = (self.card_qr, self.card_lang);
+        let card_cosign = self.doc_kind == DocKind::Card;
         let orig = if self.doc_is_detached_cms {
             self.sign_original.clone()
         } else {
@@ -628,18 +722,52 @@ impl App {
                 let o = orig
                     .map(|p| std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display())))
                     .transpose()?;
-                e.sign(&input, &key, det, tsa.as_deref(), true, o.as_deref())
-                    .map_err(|x| x.0)
+                match sign_as {
+                    SignAs::Cms => e.sign(&input, &key, det, tsa.as_deref(), true, o.as_deref()),
+                    SignAs::Pdf => e.sign_pdf(&input, &key, tsa.as_deref()),
+                    SignAs::Card => {
+                        let name = doc
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        // adding to a card keeps how it was made
+                        let (lang, qr) = if card_cosign {
+                            (None, None)
+                        } else {
+                            (Some(lang), Some(qr))
+                        };
+                        e.sign_card(
+                            &input,
+                            &name,
+                            &key,
+                            DEFAULT_TSA_URL,
+                            DEFAULT_OCSP_URL,
+                            lang,
+                            qr,
+                        )
+                    }
+                }
+                .map_err(|x| x.0)
             })();
-            Msg::Signed(doc, r)
+            Msg::Signed(doc, sign_as, r)
         });
     }
 
-    fn save_signed(&mut self, doc: &Path, r: SignResult) {
+    fn save_signed(&mut self, doc: &Path, sign_as: SignAs, r: SignResult) {
         let suggested = if r.cosigned {
             doc.to_path_buf()
         } else {
-            PathBuf::from(format!("{}.cms", doc.display()))
+            match sign_as {
+                SignAs::Cms => PathBuf::from(format!("{}.cms", doc.display())),
+                SignAs::Pdf => {
+                    let stem = doc
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    doc.with_file_name(format!("{stem}-signed.pdf"))
+                }
+                SignAs::Card => PathBuf::from(format!("{}.card.pdf", doc.display())),
+            }
         };
         let Some(out) = self.dialogs.save(&suggested) else {
             return;
@@ -695,7 +823,12 @@ impl App {
     fn verify_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let c = self.cms.clone();
-        if let Some(f) = self.file_field(ui, "cms", tr("Signed .cms file"), &c) {
+        if let Some(f) = self.file_field(
+            ui,
+            "cms",
+            tr("Signed file (.cms, signed PDF or document card)"),
+            &c,
+        ) {
             self.set_cms(&ctx, f);
         }
         if self.show_verify_original {
@@ -723,7 +856,7 @@ impl App {
                 self.verify(&ctx);
             }
             let can_extract =
-                !self.checking && matches!(&self.result, Some(Ok(r)) if r.has_content);
+                !self.checking && matches!(&self.result, Some(Ok(r)) if r.has_content && !r.is_pdf);
             if ui
                 .add_enabled(
                     can_extract,
@@ -782,19 +915,30 @@ impl App {
     pub fn extract(&mut self, ctx: &egui::Context) {
         let Some(file) = self.cms.clone() else { return };
         self.background(ctx, move |e| {
-            let r = std::fs::read(&file)
-                .map_err(|err| format!("{}: {err}", file.display()))
-                .and_then(|d| e.extract(&d).map_err(|x| x.0));
-            Msg::Extracted(file, r)
+            let (name, r) = match std::fs::read(&file) {
+                Err(err) => (None, Err(format!("{}: {err}", file.display()))),
+                Ok(d) => match e.card_original(&d) {
+                    Some((name, data)) => (Some(name), Ok(data)),
+                    None => (None, e.extract(&d).map_err(|x| x.0)),
+                },
+            };
+            Msg::Extracted(file, name, r)
         });
     }
 
-    fn save_extracted(&mut self, file: &Path, data: Vec<u8>) {
+    fn save_extracted(&mut self, file: &Path, name: Option<String>, data: Vec<u8>) {
         let n = file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let base = if n.to_lowercase().ends_with(".cms") {
+        // a card's document keeps its own name (only the name, never a path inside the card)
+        let card_name = name
+            .as_deref()
+            .and_then(|n| n.rsplit(['/', '\\']).next())
+            .filter(|n| !n.is_empty() && *n != "." && *n != "..");
+        let base = if let Some(c) = card_name {
+            c.to_string()
+        } else if n.to_lowercase().ends_with(".cms") {
             n[..n.len() - 4].to_string()
         } else {
             format!("{n}.original")
@@ -820,27 +964,47 @@ impl App {
                     return;
                 }
                 match r {
-                    Ok(Some(rep)) => {
-                        let names: Vec<String> =
-                            rep.signers.iter().map(SignerReport::name).collect();
-                        self.doc_note = Note(vec![
-                            (
-                                trf(
-                                    "Already signed ({}): {}.",
-                                    &[&rep.signers.len(), &names.join(", ")],
+                    Ok((kind, rep)) => {
+                        self.doc_kind = kind;
+                        if let Some(rep) = rep {
+                            let names: Vec<String> =
+                                rep.signers.iter().map(SignerReport::name).collect();
+                            self.doc_note = Note(vec![
+                                (
+                                    trf(
+                                        "Already signed ({}): {}.",
+                                        &[&rep.signers.len(), &names.join(", ")],
+                                    ),
+                                    Tone::Plain,
                                 ),
-                                Tone::Plain,
-                            ),
-                            (
-                                tr("Your signature will be added to this file.").into(),
-                                Tone::Strong,
-                            ),
-                        ]);
-                        self.doc_is_cms = true;
-                        self.detached = false;
-                        self.doc_is_detached_cms = !rep.has_content;
+                                (
+                                    match kind {
+                                        DocKind::Card => tr(
+                                            "Your signature will be added to this document card.",
+                                        ),
+                                        DocKind::SignedPdf => {
+                                            tr("Your signature can be added inside this PDF.")
+                                        }
+                                        _ => tr("Your signature will be added to this file."),
+                                    }
+                                    .into(),
+                                    Tone::Strong,
+                                ),
+                            ]);
+                            if kind == DocKind::Cms {
+                                self.doc_is_cms = true;
+                                self.detached = false;
+                                self.doc_is_detached_cms = !rep.has_content;
+                            }
+                        }
+                        self.sign_as = match kind {
+                            DocKind::Cms => SignAs::Cms,
+                            DocKind::Card => SignAs::Card,
+                            DocKind::SignedPdf => SignAs::Pdf,
+                            DocKind::Other if self.sign_as == SignAs::Pdf => SignAs::Cms,
+                            _ => self.sign_as,
+                        };
                     }
-                    Ok(None) => {}
                     Err(e) => self.doc_note = Note::error(&e),
                 }
             }
@@ -864,10 +1028,10 @@ impl App {
                     Err(e) => self.key_note = Note::error(&e),
                 }
             }
-            Msg::Signed(doc, r) => {
+            Msg::Signed(doc, sign_as, r) => {
                 self.signing = false;
                 match r {
-                    Ok(r) => self.save_signed(&doc, r),
+                    Ok(r) => self.save_signed(&doc, sign_as, r),
                     Err(e) => self.message = Some((e, true)),
                 }
             }
@@ -881,8 +1045,8 @@ impl App {
                 }
                 self.result = Some(r);
             }
-            Msg::Extracted(file, r) => match r {
-                Ok(d) => self.save_extracted(&file, d),
+            Msg::Extracted(file, name, r) => match r {
+                Ok(d) => self.save_extracted(&file, name, d),
                 Err(e) => self.message = Some((e, true)),
             },
         }
@@ -968,7 +1132,24 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     } else {
         ui.heading(Tone::Bad.text(ui, tr("✖ Not valid (see details)")));
     }
-    if r.has_content {
+    if let Some(name) = &r.card_document {
+        ui.label(trf(
+            "Document card. Document inside: {}, {} bytes, SHA-256 {}",
+            &[
+                name,
+                &r.content_size,
+                &r.content_sha256.clone().unwrap_or_default(),
+            ],
+        ));
+    } else if r.is_pdf {
+        ui.label(trf(
+            "Signed PDF: {} bytes, SHA-256 {}",
+            &[
+                &r.content_size,
+                &r.content_sha256.clone().unwrap_or_default(),
+            ],
+        ));
+    } else if r.has_content {
         ui.label(trf(
             "Document inside: {} bytes, SHA-256 {}",
             &[
@@ -1007,6 +1188,12 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                     ui.add(egui::Label::new(v).wrap());
                     ui.end_row();
                 };
+                if let Some(k) = &s.kind {
+                    row(tr("Type"), k.clone());
+                }
+                for n in &s.notes {
+                    row(tr("Covers"), n.clone());
+                }
                 if let Some(v) = s.get("IIN") {
                     row(tr("IIN"), v.into());
                 }
@@ -1064,6 +1251,14 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
         for w in &s.warnings {
             ui.label(Tone::Warn.text(ui, format!("⚠ {w}")));
         }
+    }
+}
+
+fn card_lang_name(l: CardLang) -> &'static str {
+    match l {
+        CardLang::Ru => "Русский",
+        CardLang::Kk => "Қазақша",
+        CardLang::KkRu => "Қазақша / Русский",
     }
 }
 

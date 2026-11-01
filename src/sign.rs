@@ -54,22 +54,7 @@ pub fn sign(
     let mut out = cms::sign_once(content, content_type, attach, &key.private_key, &key.cert)
         .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
     if let Some(url) = tsa_url {
-        tsp::stamp(&mut out, url, key.private_key.scheme())?;
-        // the token's signature must hold; an untrusted TSA is reported, as verify would
-        let mut check = SignerReport::default();
-        tsp::check(&mut check, &out.signers[0], trust);
-        if check.timestamp_ok != Some(true) {
-            return Err(Error::new(trf(
-                "The timestamp server's answer does not match the request: {}",
-                &[&format!(
-                    "{} ({})",
-                    tr("invalid timestamp signature"),
-                    check.timestamp_info.unwrap_or_default()
-                )],
-            )));
-        }
-        r.warnings.extend(check.warnings);
-        r.timestamped = true;
+        timestamp(&mut out, url, key, trust, &mut r)?;
     }
     if let Some(e) = &existing {
         out = e.merge(&out);
@@ -78,6 +63,33 @@ pub fn sign(
     r.cms = out.encode();
     r.signer_count = out.signers.len();
     Ok(r)
+}
+
+/// Adds an NCA timestamp to the single signer of `out` and checks it, as verify would.
+pub fn timestamp(
+    out: &mut SignedData,
+    url: &str,
+    key: &Key,
+    trust: &TrustStore,
+    r: &mut SignResult,
+) -> Result<()> {
+    tsp::stamp(out, url, key.private_key.scheme())?;
+    // the token's signature must hold; an untrusted TSA is reported, as verify would
+    let mut check = SignerReport::default();
+    tsp::check(&mut check, &out.signers[0], trust);
+    if check.timestamp_ok != Some(true) {
+        return Err(Error::new(trf(
+            "The timestamp server's answer does not match the request: {}",
+            &[&format!(
+                "{} ({})",
+                tr("invalid timestamp signature"),
+                check.timestamp_info.unwrap_or_default()
+            )],
+        )));
+    }
+    r.warnings.extend(check.warnings);
+    r.timestamped = true;
+    Ok(())
 }
 
 /// Refuses to co-sign a detached .cms over a different document than the one its signers

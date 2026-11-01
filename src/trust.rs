@@ -34,6 +34,8 @@ pub struct Chain {
     pub status: String,
     pub path: Vec<String>,
     pub issuer: Option<Cert>,
+    /// The issuers found, from the direct issuer up to the trusted CA.
+    pub issuers: Vec<Cert>,
 }
 
 pub struct TrustStore {
@@ -58,20 +60,23 @@ impl TrustStore {
     /// allowed to sign certificates.
     pub fn check(&self, c: &Cert, at: i64) -> Chain {
         let mut path = Vec::new();
-        let mut first_issuer: Option<Cert> = None;
-        let r = self.walk(c, at, &mut path, &mut first_issuer);
+        let mut issuers: Vec<Cert> = Vec::new();
+        let r = self.walk(c, at, &mut path, &mut issuers);
+        let issuer = issuers.first().cloned();
         match r {
             Ok((ok, status)) => Chain {
                 ok,
                 status,
                 path,
-                issuer: first_issuer,
+                issuer,
+                issuers,
             },
             Err(e) => Chain {
                 ok: false,
                 status: trf("Certificate path not valid: {}", &[&e]),
                 path,
-                issuer: first_issuer,
+                issuer,
+                issuers,
             },
         }
     }
@@ -81,10 +86,9 @@ impl TrustStore {
         c: &Cert,
         at: i64,
         path: &mut Vec<String>,
-        first_issuer: &mut Option<Cert>,
+        seen: &mut Vec<Cert>,
     ) -> std::result::Result<(bool, String), String> {
         let mut cur = c.clone();
-        let mut seen: Vec<Cert> = Vec::new();
         let mut is_start = true;
         loop {
             path.push(cur.cn());
@@ -101,7 +105,7 @@ impl TrustStore {
                 }
                 return Ok((true, trf("Issued by a trusted CA: {}", &[&cur.cn()])));
             }
-            let Some(issuer) = self.find_issuer(&cur, &seen) else {
+            let Some(issuer) = self.find_issuer(&cur, seen) else {
                 if self_signed {
                     return Err(trf(
                         "self-signed certificate '{}' is not a trusted root",
@@ -117,9 +121,6 @@ impl TrustStore {
                 ));
             };
             require_ca(&issuer)?;
-            if first_issuer.is_none() {
-                *first_issuer = Some(issuer.clone());
-            }
             seen.push(issuer.clone());
             cur = issuer;
             is_start = false;

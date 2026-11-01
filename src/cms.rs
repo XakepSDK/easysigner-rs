@@ -336,6 +336,21 @@ pub fn sign_once(
     key: &PrivateKey,
     cert: &Cert,
 ) -> Result<SignedData> {
+    sign_once_with(content, content_type, attach, key, cert, true, &[])
+}
+
+/// [`sign_once`]; `signing_time`: whether to include the signing-time attribute (PAdES leaves
+/// it out and keeps the time in the PDF's signature dictionary instead); `extra`: more signed
+/// attributes, as encoded.
+pub fn sign_once_with(
+    content: &[u8],
+    content_type: &str,
+    attach: bool,
+    key: &PrivateKey,
+    cert: &Cert,
+    signing_time: bool,
+    extra: &[Vec<u8>],
+) -> Result<SignedData> {
     let digest_oid = key.digest_oid();
     let md = gost::hash(digest_oid, content)?;
     // CAdES-BES signed attributes, the same set NCALayer writes
@@ -344,10 +359,13 @@ pub fn sign_once(
     ))])])]);
     let mut attrs = vec![
         attribute(ATTR_CONTENT_TYPE, &der::oid(content_type)),
-        attribute(ATTR_SIGNING_TIME, &time::encode(time::now_ms())),
         attribute(ATTR_SIGNING_CERT_V2, &ess),
         attribute(ATTR_MESSAGE_DIGEST, &der::octets(&md)),
     ];
+    if signing_time {
+        attrs.push(attribute(ATTR_SIGNING_TIME, &time::encode(time::now_ms())));
+    }
+    attrs.extend(extra.iter().cloned());
     let signed_set = der::sorted_set(der::SET, &mut attrs);
     let signature = key.sign(&signed_set)?;
     let mut signed_attrs = signed_set;

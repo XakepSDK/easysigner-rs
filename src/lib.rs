@@ -12,6 +12,7 @@ pub mod keys;
 pub mod ocsp;
 pub mod output;
 pub mod p12;
+pub mod pdf;
 pub mod report;
 pub mod sign;
 pub mod time;
@@ -78,14 +79,114 @@ impl Engine {
         )
     }
 
-    /// `ocsp_url`: None to skip the revocation check.
+    /// Signs a PDF inside the PDF (PAdES); see [`pdf::sign`].
+    pub fn sign_pdf(&self, input: &[u8], key: &Key, tsa_url: Option<&str>) -> Result<SignResult> {
+        pdf::sign(input, key, tsa_url, &self.trust)
+    }
+
+    /// Signs `input` into a document card (ddcard), checking the signature first; see
+    /// [`pdf::card`]. If `input` is already a card, the signature is added to it and the card
+    /// is made again. A card needs a timestamp, and asks for an OCSP answer kept in the
+    /// signature (a missing one only warns). `lang` and `qr`: None to keep what the card had
+    /// (Russian, without QR codes, for a new card).
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_card(
+        &self,
+        input: &[u8],
+        file_name: &str,
+        key: &Key,
+        tsa_url: &str,
+        ocsp_url: &str,
+        lang: Option<pdf::card::CardLang>,
+        qr: Option<bool>,
+    ) -> Result<SignResult> {
+        let mut r = SignResult::default();
+        let (name, doc, mut signatures, made_with) = match pdf::card::read(input) {
+            Some(c) => {
+                r.cosigned = true;
+                (c.original.0, c.original.1, c.signatures, c.made_with)
+            }
+            None => (file_name.to_string(), input.to_vec(), vec![], None),
+        };
+        let lang = lang
+            .or(made_with.map(|m| m.0))
+            .unwrap_or(pdf::card::CardLang::Ru);
+        let qr = qr.or(made_with.map(|m| m.1)).unwrap_or(false);
+        let cms =
+            pdf::card::sign_for_card(&doc, &name, key, tsa_url, ocsp_url, &self.trust, &mut r)?;
+        let mut n = signatures.len() + 1;
+        while signatures
+            .iter()
+            .any(|(s, _)| *s == pdf::card::signature_file_name(&name, n))
+        {
+            n += 1;
+        }
+        signatures.push((pdf::card::signature_file_name(&name, n), cms));
+        let input = pdf::card::CardInput {
+            doc: &doc,
+            file_name: &name,
+            signatures,
+            lang,
+            qr,
+        };
+        r.cms = pdf::card::build(&input, &self.trust)?;
+        r.signer_count = input.signatures.len();
+        Ok(r)
+    }
+
+    /// The original document inside a document card: (file name, bytes). None if `data` is
+    /// not a card.
+    pub fn card_original(&self, data: &[u8]) -> Option<(String, Vec<u8>)> {
+        pdf::card::read(data).map(|c| c.original)
+    }
+
+    /// Checks the signatures carried by scanned QR codes (one scanned text per line) against
+    /// the original document.
+    pub fn verify_qr(
+        &self,
+        scans: &str,
+        original: &[u8],
+        ocsp_url: Option<&str>,
+    ) -> Result<VerifyReport> {
+        let sigs = pdf::qr::assemble(scans)?;
+        let card = pdf::card::Card {
+            original: (String::new(), original.to_vec()),
+            signatures: sigs
+                .into_iter()
+                .map(|(id, c)| (format!("{id}.cms"), c))
+                .collect(),
+            made_with: None,
+        };
+        let mut rep = pdf::card::verify(&card, &self.trust, ocsp_url);
+        rep.card_document = None;
+        rep.has_content = false;
+        rep.detached_provided = true;
+        for s in &mut rep.signers {
+            s.kind = None;
+        }
+        Ok(rep)
+    }
+
+    /// Checks a .cms, or the signatures inside a PDF. `ocsp_url`: None to skip the revocation
+    /// check.
     pub fn verify(
         &self,
         cms: &[u8],
         detached_original: Option<&[u8]>,
         ocsp_url: Option<&str>,
     ) -> Result<VerifyReport> {
+        if let Some(card) = pdf::card::read(cms) {
+            return Ok(pdf::card::verify(&card, &self.trust, ocsp_url));
+        }
+        if pdf::is_pdf(cms) {
+            return pdf::verify(cms, &self.trust, ocsp_url);
+        }
         verify::verify(cms, detached_original, &self.trust, ocsp_url)
+    }
+
+    /// Whether `data` is a PDF.
+    pub fn is_pdf(&self, data: &[u8]) -> bool {
+        pdf::is_pdf(data)
     }
 
     pub fn extract(&self, cms: &[u8]) -> Result<Vec<u8>> {

@@ -36,6 +36,11 @@ base64 = "0.23"
 cbc = "0.2.1"
 pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
 rsa = { version = "=0.10.0-rc.19", default-features = false, features = ["encoding", "std"] }
+lopdf = { version = "0.46", default-features = false }
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
+qrcodegen = "1.8"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+serde_json = "1"
 
 [target.'cfg(not(windows))'.dependencies]
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow"] }

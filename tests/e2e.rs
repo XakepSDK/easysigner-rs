@@ -67,6 +67,122 @@ fn fake_tsa() -> String {
     url
 }
 
+/// A tiny HTTP server on 127.0.0.1: answers each POST body with `answer(body)`.
+fn serve(
+    answer: impl Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static,
+    ctype: &'static str,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut s) = conn else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let body = loop {
+                let n = s.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break None;
+                }
+                buf.extend(&chunk[..n]);
+                if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + len {
+                        break Some(buf[end + 4..end + 4 + len].to_vec());
+                    }
+                }
+            };
+            let _ = match body.and_then(|b| answer(&b)) {
+                Some(r) => s
+                    .write_all(
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\n\r\n", r.len())
+                            .as_bytes(),
+                    )
+                    .and_then(|_| s.write_all(&r)),
+                None => s.write_all(b"HTTP/1.1 500 Error\r\nContent-Length: 0\r\n\r\n"),
+            };
+        }
+    });
+    url
+}
+
+/// Test only: a fake OCSP responder for the test CA in fixtures/ocsp, signing with the CA's own
+/// key; every certificate is "good", or "revoked" when `revoked`. Returns its URL.
+fn fake_ocsp(revoked: bool) -> String {
+    let ca = kzsigner::p12::open(
+        &std::fs::read(fixtures().join("ocsp/ca.p12")).unwrap(),
+        PASSWORD,
+        None,
+    )
+    .unwrap();
+    serve(
+        move |body| {
+            let req = der::parse(body).ok()?.items(der::SEQUENCE).ok()?;
+            let tbs = req.first()?.items(der::SEQUENCE).ok()?;
+            let list = tbs
+                .iter()
+                .find(|t| t.tag == der::SEQUENCE)?
+                .items(der::SEQUENCE)
+                .ok()?;
+            let cert_id = list
+                .first()?
+                .items(der::SEQUENCE)
+                .ok()?
+                .first()?
+                .raw
+                .to_vec();
+            let now = kzsigner::time::now_ms();
+            let status = if revoked {
+                der::tlv(
+                    der::ctx(1),
+                    &kzsigner::time::encode_generalized(now - 86_400_000),
+                )
+            } else {
+                vec![0x80, 0x00]
+            };
+            let single = der::seq(&[
+                &cert_id,
+                &status,
+                &kzsigner::time::encode_generalized(now),
+                &der::tlv(
+                    der::ctx(0),
+                    &kzsigner::time::encode_generalized(now + 3_600_000),
+                ),
+            ]);
+            let mut parts: Vec<Vec<u8>> = vec![
+                der::tlv(der::ctx(1), &ca.cert.subject),
+                kzsigner::time::encode_generalized(now),
+                der::seq(&[&single]),
+            ];
+            // echo the nonce
+            if let Some(ext) = tbs.iter().find(|t| t.tag == der::ctx(2)) {
+                parts.push(der::tlv(der::ctx(1), ext.content));
+            }
+            let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+            let rd = der::seq(&refs);
+            let sig = ca.private_key.sign(&rd).ok()?;
+            let basic = der::seq(&[
+                &rd,
+                &der::alg_null(ca.private_key.sig_oid()),
+                &der::bit_string(&sig),
+            ]);
+            Some(der::seq(&[
+                &der::tlv(der::ENUMERATED, &[0]),
+                &der::tlv(
+                    der::ctx(0),
+                    &der::seq(&[&der::oid("1.3.6.1.5.5.7.48.1.1"), &der::octets(&basic)]),
+                ),
+            ]))
+        },
+        "application/ocsp-response",
+    )
+}
+
 fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>> {
     let req = Request::parse(body).ok()?;
     let known = [
@@ -364,6 +480,271 @@ fn end_to_end() {
     t.check(
         "kalkan: detached file verifies with original",
         v.contains("VALID - all 1"),
+    );
+
+    println!("\n{} passed, {} failed", t.pass, t.fail.len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(t.fail.is_empty(), "failed: {:?}", t.fail);
+}
+
+#[test]
+fn pdf_and_card() {
+    let dir = std::env::temp_dir().join(format!("kzsigner-pdf-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = Run {
+        dir: dir.clone(),
+        pass: 0,
+        fail: vec![],
+    };
+    let k = fixtures().join("keys");
+    let key = |n: &str| s(&k.join(n));
+    let carol = s(&fixtures().join("ocsp/carol.p12"));
+    let ocsp_ca = s(&fixtures().join("ocsp/ca.cer"));
+    let tsa = fake_tsa();
+    let ocsp = fake_ocsp(false);
+    for f in ["plain.pdf", "objstm.pdf", "land.pdf"] {
+        std::fs::copy(fixtures().join("pdf").join(f), t.path(f)).unwrap();
+    }
+    let orig = std::fs::read(t.path("plain.pdf")).unwrap();
+
+    // PAdES: the signature inside the PDF
+    for (a, f) in [
+        ("rsa", "plain.pdf"),
+        ("gost2015", "objstm.pdf"),
+        ("gost2004", "plain.pdf"),
+    ] {
+        let out = format!("pades_{a}.pdf");
+        t.kz(&[
+            "sign",
+            "--pdf",
+            "-k",
+            &key(&format!("alice_{a}.p12")),
+            f,
+            "-o",
+            &out,
+        ]);
+        let v = t.kz(&["verify", &out, "--trust", &key(&format!("ca_{a}.cer"))]);
+        t.check(
+            &format!("PAdES {a}: signed PDF verifies"),
+            v.contains("VALID - all 1"),
+        );
+        t.kz(&[
+            "sign",
+            "--pdf",
+            "-k",
+            &key(&format!("bob_{a}.p12")),
+            &out,
+            "--tsa",
+            &tsa,
+        ]);
+        let v = t.kz(&["verify", &out, "--trust", &key(&format!("ca_{a}.cer"))]);
+        t.check(
+            &format!("PAdES {a}: second signature added, both verify"),
+            v.contains("VALID - all 2"),
+        );
+    }
+    t.kz(&["sign", "--pdf", "-k", &key("alice_rsa.p12"), "plain.pdf"]);
+    let signed = std::fs::read(t.path("plain-signed.pdf")).unwrap();
+    t.check(
+        "PAdES: the original PDF is kept unchanged at the start",
+        signed.starts_with(&orig),
+    );
+    let mut bad = signed.clone();
+    let i = bad.windows(9).position(|w| w == b"Helvetica").unwrap();
+    bad[i] = b'h';
+    std::fs::write(t.path("bad.pdf"), &bad).unwrap();
+    let v = t.kz(&["verify", "bad.pdf", "--trust", &key("ca_rsa.cer")]);
+    t.check("PAdES: a changed PDF is rejected", v.contains("NOT VALID"));
+    let mut more = signed.clone();
+    more.extend(b"\n% appended later\n");
+    std::fs::write(t.path("more.pdf"), &more).unwrap();
+    let v = t.kz(&["verify", "more.pdf", "--trust", &key("ca_rsa.cer")]);
+    t.check(
+        "PAdES: changes after the signature are reported",
+        v.contains("NOT VALID") || v.contains("after"),
+    );
+
+    // document card (ddcard), with an OCSP answer kept in each signature
+    let v = t.kz(&[
+        "sign",
+        "--card",
+        "--qr",
+        "-k",
+        &carol,
+        "--trust",
+        &ocsp_ca,
+        "--tsa",
+        &tsa,
+        "--ocsp",
+        &ocsp,
+        "plain.pdf",
+    ]);
+    t.check(
+        "card: made",
+        v.contains("plain.pdf.card.pdf") && !v.contains("OCSP"),
+    );
+    let v = t.kz(&["verify", "plain.pdf.card.pdf", "--trust", &ocsp_ca]);
+    t.check(
+        "card: verifies, with the kept OCSP answer",
+        v.contains("VALID - all 1")
+            && v.contains("answer kept in the signature")
+            && v.contains("inside the document card"),
+    );
+    let v = t.kz(&[
+        "sign",
+        "--card",
+        "-k",
+        &key("alice_gost2015.p12"),
+        "--trust",
+        &key("ca_gost2015.cer"),
+        "--trust",
+        &ocsp_ca,
+        "--tsa",
+        &tsa,
+        "--ocsp",
+        "http://127.0.0.1:9/",
+        "plain.pdf.card.pdf",
+    ]);
+    t.check(
+        "card: a second signature is added",
+        v.contains("Signature added") && v.contains("No OCSP answer"),
+    );
+    let v = t.kz(&[
+        "verify",
+        "plain.pdf.card.pdf",
+        "--trust",
+        &ocsp_ca,
+        "--trust",
+        &key("ca_gost2015.cer"),
+    ]);
+    t.check(
+        "card: both signatures verify",
+        v.contains("VALID - all 2") && v.contains("carries no OCSP answer"),
+    );
+    t.kz(&["extract", "plain.pdf.card.pdf", "-o", "back.pdf"]);
+    t.check(
+        "card: extract returns the original",
+        std::fs::read(t.path("back.pdf")).unwrap() == orig,
+    );
+    let (_, json) = t.kz_env(&["verify", "plain.pdf.card.pdf", "--json"], PASSWORD);
+    t.check(
+        "card: JSON output",
+        json_ok(&json) && json.contains("\"cardDocument\": \"plain.pdf\""),
+    );
+
+    let v = t.kz(&[
+        "sign", "--card", "--lang", "kk/ru", "-k", &carol, "--trust", &ocsp_ca, "--tsa", &tsa,
+        "--ocsp", &ocsp, "land.pdf",
+    ]);
+    t.check(
+        "card: Kazakh and Russian, landscape pages",
+        v.contains("land.pdf.card.pdf"),
+    );
+    std::fs::write(t.path("note.txt"), "Справка №5\n").unwrap();
+    t.kz(&[
+        "sign", "--card", "-k", &carol, "--trust", &ocsp_ca, "--tsa", &tsa, "--ocsp", &ocsp,
+        "note.txt",
+    ]);
+    std::fs::remove_file(t.path("note.txt")).unwrap();
+    t.kz(&["extract", "note.txt.card.pdf"]);
+    t.check(
+        "card: a text document; extract restores it under its own name",
+        std::fs::read_to_string(t.path("note.txt")).unwrap_or_default() == "Справка №5\n",
+    );
+    let v = t.kz(&[
+        "sign",
+        "--card",
+        "-k",
+        &carol,
+        "--trust",
+        &ocsp_ca,
+        "--tsa",
+        &tsa,
+        "--ocsp",
+        &fake_ocsp(true),
+        "objstm.pdf",
+    ]);
+    t.check(
+        "card: a revoked certificate is refused",
+        v.contains("REVOKED") && !t.path("objstm.pdf.card.pdf").exists(),
+    );
+
+    // QR codes: the texts a scanner reads, put back together
+    let card = std::fs::read(t.path("plain.pdf.card.pdf")).unwrap();
+    let doc = lopdf::Document::load_mem(&card).unwrap();
+    let names = doc
+        .catalog()
+        .unwrap()
+        .get(b"Names")
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let ef = names.get(b"EmbeddedFiles").unwrap().as_dict().unwrap();
+    let list = ef.get(b"Names").unwrap().as_array().unwrap();
+    t.check(
+        "card: attachments named as ddc names them",
+        list[0].as_str().unwrap() == b"Attachement1" && list.len() == 6,
+    );
+    let info = doc.trailer.get(b"Info").unwrap().as_reference().unwrap();
+    let made = doc
+        .get_dictionary(info)
+        .unwrap()
+        .get(b"KzsignerCard")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    t.check(
+        "card: adding a signature keeps the QR codes",
+        made == b"ru;qr",
+    );
+    let spec = doc.get_dictionary(list[3].as_reference().unwrap()).unwrap();
+    let stream = doc
+        .get_object(
+            spec.get(b"EF")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"F")
+                .unwrap()
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap()
+        .as_stream()
+        .unwrap();
+    let cms = stream.decompressed_content().unwrap();
+    let mut codes = kzsigner::pdf::qr::payloads(1, &cms).unwrap();
+    codes.reverse();
+    std::fs::write(t.path("scans.txt"), codes.join("\n")).unwrap();
+    let v = t.kz(&[
+        "verify",
+        "--qr",
+        "scans.txt",
+        "--data",
+        "plain.pdf",
+        "--trust",
+        &ocsp_ca,
+    ]);
+    t.check(
+        "QR: scanned codes verify against the document",
+        v.contains("VALID - all 1"),
+    );
+    let v = t.kz(&[
+        "verify",
+        "--qr",
+        "scans.txt",
+        "--data",
+        "land.pdf",
+        "--trust",
+        &ocsp_ca,
+    ]);
+    t.check("QR: wrong document is rejected", v.contains("NOT VALID"));
+    std::fs::write(t.path("scans.txt"), codes[1..].join("\n")).unwrap();
+    t.check(
+        "QR: a missing code is named",
+        t.kz(&["verify", "--qr", "scans.txt", "--data", "plain.pdf"])
+            .contains("missing part"),
     );
 
     println!("\n{} passed, {} failed", t.pass, t.fail.len());

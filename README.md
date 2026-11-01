@@ -1,6 +1,6 @@
 # kzsigner (Rust)
 
-Sign and verify `.cms` files with Kazakhstan NCA RK keys, locally, without NCALayer. A port of
+Sign and verify `.cms` files, signed PDFs and document cards with Kazakhstan NCA RK keys, locally, without NCALayer. A port of
 [kzsigner](https://github.com/XakepSDK/easysigner) (Java) to Rust: the same commands, messages,
 checks and window, in one small executable with no runtime.
 
@@ -11,8 +11,21 @@ checks and window, in one small executable with no runtime.
 | Without the window (`--no-default-features`) | | 0.8 MB |
 
 It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256),
-GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. The network is used only for
-an NCA timestamp (`--tsa`) and the NCA revocation check (`--ocsp`).
+GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also sign without the
+`.cms` wrapper, so the result opens like any document:
+
+* **Inside a PDF** (PAdES, `--pdf`): the signature goes into the PDF itself, which still opens in
+  any PDF viewer; more signatures are added the same way, each keeping the earlier ones valid.
+* **Document card** (`--card`, карточка электронного документа, the
+  [ddcard](https://github.com/kaarkz/ddcard) format SIGEX uses): a PDF that shows the document's
+  pages, a page per signature with the signer, certificate, timestamp and revocation answer
+  (and, with `--qr`, the signature itself as QR codes), and carries the original document and
+  its `.cms` signatures as attachments. Any document can be put in a card, not only a PDF.
+  Cards made by kzsigner open in SIGEX's [ddc](https://github.com/sigex-kz/ddc), and kzsigner
+  checks and co-signs cards made by SIGEX.
+
+The network is used only for an NCA timestamp (`--tsa`, always for a card) and the NCA
+revocation check (`--ocsp`, always for a card, whose signatures keep the answer).
 
 ## Use
 
@@ -40,7 +53,18 @@ kzsigner verify document.pdf.cms [--ocsp] [--json]      # exit code 0 only if al
 kzsigner verify detached.cms --data document.pdf
 kzsigner extract document.pdf.cms                       # -> document.pdf
 kzsigner info -k key.p12
+
+kzsigner sign contract.pdf -k key.p12 --pdf             # -> contract-signed.pdf, signed inside
+kzsigner sign contract-signed.pdf -k key2.p12 --pdf     # a second signature inside the PDF
+kzsigner sign contract.docx -k key.p12 --card --qr      # -> contract.docx.card.pdf
+kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to the card
+kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
+kzsigner extract contract.docx.card.pdf                 # -> contract.docx, from inside the card
+kzsigner verify --qr scans.txt --data contract.docx     # signatures read back from QR codes
 ```
+
+A card's language is `--lang ru` (default), `kk` or `kk/ru`. For `verify --qr`, `scans.txt` holds
+the texts a QR scanner reads from a card's signature pages, one code per line, in any order.
 
 The password comes from `-p`, the `KZSIGNER_PASSWORD` environment variable, or a prompt.
 `--trust CA.cer` adds a trusted CA on top of NCA RK's bundled root and issuing certificates.
@@ -103,6 +127,16 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
   letters (`assets/`).
+* `pdf/`: PDF signatures and document cards, on [lopdf](https://github.com/J-F-Liu/lopdf).
+  `pdf/mod.rs` signs a PDF as an incremental update (ETSI.CAdES.detached, the `ByteRange`
+  covering everything but the signature) and checks every signature in one, reporting changes
+  made after each. `pdf/card.rs` builds and reads document cards after ddc's layout and texts
+  (MIT licence; its Kazakh texts are reused): the card's signatures are detached CAdES with a
+  mime-type attribute, an NCA timestamp, the certificate chain and the OCSP answer kept in
+  `crls` (RFC 5940), as the ddcard specification asks. `pdf/qr.rs` turns a signature into QR
+  codes (ZIP, Base64, JSON parts; [qrcodegen](https://github.com/nayuki/QR-Code-generator)) and
+  back. `pdf/import.rs` shows the document's own pages in the card; `pdf/layout.rs`,
+  `pdf/font.rs` draw the pages in an embedded subset of the bundled Noto Sans (`ttf-parser`).
 * `main.rs`, `output.rs`: the command line, text and JSON reports.
 * `i18n.rs`: the window's Kazakh and Russian texts, one table. The Kazakh was not written by a
   native speaker; corrections are welcome.
@@ -133,12 +167,22 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   built executable. It uses throwaway test keys (`tests/fixtures/keys`, made by the Java
   version's `MkKeys`), a fake local timestamp server, and files and keys made by NCA's own Kalkan
   library (`tests/fixtures/kalkan`).
+* `tests/e2e.rs` also signs PDFs (RSA, GOST 2015, GOST 2004; co-signing; changed files) and makes,
+  co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
+  CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
+  refused. Test PDFs are in `tests/fixtures/pdf`.
 * `tests/gui.rs`: drives the window without a display (egui_kittest): picks a document and key,
-  types the password, signs, verifies the result and saves the document back out.
+  types the password, signs, verifies the result and saves the document back out; and signs a
+  PDF inside, checks it and a card, and saves the card's document.
 * `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken), deep nesting and
   broken OIDs give errors, never a crash.
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges
   with NCA's timestamp server (`tests/fixtures/nca-live`, RSA and GOST 2015 TSA signatures).
 
 None of the test keys or certificates is a real NCA certificate. The Kalkan fixtures expire on
-2027-11-01.
+2027-11-01; the OCSP test CA and key on 2046-10-27.
+
+Checked by hand (not in `cargo test`, they need other tools): RSA-signed PDFs pass poppler's
+`pdfsig` and pyHanko (neither knows KZ GOST); cards made by kzsigner open with ddc's
+`ExtractAttachments` (Go, pdfcpu), and a card ddc builds from kzsigner's signatures verifies,
+co-signs and extracts with kzsigner.

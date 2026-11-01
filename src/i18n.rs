@@ -64,7 +64,11 @@ pub fn set(l: Lang) {
 
 /// The text in the current language.
 pub fn tr(en: &'static str) -> &'static str {
-    let l = lang();
+    tr_in(lang(), en)
+}
+
+/// The text in language `l`.
+pub fn tr_in(l: Lang, en: &'static str) -> &'static str {
     if l == Lang::En {
         return en;
     }
@@ -77,9 +81,14 @@ pub fn tr(en: &'static str) -> &'static str {
 
 /// `tr(template)` with each `{}` replaced by the next argument.
 pub fn trf(template: &'static str, args: &[&dyn Display]) -> String {
+    trf_in(lang(), template, args)
+}
+
+/// `trf` in language `l`.
+pub fn trf_in(l: Lang, template: &'static str, args: &[&dyn Display]) -> String {
     let mut out = String::new();
     let mut args = args.iter();
-    let mut parts = tr(template).split("{}");
+    let mut parts = tr_in(l, template).split("{}");
     if let Some(first) = parts.next() {
         out.push_str(first);
     }
@@ -288,6 +297,44 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("OCSP responder certificate is not issued for OCSP signing", "OCSP жауап берушісінің куәлігі OCSP-ге қол қоюға арналмаған", "Сертификат ответчика OCSP выпущен не для подписи ответов OCSP"),
     ("OCSP responder is not trusted ({})", "OCSP жауап берушісі сенімді емес ({})", "Ответчик OCSP не доверенный ({})"),
     ("OCSP response signature is invalid", "OCSP жауабының қолтаңбасы жарамсыз", "Подпись ответа OCSP недействительна"),
+    ("The document was not compared with the signature: give the signed PDF or the original document to check it.", "Құжат қолтаңбамен салыстырылмады: тексеру үшін қол қойылған PDF файлын немесе түпнұсқа құжатты беріңіз.", "Документ не сверен с подписью: для проверки укажите подписанный PDF или исходный документ."),
+    ("Only the signature was checked, not the document: it signs a document whose {} hash is {}.", "Тек қолтаңба тексерілді, құжат емес: ол {} хэші {} болатын құжатқа қойылған.", "Проверена только подпись, а не документ: она поставлена под документом, {}-хэш которого {}."),
+    ("Signature file (.cms)", "Қолтаңба файлы (.cms)", "Файл подписи (.cms)"),
+    ("Inside the PDF (opens in any PDF viewer; PDF documents only)", "PDF ішінде (кез келген PDF бағдарламасында ашылады; тек PDF құжаттары үшін)", "Внутри PDF (открывается в любой программе для PDF; только для PDF-документов)"),
+    ("Document card (a PDF with the document, its signatures and their details)", "Электрондық құжат карточкасы (құжат, оның қолтаңбалары және олар туралы мәліметтер бар PDF)", "Карточка электронного документа (PDF с документом, его подписями и сведениями о них)"),
+    ("Print the signatures as QR codes too", "Қолтаңбаларды QR кодтар түрінде де басу", "Также напечатать подписи в виде QR-кодов"),
+    ("Card language:", "Карточка тілі:", "Язык карточки:"),
+    ("Add NCA timestamp and revocation answer (a card always has them; needs internet)", "ҰКО уақыт белгісі мен кері қайтарып алу туралы жауапты қосу (карточкада олар әрқашан болады; интернет қажет)", "Добавить метку времени и ответ о статусе сертификата НУЦ (в карточке они есть всегда; нужен интернет)"),
+    ("Signed file (.cms, signed PDF or document card)", "Қол қойылған файл (.cms, қол қойылған PDF немесе құжат карточкасы)", "Подписанный файл (.cms, подписанный PDF или карточка документа)"),
+    ("Your signature will be added to this document card.", "Сіздің қолтаңбаңыз осы құжат карточкасына қосылады.", "Ваша подпись будет добавлена в эту карточку документа."),
+    ("Your signature can be added inside this PDF.", "Сіздің қолтаңбаңызды осы PDF ішіне қосуға болады.", "Вашу подпись можно добавить внутрь этого PDF."),
+    ("Type", "Түрі", "Тип"),
+    ("Covers", "Қамтиды", "Охватывает"),
+    ("Document card. Document inside: {}, {} bytes, SHA-256 {}", "Құжат карточкасы. Ішіндегі құжат: {}, {} байт, SHA-256 {}", "Карточка документа. Документ внутри: {}, {} байт, SHA-256 {}"),
+    ("Signed PDF: {} bytes, SHA-256 {}", "Қол қойылған PDF: {} байт, SHA-256 {}", "Подписанный PDF: {} байт, SHA-256 {}"),
+    ("No OCSP answer could be embedded in the signature (the certificate's issuer is not a trusted NCA RK certificate); the card does not fully meet its specification.", "Қолтаңбаға OCSP жауабын енгізу мүмкін болмады (сертификатты берген ҰКО-ның сенімді сертификаты емес); карточка өз спецификациясына толық сәйкес келмейді.", "Не удалось вложить в подпись ответ OCSP (издатель сертификата не является доверенным сертификатом НУЦ РК); карточка не полностью соответствует спецификации."),
+    ("A card signature must hold exactly one signer.", "Карточкадағы қолтаңбада бір ғана қол қоюшы болуы керек.", "Подпись в карточке должна содержать ровно одного подписанта."),
+    ("The signature contains the document; a card's signatures should be detached.", "Қолтаңбаның ішінде құжат бар; карточканың қолтаңбалары бөлек (detached) болуы керек.", "Подпись содержит документ; подписи в карточке должны быть открепленными."),
+    ("The kept OCSP answer is older than the signature's timestamp.", "Сақталған OCSP жауабы қолтаңбаның уақыт белгісінен ескі.", "Сохраненный ответ OCSP старше метки времени подписи."),
+    ("The signature carries no OCSP answer, which the card specification asks for.", "Қолтаңбада карточка спецификациясы талап ететін OCSP жауабы жоқ.", "В подписи нет ответа OCSP, которого требует спецификация карточки."),
+    ("The signature has no timestamp, which the card specification requires.", "Қолтаңбада карточка спецификациясы талап ететін уақыт белгісі жоқ.", "В подписи нет метки времени, которую требует спецификация карточки."),
+    ("The certificate is not usable for signing: {}", "Сертификатты қол қою үшін пайдалану мүмкін емес: {}", "Сертификат нельзя использовать для подписи: {}"),
+    ("No OCSP answer could be embedded in the signature ({}); the card does not fully meet its specification.", "Қолтаңбаға OCSP жауабын енгізу мүмкін болмады ({}); карточка өз спецификациясына толық сәйкес келмейді.", "Не удалось вложить в подпись ответ OCSP ({}); карточка не полностью соответствует спецификации."),
+    ("Signature {} is not valid, so no card was made: {}", "{} қолтаңбасы жарамсыз, сондықтан карточка жасалмады: {}", "Подпись {} недействительна, поэтому карточка не создана: {}"),
+    ("Signature in the document card ({})", "Құжат карточкасындағы қолтаңба ({})", "Подпись в карточке документа ({})"),
+    ("{} (answer kept in the signature)", "{} (жауап қолтаңбада сақталған)", "{} (ответ сохранен в подписи)"),
+    ("This PDF is encrypted (password-protected or with restrictions); kzsigner cannot sign or check it.", "Бұл PDF шифрланған (құпиясөзбен немесе шектеулермен); kzsigner оған қол қоя да, оны тексере де алмайды.", "Этот PDF зашифрован (защищен паролем или ограничениями); kzsigner не может его подписать или проверить."),
+    ("This PDF has no pages.", "Бұл PDF-те беттер жоқ.", "В этом PDF нет страниц."),
+    ("This PDF has no signatures.", "Бұл PDF-те қолтаңбалар жоқ.", "В этом PDF нет подписей."),
+    ("The signature field has no signature value.", "Қолтаңба өрісінде қолтаңба мәні жоқ.", "В поле подписи нет значения подписи."),
+    ("The signature's byte range is damaged.", "Қолтаңбаның байт ауқымы (ByteRange) бүлінген.", "Диапазон байтов (ByteRange) подписи поврежден."),
+    ("A PDF signature must hold exactly one signer.", "PDF қолтаңбасында бір ғана қол қоюшы болуы керек.", "Подпись PDF должна содержать ровно одного подписанта."),
+    ("The signature leaves out more of the file than its own value.", "Қолтаңба файлдың өз мәнінен басқа бөліктерін де қамтымайды.", "Подпись не охватывает часть файла помимо собственного значения."),
+    ("Covers the whole file.", "Бүкіл файлды қамтиды.", "Охватывает весь файл."),
+    ("This PDF could not be read: {}", "Бұл PDF оқылмады: {}", "Не удалось прочитать этот PDF: {}"),
+    ("PDF signature \"{}\"", "PDF қолтаңбасы «{}»", "Подпись PDF «{}»"),
+    ("Unsupported PDF signature type: {}", "PDF қолтаңбасының қолдау көрсетілмейтін түрі: {}", "Неподдерживаемый тип подписи PDF: {}"),
+    ("Covers the file as it was when signed; it was updated {} time(s) after that (for example by later signatures).", "Файлды қол қойылған кездегі күйінде қамтиды; содан кейін ол {} рет жаңартылды (мысалы, кейінгі қолтаңбалармен).", "Охватывает файл в том виде, в каком он был при подписании; после этого он обновлялся {} раз(а) (например, последующими подписями)."),
 ];
 
 #[cfg(test)]
@@ -299,8 +346,13 @@ mod tests {
     fn every_text_is_translated() {
         let mut missing = Vec::new();
         let mut found = 0;
-        for e in std::fs::read_dir("src").unwrap() {
-            let p = e.unwrap().path();
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for dir in ["src", "src/pdf"] {
+            for e in std::fs::read_dir(dir).unwrap() {
+                files.push(e.unwrap().path());
+            }
+        }
+        for p in files {
             if p.extension().is_none_or(|x| x != "rs") || p.ends_with("i18n.rs") {
                 continue;
             }
@@ -333,7 +385,7 @@ mod tests {
     /// The string literals passed to tr( and trf( in Rust source.
     fn literals(src: &str) -> Vec<String> {
         let mut out = Vec::new();
-        for start in ["tr(", "trf("] {
+        for start in ["tr(", "trf(", "tr_in(", "trf_in("] {
             let mut rest = src;
             while let Some(i) = rest.find(start) {
                 let before = rest[..i].chars().next_back();
@@ -341,7 +393,14 @@ mod tests {
                 if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     continue;
                 }
-                let r = rest.trim_start();
+                let mut r = rest.trim_start();
+                // tr_in(lang, "...")
+                if start.ends_with("_in(") {
+                    match r.split_once(',') {
+                        Some((_, after)) => r = after.trim_start(),
+                        None => continue,
+                    }
+                }
                 let Some(r) = r.strip_prefix('"') else {
                     continue;
                 };

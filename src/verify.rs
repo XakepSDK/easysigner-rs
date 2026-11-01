@@ -87,6 +87,19 @@ pub fn verify(
     trust: &TrustStore,
     ocsp_url: Option<&str>,
 ) -> Result<VerifyReport> {
+    verify_with(raw, detached_original, trust, ocsp_url, false)
+}
+
+/// [`verify`]; `signature_only`: without the document, still check each signature over its
+/// signed attributes (that the signer signed a document with that hash). The report is then
+/// never valid, since the document itself was not compared.
+pub fn verify_with(
+    raw: &[u8],
+    detached_original: Option<&[u8]>,
+    trust: &TrustStore,
+    ocsp_url: Option<&str>,
+    signature_only: bool,
+) -> Result<VerifyReport> {
     let d = SignedData::parse(raw)?;
     let mut rep = VerifyReport::default();
     let content: Option<Vec<u8>> = if let Some(c) = &d.content {
@@ -95,6 +108,12 @@ pub fn verify(
     } else if let Some(o) = detached_original {
         rep.detached_provided = true;
         Some(o.to_vec())
+    } else if signature_only {
+        rep.warnings.push(
+            tr("The document was not compared with the signature: give the signed PDF or the original document to check it.")
+                .into(),
+        );
+        None
     } else {
         rep.warnings.push(
             tr("This is a detached signature (the document is not inside the .cms). Provide the original file to check the signatures against it.")
@@ -107,8 +126,14 @@ pub fn verify(
         rep.content_sha256 = Some(crate::hex(&gost::sha256(c)));
     }
     for si in &d.signers {
-        rep.signers
-            .push(check_one(&d, si, content.as_deref(), trust, ocsp_url));
+        rep.signers.push(check_one(
+            &d,
+            si,
+            content.as_deref(),
+            trust,
+            ocsp_url,
+            signature_only,
+        ));
     }
     // by time: trusted timestamp if any, else the signer's clock; unknown times last
     rep.signers
@@ -119,7 +144,7 @@ pub fn verify(
     for (k, s) in rep.signers.iter_mut().enumerate() {
         s.index = k + 1;
     }
-    rep.valid = !rep.signers.is_empty() && rep.signers.iter().all(|s| s.valid);
+    rep.valid = !rep.signers.is_empty() && rep.signers.iter().all(|s| s.valid) && content.is_some();
     if rep.signers.is_empty() {
         rep.warnings
             .push(tr("The file contains no signatures.").into());
@@ -133,6 +158,7 @@ fn check_one(
     content: Option<&[u8]>,
     trust: &TrustStore,
     ocsp_url: Option<&str>,
+    signature_only: bool,
 ) -> SignerReport {
     let mut sr = SignerReport {
         signing_time: si.signing_time(),
@@ -147,6 +173,7 @@ fn check_one(
     cert::describe(&mut sr, &c);
     match content {
         Some(content) => check_signature(&mut sr, si, &c, content, &d.content_type),
+        None if signature_only => check_signed_attributes(&mut sr, si, &c),
         None => {
             sr.signature_error =
                 Some(tr("Not checked: original document not provided (detached signature).").into())
@@ -190,6 +217,38 @@ fn check_one(
     sr.valid =
         sr.signature_ok && sr.chain_ok && valid_at && sr.timestamp_ok != Some(false) && ocsp_good;
     sr
+}
+
+/// Checks the signature over the signed attributes alone, and reports the signed hash.
+fn check_signed_attributes(sr: &mut SignerReport, si: &SignerInfo, c: &Cert) {
+    let md = si
+        .signed_attr(cms::ATTR_MESSAGE_DIGEST)
+        .and_then(|v| der::parse(&v).ok()?.octets().ok());
+    let ok = si.signed_attrs.is_some()
+        && c.public_key()
+            .and_then(|k| {
+                k.verify(
+                    &si.sig_alg,
+                    Some(&si.digest_alg),
+                    &si.signed_bytes(&[]),
+                    &si.signature,
+                )
+            })
+            .unwrap_or(false)
+        && signing_certificate_matches(si, c).unwrap_or(false);
+    match md {
+        Some(md) if ok => {
+            sr.signature_ok = true;
+            sr.warnings.push(trf(
+                "Only the signature was checked, not the document: it signs a document whose {} hash is {}.",
+                &[&cert::digest_label(Some(&si.digest_alg)), &crate::hex(&md)],
+            ));
+        }
+        _ => sr.signature_error = Some(
+            tr("Signature does not match the document (the document or signature was changed).")
+                .into(),
+        ),
+    }
 }
 
 fn check_signature(

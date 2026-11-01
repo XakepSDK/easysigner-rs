@@ -20,7 +20,21 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
             "RESULT: NOT VALID (see details below)".into()
         }
     );
-    if r.has_content {
+    if let Some(name) = &r.card_document {
+        let _ = writeln!(
+            o,
+            "Document: {name} (inside the document card), {} bytes, SHA-256 {}",
+            r.content_size,
+            r.content_sha256.as_deref().unwrap_or("")
+        );
+    } else if r.is_pdf {
+        let _ = writeln!(
+            o,
+            "Document: PDF, {} bytes, SHA-256 {}",
+            r.content_size,
+            r.content_sha256.as_deref().unwrap_or("")
+        );
+    } else if r.has_content {
         let _ = writeln!(
             o,
             "Document: embedded, {} bytes, SHA-256 {}",
@@ -48,6 +62,12 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         let line = |o: &mut String, k: &str, v: &str| {
             let _ = writeln!(o, "  {:<14} {v}", format!("{k}:"));
         };
+        if let Some(k) = &s.kind {
+            line(&mut o, "Type", k);
+        }
+        for n in &s.notes {
+            line(&mut o, "Covers", n);
+        }
         let given = s.get("G").map(|g| format!(" {g}")).unwrap_or_default();
         line(
             &mut o,
@@ -174,6 +194,8 @@ pub fn json(r: &VerifyReport) -> String {
         ("contentSha256", s(&r.content_sha256)),
         ("warnings", strs(&r.warnings)),
         ("signers", J::List(r.signers.iter().map(signer).collect())),
+        ("isPdf", J::Bool(r.is_pdf)),
+        ("cardDocument", s(&r.card_document)),
     ]);
     let mut out = String::new();
     write(&mut out, &o, "");
@@ -214,6 +236,8 @@ fn signer(x: &SignerReport) -> J {
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
         ("ocspStatus", s(&x.ocsp_status)),
         ("warnings", strs(&x.warnings)),
+        ("kind", s(&x.kind)),
+        ("notes", strs(&x.notes)),
         (
             "certificate",
             x.cert_der

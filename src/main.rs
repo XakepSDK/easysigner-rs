@@ -15,23 +15,26 @@ use kzsigner::{Engine, Error, output};
 
 const HELP: &str = "\
 Usage: kzsigner [-hV] [COMMAND | FILE]
-Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer.
+Sign and verify .cms files, signed PDFs and document cards with Kazakhstan NCA RK
+keys, locally, without NCALayer.
 Run without arguments, or with just a FILE, to open the desktop window.
 Network is used only with --tsa (NCA timestamp) and --ocsp (NCA revocation check).
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
   gui      Open the desktop window (default).
-  sign     Sign FILE into FILE.cms.
-  verify   Check every signature in a .cms. Exit code 0 only if all are valid.
-  extract  Write out the document embedded in a .cms.
+  sign     Sign FILE into FILE.cms (or inside a PDF, or into a document card).
+  verify   Check every signature in a .cms, signed PDF or document card.
+           Exit code 0 only if all are valid.
+  extract  Write out the document embedded in a .cms or document card.
   info     Show the certificate inside a key file.
 Run 'kzsigner COMMAND --help' for a command's options.
 ";
 
 const HELP_SIGN: &str = "\
-Usage: kzsigner sign [-hV] [--detached] -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS]
-                     [-o=OUT] [--tsa[=URL]] [--data=ORIGINAL] [--trust=CA.cer]... FILE
+Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG] [--ocsp[=URL]]]
+                     -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
+                     [--data=ORIGINAL] [--trust=CA.cer]... FILE
 Sign FILE into FILE.cms.
 If FILE is already a .cms, your signature is ADDED to it (co-signing).
       FILE                 Document, or .cms to co-sign.
@@ -40,26 +43,43 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --alias=ALIAS        Key alias, if the file holds several keys.
   -o, --out=OUT            Output file.
       --detached           Do not embed the document in the .cms.
+      --pdf                Sign a PDF inside the PDF (PAdES), into FILE-signed.pdf; it
+                           still opens in any PDF viewer. A signed PDF gets one more.
+      --card               Make a document card (карточка электронного документа, the
+                           ddcard format SIGEX uses), FILE.card.pdf: a PDF anyone can
+                           open, with the document's pages, a page per signature, and the
+                           document and its .cms signatures attached. Signing a card adds
+                           your signature to it. Always timestamped (NCA TSA by default).
+      --qr                 With --card: also print each signature as QR codes.
+      --lang=LANG          With --card: ru (default), kk, or kk/ru.
+                           Adding a signature to a card keeps its language and QR codes.
+      --ocsp[=URL]         With --card: OCSP service for the answer kept in the signature
+                           (default http://ocsp.pki.gov.kz).
       --tsa[=URL]          Add a timestamp (default http://tsp.pki.gov.kz:80).
       --data=ORIGINAL      Original document, to co-sign a detached .cms.
       --trust=CA.cer       Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
 
 const HELP_VERIFY: &str = "\
-Usage: kzsigner verify [-hV] [--json] [--data=ORIGINAL] [--ocsp[=URL]] [--trust=CA.cer]... FILE.cms
-Check every signature in a .cms. Exit code 0 only if all are valid.
-      FILE.cms
-      --data=ORIGINAL   Original document, for a detached .cms.
+Usage: kzsigner verify [-hV] [--json] [--qr] [--data=ORIGINAL] [--ocsp[=URL]] [--trust=CA.cer]... FILE
+Check every signature in a .cms, a signed PDF or a document card. Exit code 0 only if all
+are valid. A card's signatures are checked against the document inside it, and without
+--ocsp the OCSP answers kept in them are reported.
+      FILE              .cms, signed PDF, or document card.
+      --data=ORIGINAL   Original document, for a detached .cms or with --qr.
+      --qr              FILE is the text of scanned QR codes from a card's signature
+                        pages, one code per line, in any order; needs --data.
       --ocsp[=URL]      Check revocation online (default http://ocsp.pki.gov.kz).
       --json            Machine-readable output.
       --trust=CA.cer    Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
 
 const HELP_EXTRACT: &str = "\
-Usage: kzsigner extract [-hV] [-o=OUT] FILE.cms
-Write out the document embedded in a .cms.
-      FILE.cms
-  -o, --out=OUT   Output file (default: FILE without .cms).
+Usage: kzsigner extract [-hV] [-o=OUT] FILE
+Write out the document embedded in a .cms, or the original document in a document card.
+      FILE            .cms or document card.
+  -o, --out=OUT   Output file (default: FILE without .cms; for a card, the document's own
+                  name next to the card).
 ";
 
 const HELP_INFO: &str = "\
@@ -119,6 +139,10 @@ struct Opts {
     out: Option<PathBuf>,
     data: Option<PathBuf>,
     detached: bool,
+    pdf: bool,
+    card: bool,
+    qr: bool,
+    lang: Option<String>,
     json: bool,
     tsa: Option<String>,
     ocsp: Option<String>,
@@ -154,11 +178,15 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             }
             Long("data") if allowed(&["sign", "verify"]) => o.data = Some(p.value()?.into()),
             Long("detached") if allowed(&["sign"]) => o.detached = true,
+            Long("pdf") if allowed(&["sign"]) => o.pdf = true,
+            Long("card") if allowed(&["sign"]) => o.card = true,
+            Long("qr") if allowed(&["sign", "verify"]) => o.qr = true,
+            Long("lang") if allowed(&["sign"]) => o.lang = Some(p.value()?.string()?),
             Long("json") if allowed(&["verify"]) => o.json = true,
             Long("tsa") if allowed(&["sign"]) => {
                 o.tsa = Some(optional_url(&mut p, kzsigner::DEFAULT_TSA_URL)?)
             }
-            Long("ocsp") if allowed(&["verify"]) => {
+            Long("ocsp") if allowed(&["verify", "sign"]) => {
                 o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?)
             }
             Value(v) if o.file.is_none() && allowed(&["sign", "verify", "extract", "gui"]) => {
@@ -232,19 +260,62 @@ fn sign(o: Opts) -> R<u8> {
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
+    if o.qr && !o.card {
+        return Err(Fail::Usage("--qr needs --card".into(), HELP_SIGN));
+    }
+    if [o.detached, o.pdf, o.card].iter().filter(|x| **x).count() > 1 {
+        return Err(Fail::Usage(
+            "choose one of --detached, --pdf and --card".into(),
+            HELP_SIGN,
+        ));
+    }
+    let lang = match o.lang.as_deref() {
+        None => None,
+        Some(l) => Some(kzsigner::pdf::card::CardLang::parse(l).ok_or_else(|| {
+            Fail::Usage(
+                format!("unknown --lang {l} (use ru, kk or kk/ru)"),
+                HELP_SIGN,
+            )
+        })?),
+    };
     let input = read(&file)?;
+    if o.pdf && !e.is_pdf(&input) {
+        return Err(Fail::User(format!("{} is not a PDF file.", file.display())));
+    }
     let original = o.data.as_deref().map(read).transpose()?;
-    let r = e.sign(
-        &input,
-        &k,
-        o.detached,
-        o.tsa.as_deref(),
-        true,
-        original.as_deref(),
-    )?;
+    let r = if o.card {
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into());
+        e.sign_card(
+            &input,
+            &name,
+            &k,
+            o.tsa.as_deref().unwrap_or(kzsigner::DEFAULT_TSA_URL),
+            o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
+            lang,
+            o.qr.then_some(true),
+        )?
+    } else if o.pdf {
+        e.sign_pdf(&input, &k, o.tsa.as_deref())?
+    } else {
+        e.sign(
+            &input,
+            &k,
+            o.detached,
+            o.tsa.as_deref(),
+            true,
+            original.as_deref(),
+        )?
+    };
     let out = o.out.clone().unwrap_or_else(|| {
         if r.cosigned {
             file.clone()
+        } else if o.card {
+            PathBuf::from(format!("{}.card.pdf", file.display()))
+        } else if o.pdf {
+            signed_pdf_name(&file)
         } else {
             PathBuf::from(format!("{}.cms", file.display()))
         }
@@ -286,12 +357,30 @@ fn sign(o: Opts) -> R<u8> {
     Ok(0)
 }
 
+/// document.pdf -> document-signed.pdf
+fn signed_pdf_name(file: &Path) -> PathBuf {
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    file.with_file_name(format!("{stem}-signed.pdf"))
+}
+
 fn verify(o: Opts) -> R<u8> {
-    let file = need(&o.file, "parameter: 'FILE.cms'", HELP_VERIFY)?;
+    let file = need(&o.file, "parameter: 'FILE'", HELP_VERIFY)?;
     let e = engine(&o)?;
     let cms = read(file)?;
     let original = o.data.as_deref().map(read).transpose()?;
-    let r = e.verify(&cms, original.as_deref(), o.ocsp.as_deref())?;
+    let r = if o.qr {
+        let doc = need(
+            &original,
+            "option with --qr: '--data=ORIGINAL'",
+            HELP_VERIFY,
+        )?;
+        e.verify_qr(&String::from_utf8_lossy(&cms), doc, o.ocsp.as_deref())?
+    } else {
+        e.verify(&cms, original.as_deref(), o.ocsp.as_deref())?
+    };
     if o.json {
         println!("{}", output::json(&r));
     } else {
@@ -302,10 +391,31 @@ fn verify(o: Opts) -> R<u8> {
 }
 
 fn extract(o: Opts) -> R<u8> {
-    let file = need(&o.file, "parameter: 'FILE.cms'", HELP_EXTRACT)?;
-    let content = Engine::new(vec![]).extract(&read(file)?)?;
+    let file = need(&o.file, "parameter: 'FILE'", HELP_EXTRACT)?;
+    let data = read(file)?;
+    let e = Engine::new(vec![]);
+    let card = e.card_original(&data);
+    let content = match &card {
+        Some((_, c)) => c.clone(),
+        None => e.extract(&data)?,
+    };
     let out = match &o.out {
         Some(p) => p.clone(),
+        None if card.is_some() => {
+            let name = card.as_ref().map(|c| c.0.as_str()).unwrap_or_default();
+            // only the name, never a path from inside the card
+            let name = name
+                .rsplit(['/', '\\'])
+                .next()
+                .map(str::to_string)
+                .filter(|n| !n.is_empty() && n != "." && n != "..")
+                .unwrap_or_else(|| "document".into());
+            let mut p = file.with_file_name(name);
+            if p.exists() {
+                p = PathBuf::from(format!("{}.extracted", p.display()));
+            }
+            p
+        }
         None => {
             let n = file.to_string_lossy();
             let mut p = if n.to_lowercase().ends_with(".cms") {

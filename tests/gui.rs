@@ -31,6 +31,9 @@ impl Dialogs for Scripted {
     }
 }
 
+/// The window's language is global: one test at a time.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 fn settle(h: &mut Harness<'_, App>) {
     for _ in 0..400 {
         h.run_steps(2);
@@ -45,6 +48,7 @@ fn settle(h: &mut Harness<'_, App>) {
 
 #[test]
 fn sign_then_verify_in_the_window() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kalkan");
     let dir = std::env::temp_dir().join(format!("kzsigner-gui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -158,5 +162,105 @@ fn sign_then_verify_in_the_window() {
     );
     kzsigner::i18n::set(kzsigner::i18n::Lang::En);
     println!("GUI OK");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pdf_signing_and_cards_in_the_window() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    kzsigner::i18n::set(kzsigner::i18n::Lang::En);
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let dir = std::env::temp_dir().join(format!("kzsigner-gui-pdf-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("plain.pdf");
+    std::fs::copy(fx.join("pdf/plain.pdf"), &pdf).unwrap();
+    let ca = Cert::parse_any(&std::fs::read(fx.join("kalkan/ca_rsa.cer")).unwrap()).unwrap();
+    let key_file = fx.join("kalkan/alice_rsa.p12");
+
+    // a card to check later, made without the network (no timestamp)
+    let key = kzsigner::p12::open(&std::fs::read(&key_file).unwrap(), "Qwerty12", None).unwrap();
+    let engine = kzsigner::Engine::new(vec![ca.clone()]);
+    let doc = std::fs::read(&pdf).unwrap();
+    let cms = engine
+        .sign(&doc, &key, true, None, false, None)
+        .unwrap()
+        .cms;
+    let card = kzsigner::pdf::card::build(
+        &kzsigner::pdf::card::CardInput {
+            doc: &doc,
+            file_name: "plain.pdf",
+            signatures: vec![("plain.pdf.1.cms".into(), cms)],
+            lang: kzsigner::pdf::card::CardLang::Ru,
+            qr: true,
+        },
+        &kzsigner::trust::TrustStore::new(vec![ca.clone()]),
+    )
+    .unwrap();
+    let card_file = dir.join("plain.pdf.card.pdf");
+    std::fs::write(&card_file, card).unwrap();
+
+    let dialogs = Scripted::default();
+    let app = App::new(engine, Box::new(dialogs.clone()));
+    let mut h = Harness::builder()
+        .with_size([760.0, 760.0])
+        .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+    h.run();
+    dialogs.next(pdf.clone());
+    h.get_all_by_label("Browse…").next().unwrap().click();
+    settle(&mut h);
+    let key_field = h.get_by_label("Key file (.p12), e.g. RSA_… or GOSTKNCA_…");
+    key_field.focus();
+    key_field.type_text(&key_file.display().to_string());
+    h.run();
+    h.key_press(egui::Key::Enter);
+    let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
+    pw.focus();
+    pw.type_text("Qwerty12");
+    h.run();
+    h.key_press(egui::Key::Enter);
+    settle(&mut h);
+
+    // sign inside the PDF
+    h.get_by_label("Inside the PDF (opens in any PDF viewer; PDF documents only)")
+        .click();
+    h.run();
+    let out = dir.join("plain-signed.pdf");
+    dialogs.next(out.clone());
+    h.get_by_label("Sign…").click();
+    settle(&mut h);
+    let msg = h.state().message.clone().expect("a message after signing");
+    assert!(msg.0.starts_with("Signed."), "{msg:?}");
+    assert!(std::fs::read(&out).unwrap().starts_with(&doc));
+    h.get_by_label("OK").click();
+    h.run();
+
+    // check the signed PDF, then the card, and save the card's document
+    h.get_by_label("Verify / Extract").click();
+    h.run();
+    dialogs.next(out.clone());
+    h.get_by_label("Browse…").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label_contains("Valid. Signatures: 1, all check out.")
+            .is_some()
+    );
+    assert!(h.query_by_label_contains("Signed PDF").is_some());
+    dialogs.next(card_file.clone());
+    h.get_by_label("Browse…").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label_contains("Valid. Signatures: 1, all check out.")
+            .is_some()
+    );
+    assert!(
+        h.query_by_label_contains("Document card. Document inside: plain.pdf")
+            .is_some()
+    );
+    let back = dir.join("back.pdf");
+    dialogs.next(back.clone());
+    h.get_by_label("Save original document…").click();
+    settle(&mut h);
+    assert_eq!(std::fs::read(&back).unwrap(), doc);
     let _ = std::fs::remove_dir_all(&dir);
 }
