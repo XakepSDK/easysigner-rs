@@ -6,8 +6,8 @@ checks and window, in one small executable with no runtime.
 
 | | Java native (GraalVM) | Rust |
 |---|---|---|
-| Linux | 17 MB download (executable + `lib/`) | **5.5 MB** single file |
-| Windows | 20 MB download, 51 MB `.exe` + `lib/` | **6.7 MB** single `.exe` |
+| Linux | 17 MB download (executable + `lib/`) | **5.5 MB** single file (1.7 MB tar.xz) |
+| Windows | 20 MB download, 51 MB `.exe` + `lib/` | **6.4 MB** single `.exe` (2.7 MB zip) |
 | Without the window (`--no-default-features`) | | 0.8 MB |
 
 It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256),
