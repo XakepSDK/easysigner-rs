@@ -89,7 +89,7 @@ jobs:
             (cd "$D" && sha256sum kzsigner) > "dist/$D.sha256"
             tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -cf - "$D" | xz -9 -T1 > "dist/$D.tar.xz"
           fi
-          (cd dist && sha256sum *.zip *.tar.xz 2>/dev/null) >> "dist/$D.sha256"
+          (cd dist && sha256sum "$D".zip "$D".tar.xz 2>/dev/null || true) >> "dist/$D.sha256"
           cat "dist/$D.sha256"
           ls -la dist "$D"
       - uses: actions/upload-artifact@v4
