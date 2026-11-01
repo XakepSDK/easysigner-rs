@@ -13,6 +13,8 @@ use crate::{Error, Result};
 
 /// The version and level the specification recommends.
 const VERSION: u8 = 25;
+/// The largest signature accepted from QR codes.
+const MAX_CMS: u64 = 4 << 20;
 const ECC: QrCodeEcc = QrCodeEcc::Medium;
 
 fn encode(text: &str) -> Option<QrCode> {
@@ -134,9 +136,17 @@ pub fn assemble(text: &str) -> Result<Vec<(u64, Vec<u8>)>> {
         let mut f = zip
             .by_index(0)
             .map_err(|e| bad(format!("signature {id}: empty ZIP ({e})")))?;
+        // a signature is a few KB; a ZIP that unpacks to more is not one (and could be a bomb)
         let mut cms = Vec::new();
-        f.read_to_end(&mut cms)
+        (&mut f)
+            .take(MAX_CMS + 1)
+            .read_to_end(&mut cms)
             .map_err(|e| bad(format!("signature {id}: damaged ZIP ({e})")))?;
+        if cms.len() as u64 > MAX_CMS {
+            return Err(bad(format!(
+                "signature {id}: unpacks to more than a signature can be"
+            )));
+        }
         out.push((id, cms));
     }
     Ok(out)

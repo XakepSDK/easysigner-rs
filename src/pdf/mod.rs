@@ -56,6 +56,11 @@ pub fn sign(
     trust: &TrustStore,
 ) -> Result<SignResult> {
     let doc = open(input)?;
+    if docmdp_level(&doc) == Some(1) {
+        return Err(Error::new(tr(
+            "This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.",
+        )));
+    }
     let existing = signature_fields(&doc);
     let mut r = SignResult {
         warnings: cert::key_warnings(&key.cert),
@@ -246,6 +251,32 @@ pub fn sign(
     r.cms = data;
     r.signer_count = existing.len() + 1;
     Ok(r)
+}
+
+/// The certification signature's permission level (/Perms /DocMDP: 1 = no changes, 2 = forms
+/// and signatures, 3 = also annotations), if the PDF is certified.
+fn docmdp_level(doc: &Document) -> Option<i64> {
+    let perms = deref(doc, doc.catalog().ok()?.get(b"Perms").ok()?)?
+        .as_dict()
+        .ok()?;
+    let sig = deref(doc, perms.get(b"DocMDP").ok()?)?.as_dict().ok()?;
+    let refs = deref(doc, sig.get(b"Reference").ok()?)?.as_array().ok()?;
+    for r in refs {
+        let Some(r) = deref(doc, r).and_then(|r| r.as_dict().ok()) else {
+            continue;
+        };
+        if r.get(b"TransformMethod").and_then(Object::as_name).ok() == Some(b"DocMDP") {
+            return Some(
+                r.get(b"TransformParams")
+                    .ok()
+                    .and_then(|p| deref(doc, p))
+                    .and_then(|p| p.as_dict().ok())
+                    .and_then(|p| p.get(b"P").and_then(Object::as_i64).ok())
+                    .unwrap_or(2),
+            );
+        }
+    }
+    Some(2)
 }
 
 fn signer_name(c: &cert::Cert) -> String {
@@ -453,7 +484,7 @@ pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result
         ..Default::default()
     };
     for f in signature_fields(&doc) {
-        let mut s = check_field(data, &f, trust, ocsp_url);
+        let mut s = check_field(data, &doc, &f, trust, ocsp_url);
         s.kind = Some(trf("PDF signature \"{}\"", &[&text_from(&f.name)]));
         if s.signing_time.is_none() {
             s.signing_time =
@@ -483,6 +514,7 @@ fn failed(m: &str) -> SignerReport {
 
 fn check_field(
     data: &[u8],
+    doc: &Document,
     f: &SigField,
     trust: &TrustStore,
     ocsp_url: Option<&str>,
@@ -543,14 +575,164 @@ fn check_field(
     let end = r[2] + r[3];
     if end == data.len() {
         s.notes.push(tr("Covers the whole file.").into());
-    } else {
-        let later = revisions(data).iter().filter(|&&e| e > end).count().max(1);
+        return s;
+    }
+    let later = revisions(&data[end..]).len().max(1);
+    let changes = match Document::load_mem(&data[..end]) {
+        Ok(old) => changes_after(&old, doc),
+        Err(_) => vec![tr("the signed part of the file cannot be read as a PDF").into()],
+    };
+    if changes.is_empty() {
         s.notes.push(trf(
-            "Covers the file as it was when signed; it was updated {} time(s) after that (for example by later signatures).",
+            "Covers the file as it was when signed; it was updated {} time(s) after that, only to add signatures.",
             &[&later],
+        ));
+    } else {
+        // an incremental update can change what the pages show while the signature over the
+        // earlier bytes stays intact: then the signature does not vouch for the document
+        s.valid = false;
+        s.signature_ok = false;
+        s.signature_error = Some(trf(
+            "The PDF was changed after this signature, not only by adding signatures, so what it shows now is not what was signed: {}",
+            &[&changes.join("; ")],
         ));
     }
     s
+}
+
+/// What a later revision changed beyond adding signatures (ETSI EN 319 142 / ISO 32000 allow
+/// signature fields and widgets, the AcroForm entries for them, the DSS, and the document
+/// information). Empty when nothing else changed.
+fn changes_after(old: &Document, new: &Document) -> Vec<String> {
+    let mut out = Vec::new();
+    let root = |d: &Document| d.trailer.get(b"Root").and_then(Object::as_reference).ok();
+    let (Some(old_root), Some(new_root)) = (root(old), root(new)) else {
+        return vec![tr("the document catalog is missing").into()];
+    };
+    if old_root != new_root {
+        return vec![tr("the document catalog was replaced").into()];
+    }
+    let info = old.trailer.get(b"Info").and_then(Object::as_reference).ok();
+    let catalog = old.get_dictionary(old_root).ok();
+    let reference = |k: &[u8]| {
+        catalog
+            .and_then(|c| c.get(k).ok())
+            .and_then(|o| o.as_reference().ok())
+    };
+    let (acroform, metadata) = (reference(b"AcroForm"), reference(b"Metadata"));
+    for (id, now) in &new.objects {
+        let Some(before) = old.objects.get(id) else {
+            continue;
+        };
+        if before == now || Some(*id) == info || Some(*id) == metadata {
+            continue;
+        }
+        let structural = |o: &Object| {
+            o.as_stream()
+                .is_ok_and(|s| s.dict.has_type(b"XRef") || s.dict.has_type(b"ObjStm"))
+        };
+        if structural(before) && structural(now) {
+            continue;
+        }
+        let ok = match (before, now) {
+            (Object::Dictionary(b), Object::Dictionary(n)) if *id == old_root => {
+                dict_change_ok(old, new, b, n, &[b"AcroForm", b"DSS"])
+            }
+            (Object::Dictionary(b), Object::Dictionary(n)) if Some(*id) == acroform => {
+                acroform_ok(old, new, b, n)
+            }
+            (Object::Dictionary(b), Object::Dictionary(n)) if b.has_type(b"Page") => {
+                dict_change_ok(old, new, b, n, &[b"Annots"])
+            }
+            (Object::Array(b), Object::Array(n)) => only_signatures_added(new, b, n),
+            _ => false,
+        };
+        if !ok {
+            let what = match before
+                .as_dict()
+                .ok()
+                .or(before.as_stream().ok().map(|s| &s.dict))
+            {
+                Some(d) if d.has_type(b"Page") => tr("a page"),
+                Some(d) if d.has_type(b"Pages") => tr("the page tree"),
+                Some(d) if d.has_type(b"Annot") || d.has(b"Subtype") && d.has(b"Rect") => {
+                    tr("an annotation")
+                }
+                _ if *id == old_root => tr("the document catalog"),
+                _ => tr("an object"),
+            };
+            out.push(trf("{} (object {}) changed", &[&what, &id.0]));
+        }
+    }
+    out
+}
+
+fn deref_in<'a>(doc: &'a Document, o: &'a Object) -> &'a Object {
+    doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
+}
+
+/// Keys whose values differ (or that one side lacks) are all among `allowed`, and each of those
+/// only gained signatures.
+fn dict_change_ok(
+    old: &Document,
+    new: &Document,
+    b: &Dictionary,
+    n: &Dictionary,
+    allowed: &[&[u8]],
+) -> bool {
+    let keys: HashSet<&Vec<u8>> = b.iter().chain(n.iter()).map(|(k, _)| k).collect();
+    keys.into_iter().all(|k| {
+        let (bv, nv) = (b.get(k).ok(), n.get(k).ok());
+        if bv == nv {
+            return true;
+        }
+        if !allowed.contains(&k.as_slice()) {
+            return false;
+        }
+        match k.as_slice() {
+            b"AcroForm" => {
+                let empty = Dictionary::new();
+                let bd = bv.map(|o| deref_in(old, o)).and_then(|o| o.as_dict().ok());
+                let nd = nv.map(|o| deref_in(new, o)).and_then(|o| o.as_dict().ok());
+                nd.is_some_and(|nd| acroform_ok(old, new, bd.unwrap_or(&empty), nd))
+            }
+            b"Annots" | b"Fields" => {
+                let ba = bv.map(|o| deref_in(old, o)).and_then(|o| o.as_array().ok());
+                let na = nv.map(|o| deref_in(new, o)).and_then(|o| o.as_array().ok());
+                na.is_some_and(|na| only_signatures_added(new, ba.map_or(&[][..], |v| v), na))
+            }
+            // the DSS (validation data) and SigFlags are not shown
+            _ => true,
+        }
+    })
+}
+
+fn acroform_ok(old: &Document, new: &Document, b: &Dictionary, n: &Dictionary) -> bool {
+    dict_change_ok(old, new, b, n, &[b"Fields", b"SigFlags"])
+}
+
+/// `n` is `b` with signature fields or widgets added.
+fn only_signatures_added(new: &Document, b: &[Object], n: &[Object]) -> bool {
+    b.iter().all(|x| n.contains(x))
+        && n.iter()
+            .filter(|x| !b.contains(x))
+            .all(|x| is_signature_item(new, x))
+}
+
+fn is_signature_item(doc: &Document, o: &Object) -> bool {
+    let Ok(d) = deref_in(doc, o).as_dict() else {
+        return false;
+    };
+    let ft_sig = |d: &Dictionary| {
+        d.get(b"FT")
+            .and_then(Object::as_name)
+            .is_ok_and(|n| n == b"Sig")
+    };
+    ft_sig(d)
+        || d.get(b"Parent")
+            .ok()
+            .and_then(|p| deref_in(doc, p).as_dict().ok())
+            .is_some_and(ft_sig)
 }
 
 #[cfg(test)]

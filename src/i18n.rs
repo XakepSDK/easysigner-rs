@@ -334,7 +334,19 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("This PDF could not be read: {}", "Бұл PDF оқылмады: {}", "Не удалось прочитать этот PDF: {}"),
     ("PDF signature \"{}\"", "PDF қолтаңбасы «{}»", "Подпись PDF «{}»"),
     ("Unsupported PDF signature type: {}", "PDF қолтаңбасының қолдау көрсетілмейтін түрі: {}", "Неподдерживаемый тип подписи PDF: {}"),
-    ("Covers the file as it was when signed; it was updated {} time(s) after that (for example by later signatures).", "Файлды қол қойылған кездегі күйінде қамтиды; содан кейін ол {} рет жаңартылды (мысалы, кейінгі қолтаңбалармен).", "Охватывает файл в том виде, в каком он был при подписании; после этого он обновлялся {} раз(а) (например, последующими подписями)."),
+    ("Covers the file as it was when signed; it was updated {} time(s) after that, only to add signatures.", "Файлды қол қойылған кездегі күйінде қамтиды; содан кейін ол {} рет тек қолтаңба қосу үшін жаңартылды.", "Охватывает файл в том виде, в каком он был при подписании; после этого он обновлялся {} раз(а), только для добавления подписей."),
+    ("The PDF was changed after this signature, not only by adding signatures, so what it shows now is not what was signed: {}", "PDF осы қолтаңбадан кейін тек қолтаңба қосумен ғана емес өзгертілді, сондықтан қазір көрсетіп тұрғаны қол қойылған нұсқа емес: {}", "PDF изменён после этой подписи не только добавлением подписей, поэтому то, что он показывает сейчас, — не то, что было подписано: {}"),
+    ("the signed part of the file cannot be read as a PDF", "файлдың қол қойылған бөлігін PDF ретінде оқу мүмкін емес", "подписанную часть файла не удаётся прочитать как PDF"),
+    ("the document catalog is missing", "құжат каталогы жоқ", "отсутствует каталог документа"),
+    ("the document catalog was replaced", "құжат каталогы ауыстырылды", "каталог документа заменён"),
+    ("the document catalog", "құжат каталогы", "каталог документа"),
+    ("a page", "бет", "страница"),
+    ("the page tree", "беттер ағашы", "дерево страниц"),
+    ("an annotation", "аннотация", "аннотация"),
+    ("an object", "объект", "объект"),
+    ("Only the document attached to the card is checked against its signatures. The card's pages (the document's image and the signature pages) are not signed and may differ from it; rely on the attached document.", "Карточкаға тіркелген құжат қана оның қолтаңбаларымен тексеріледі. Карточканың беттеріне (құжаттың бейнесі мен қолтаңба беттері) қол қойылмаған және олар құжаттан өзгеше болуы мүмкін; тіркелген құжатқа сүйеніңіз.", "С подписями сверяется только документ, вложенный в карточку. Страницы карточки (изображение документа и страницы подписей) не подписаны и могут от него отличаться; опирайтесь на вложенный документ."),
+    ("This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.", "Бұл PDF ешқандай өзгеріске рұқсат етілмей куәландырылған (DocMDP); қолтаңба қосу оның куәландыруын бұзады.", "Этот PDF заверен с запретом любых изменений (DocMDP); добавление подписи нарушит заверение."),
+    ("{} (object {}) changed", "{} ({} объект) өзгертілді", "изменён(а) {} (объект {})"),
 ];
 
 #[cfg(test)]

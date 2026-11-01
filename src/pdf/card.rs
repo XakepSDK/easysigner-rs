@@ -1270,6 +1270,11 @@ pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> Verify
         s.index = k + 1;
     }
     rep.valid = !rep.signers.is_empty() && rep.signers.iter().all(|s| s.valid);
+    // the card PDF itself is not signed: anyone can edit its pages
+    rep.warnings.push(
+        tr("Only the document attached to the card is checked against its signatures. The card's pages (the document's image and the signature pages) are not signed and may differ from it; rely on the attached document.")
+            .into(),
+    );
     rep
 }
 

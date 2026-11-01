@@ -115,3 +115,75 @@ fn deep_nesting_and_bad_oids_are_errors() {
             .is_err()
     );
 }
+
+/// PDFs (plain, object streams, signed) with bytes changed or cut, for checking, signing and
+/// reading as a card.
+#[test]
+fn damaged_pdfs_give_errors_not_crashes() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let e = Engine::new(vec![]);
+    let key = e
+        .open_key(
+            &std::fs::read(fx.join("kalkan/alice_rsa.p12")).unwrap(),
+            "Qwerty12",
+            None,
+        )
+        .unwrap();
+    let mut pdfs: Vec<Vec<u8>> = ["pdf/plain.pdf", "pdf/objstm.pdf", "pdf/land.pdf"]
+        .iter()
+        .map(|f| std::fs::read(fx.join(f)).unwrap())
+        .collect();
+    let signed = e.sign_pdf(&pdfs[0], &key, None).unwrap().cms;
+    let twice = e.sign_pdf(&signed, &key, None).unwrap().cms;
+    pdfs.push(e.sign_pdf(&pdfs[1], &key, None).unwrap().cms);
+    pdfs.push(twice);
+    let mut rng = Rng(7);
+    for round in 0..1200 {
+        let p = damaged(&mut rng, &pdfs[round % pdfs.len()]);
+        no_panic(&format!("pdf round {round}"), || {
+            let _ = e.verify(&p, None, None);
+            let _ = e.card_original(&p);
+            if round % 4 == 0 {
+                let _ = e.sign_pdf(&p, &key, None);
+            }
+        });
+    }
+}
+
+#[test]
+fn hostile_pdfs_give_errors_not_crashes() {
+    let e = Engine::new(vec![]);
+    let pdf = |body: &str| {
+        format!(
+            "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> >>\nendobj\n{body}\ntrailer\n<< /Root 1 0 R /Size 9 >>\n%%EOF\n"
+        )
+        .into_bytes()
+    };
+    let cases = [
+        // a page tree that contains itself
+        pdf(
+            "2 0 obj\n<< /Type /Pages /Kids [2 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /FT /Sig /Kids [3 0 R] >>\nendobj",
+        ),
+        // deeply nested arrays and dictionaries
+        pdf(&format!(
+            "2 0 obj\n{}{}\nendobj",
+            "[".repeat(100_000),
+            "]".repeat(100_000)
+        )),
+        pdf(&format!(
+            "2 0 obj\n{}{}\nendobj",
+            "<< /A ".repeat(50_000),
+            ">>".repeat(50_000)
+        )),
+        // a signature whose byte range points outside the file
+        pdf(
+            "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n3 0 obj\n<< /FT /Sig /T (s) /V << /SubFilter /ETSI.CAdES.detached /ByteRange [0 99999999999 1 -5] /Contents <3080> >> >>\nendobj",
+        ),
+    ];
+    for (i, c) in cases.iter().enumerate() {
+        no_panic(&format!("hostile pdf {i}"), || {
+            let _ = e.verify(c, None, None);
+            let _ = e.card_original(c);
+        });
+    }
+}

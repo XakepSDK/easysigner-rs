@@ -129,8 +129,11 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   letters (`assets/`).
 * `pdf/`: PDF signatures and document cards, on [lopdf](https://github.com/J-F-Liu/lopdf).
   `pdf/mod.rs` signs a PDF as an incremental update (ETSI.CAdES.detached, the `ByteRange`
-  covering everything but the signature) and checks every signature in one, reporting changes
-  made after each. `pdf/card.rs` builds and reads document cards after ddc's layout and texts
+  covering everything but the signature) and checks every signature in one. A signature only
+  passes if every later update just added signatures (new signature fields and widgets, the
+  AcroForm entries for them, the DSS); an update that changes a page, the page tree or the
+  catalog fails every earlier signature, since the PDF no longer shows what was signed. A PDF
+  certified with no changes allowed (DocMDP P=1) is not signed. `pdf/card.rs` builds and reads document cards after ddc's layout and texts
   (MIT licence; its Kazakh texts are reused): the card's signatures are detached CAdES with a
   mime-type attribute, an NCA timestamp, the certificate chain and the OCSP answer kept in
   `crls` (RFC 5940), as the ddcard specification asks. `pdf/qr.rs` turns a signature into QR
@@ -174,8 +177,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
 * `tests/gui.rs`: drives the window without a display (egui_kittest): picks a document and key,
   types the password, signs, verifies the result and saves the document back out; and signs a
   PDF inside, checks it and a card, and saves the card's document.
-* `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken), deep nesting and
-  broken OIDs give errors, never a crash.
+* `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken: .cms, .p12, plain and
+  signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
+* `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later
+  signatures alone keep earlier ones valid, and a no-changes certified PDF is not signed.
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges
   with NCA's timestamp server (`tests/fixtures/nca-live`, RSA and GOST 2015 TSA signatures).
 
