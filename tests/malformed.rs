@@ -187,3 +187,37 @@ fn hostile_pdfs_give_errors_not_crashes() {
         });
     }
 }
+
+/// Showing a hostile PDF's pages in a card: damaged files, and resources that are a very long
+/// chain of references.
+#[test]
+fn importing_hostile_pages_does_not_crash() {
+    use kzsigner::pdf::import::import_pages;
+    use lopdf::{Dictionary, Document, Object};
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let pdfs: Vec<Vec<u8>> = ["plain.pdf", "objstm.pdf", "land.pdf"]
+        .iter()
+        .map(|f| std::fs::read(fx.join(f)).unwrap())
+        .collect();
+    let mut rng = Rng(11);
+    for round in 0..900 {
+        let p = damaged(&mut rng, &pdfs[round % pdfs.len()]);
+        no_panic(&format!("import round {round}"), || {
+            if let Ok(src) = Document::load_mem(&p) {
+                let _ = import_pages(&src, &mut Document::with_version("1.7"));
+            }
+        });
+    }
+    let mut src = Document::load_mem(&pdfs[0]).unwrap();
+    let mut next = Object::Null;
+    for _ in 0..200_000 {
+        next = Object::Reference(src.add_object(Dictionary::from_iter([("Next", next)])));
+    }
+    for (_, id) in src.get_pages() {
+        src.get_dictionary_mut(id)
+            .unwrap()
+            .set("Resources", next.clone());
+    }
+    let imported = import_pages(&src, &mut Document::with_version("1.7")).unwrap();
+    assert!(!imported.is_empty());
+}

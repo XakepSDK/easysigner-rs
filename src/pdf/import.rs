@@ -43,6 +43,8 @@ fn rect(o: Option<&Object>) -> Option<[f64; 4]> {
     })
 }
 
+const MAX_DEPTH: usize = 256;
+
 pub fn import_pages(src: &Document, dst: &mut Document) -> Result<Vec<Imported>> {
     let mut map = HashMap::new();
     let mut out = Vec::new();
@@ -67,7 +69,7 @@ pub fn import_pages(src: &Document, dst: &mut Document) -> Result<Vec<Imported>>
             _ => ([1.0, 0.0, 0.0, 1.0, -x0, -y0], (w, h)),
         };
         let resources = inherited(src, page, b"Resources")
-            .map(|r| copy(src, dst, r, &mut map))
+            .map(|r| copy(src, dst, r, &mut map, 0))
             .unwrap_or_else(|| Object::Dictionary(Dictionary::new()));
         let content = src.get_page_content(page_id);
         let dict = Dictionary::from_iter([
@@ -101,7 +103,14 @@ fn copy(
     dst: &mut Document,
     o: &Object,
     map: &mut HashMap<ObjectId, ObjectId>,
+    depth: usize,
 ) -> Object {
+    // a chain of references or nested objects that deep is not a real page's resources, and
+    // following it could run out of stack
+    if depth > MAX_DEPTH {
+        return Object::Null;
+    }
+    let depth = depth + 1;
     match o {
         Object::Reference(id) => {
             if let Some(n) = map.get(id) {
@@ -110,14 +119,16 @@ fn copy(
             let n = dst.new_object_id();
             map.insert(*id, n);
             let target = src.get_object(*id).cloned().unwrap_or(Object::Null);
-            let c = copy(src, dst, &target, map);
+            let c = copy(src, dst, &target, map, depth);
             dst.objects.insert(n, c);
             Object::Reference(n)
         }
-        Object::Array(a) => Object::Array(a.iter().map(|x| copy(src, dst, x, map)).collect()),
-        Object::Dictionary(d) => Object::Dictionary(copy_dict(src, dst, d, map)),
+        Object::Array(a) => {
+            Object::Array(a.iter().map(|x| copy(src, dst, x, map, depth)).collect())
+        }
+        Object::Dictionary(d) => Object::Dictionary(copy_dict(src, dst, d, map, depth)),
         Object::Stream(s) => {
-            let mut c = Stream::new(copy_dict(src, dst, &s.dict, map), s.content.clone());
+            let mut c = Stream::new(copy_dict(src, dst, &s.dict, map, depth), s.content.clone());
             c.allows_compression = false;
             Object::Stream(c)
         }
@@ -130,6 +141,7 @@ fn copy_dict(
     dst: &mut Document,
     d: &Dictionary,
     map: &mut HashMap<ObjectId, ObjectId>,
+    depth: usize,
 ) -> Dictionary {
     let mut out = Dictionary::new();
     for (k, v) in d {
@@ -137,7 +149,7 @@ fn copy_dict(
         if k == b"Parent" || k == b"P" {
             continue;
         }
-        out.set(k.clone(), copy(src, dst, v, map));
+        out.set(k.clone(), copy(src, dst, v, map, depth));
     }
     out
 }
