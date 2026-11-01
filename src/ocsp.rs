@@ -112,6 +112,7 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
         i = 1; // version
     }
     let responses = rd[i + 2].items(der::SEQUENCE)?;
+    let mut nonce_ok = false;
     if let Some(ext) = rd.get(i + 3).filter(|t| t.tag == der::ctx(1))
         && let Some(echoed) = extension(ext, NONCE)?
     {
@@ -126,6 +127,7 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
                 tr("ERROR: OCSP response is not for this request (nonce mismatch)").into(),
             ));
         }
+        nonce_ok = true;
     }
     for s in responses {
         let k = s.items(der::SEQUENCE)?;
@@ -145,7 +147,17 @@ fn check_inner(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result
             .find(|t| t.tag == der::ctx(0))
             .map(|t| t.inner().and_then(|x| x.time()))
             .transpose()?;
-        if next_update.is_some_and(|n| n < time::now_ms()) {
+        // Without our nonce echoed back, only freshness shows that the answer is not an old one
+        // replayed: it must be within its validity period (nextUpdate), or, without one, made
+        // within the last hour.
+        let now = time::now_ms();
+        let this_update = k.get(2).map(|t| t.time()).transpose()?;
+        let skew = 5 * 60 * 1000;
+        let fresh = match next_update {
+            Some(n) => n >= now,
+            None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
+        };
+        if !fresh || this_update.is_some_and(|t| t > now + skew) {
             return Ok((false, tr("ERROR: OCSP answer is out of date").into()));
         }
         return Ok(match k[1].tag {

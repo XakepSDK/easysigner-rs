@@ -131,7 +131,7 @@ fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
     let (oid, _) = alg_id(&di[0])?;
     let expected = di[1].octets()?;
     let salt = m[1].octets()?;
-    let iter = m.get(2).map(|i| i.small_int()).transpose()?.unwrap_or(1) as u32;
+    let iter = m.get(2).map(iterations).transpose()?.unwrap_or(1);
     let pw = bmp_password(password);
     use hmac::{KeyInit as _, Mac};
     macro_rules! mac_with {
@@ -273,6 +273,15 @@ fn bmp_password(p: &str) -> Vec<u8> {
     out
 }
 
+/// An iteration count from the file. Real ones are a few thousand to a few hundred thousand; a
+/// damaged or hostile file must not keep the program hashing for hours.
+fn iterations(t: &Tlv) -> Result<u32> {
+    match t.small_int()? {
+        n @ 1..=10_000_000 => Ok(n as u32),
+        n => Err(Error::new(format!("unsupported iteration count {n}"))),
+    }
+}
+
 /// The PKCS#12 key derivation (RFC 7292 appendix B), from RustCrypto's pkcs12 crate.
 fn kdf<D: Digest + FixedOutputReset + BlockSizeUser>(
     pw: &[u8],
@@ -310,7 +319,7 @@ fn decrypt(alg: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
     }
     let p = params.items(der::SEQUENCE)?;
     let salt = p[0].octets()?;
-    let iter = p[1].small_int()? as u32;
+    let iter = iterations(&p[1])?;
     let pw = bmp_password(password);
     let key = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::EncryptionKey, n);
     let iv = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::Iv, n);
@@ -341,7 +350,7 @@ fn pbes2(params: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
         .ok_or_else(|| Error::new("PBKDF2 without parameters"))?
         .items(der::SEQUENCE)?;
     let salt = kp[0].octets()?;
-    let iter = kp[1].small_int()? as u32;
+    let iter = iterations(&kp[1])?;
     let mut prf = "1.2.840.113549.2.7".to_string();
     for x in &kp[2..] {
         if x.tag == der::SEQUENCE {

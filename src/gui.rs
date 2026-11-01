@@ -552,11 +552,13 @@ impl App {
         }
         self.key = None;
         self.opened_for = None;
-        if self.password.is_empty() {
-            return;
-        }
+        // any key still being opened is for an older file, password or alias: ignore it
         self.key_request += 1;
         let id = self.key_request;
+        if self.password.is_empty() {
+            self.key_note = Note::default();
+            return;
+        }
         self.key_note = Note(vec![(tr("Opening key…").into(), Tone::Muted)]);
         let pw = self.password.clone();
         self.background(ctx, move |e| {

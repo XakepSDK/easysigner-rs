@@ -102,7 +102,13 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
 
 ## Differences from the Java version
 
-* Timestamp and OCSP URLs must be `http://` (NCA's servers are plain http; the data is signed).
+* Timestamp and OCSP URLs must be `http://`. NCA's servers take requests only over http (over
+  https they answer POST with 405, checked 2026-11-01), as NCALayer uses them; the answers are
+  signed and kzsigner checks them: the timestamp token's signature, TSA certificate and nonce
+  (also when signing), and the OCSP responder, nonce and freshness. Requests carry NCALayer's
+  User-Agent (`Java/1.8.0_492`, the Java default its Kalkan modules send).
+* NCA's TSA no longer serves policy 1.2.398.3.3.2.6.1, so GOST 34.310-2004 keys cannot get a
+  timestamp (NCA answers "Missing certificate or key error!").
 * The OCSP nonce is sent in the RFC 8954 form; both that and the bare form are accepted back.
 * A timestamp's signing-certificate reference must match the TSA certificate.
 * A file can be given on the command line (or with "Open with") to start the window with it.
@@ -120,7 +126,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   library (`tests/fixtures/kalkan`).
 * `tests/gui.rs`: drives the window without a display (egui_kittest): picks a document and key,
   types the password, signs, verifies the result and saves the document back out.
-* `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times.
+* `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken), deep nesting and
+  broken OIDs give errors, never a crash.
+* `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges
+  with NCA's timestamp server (`tests/fixtures/nca-live`, RSA and GOST 2015 TSA signatures).
 
 None of the test keys or certificates is a real NCA certificate. The Kalkan fixtures expire on
 2027-11-01.

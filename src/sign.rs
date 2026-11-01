@@ -6,7 +6,8 @@ use crate::cms::{self, SignedData};
 use crate::der;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
-use crate::report::SignResult;
+use crate::report::{SignResult, SignerReport};
+use crate::trust::TrustStore;
 use crate::{Error, Result, gost, tsp};
 
 /// Signs `input`. If `input` is a signed CMS and `cosign_if_cms` is set, the new signature is
@@ -18,6 +19,7 @@ pub fn sign(
     tsa_url: Option<&str>,
     cosign_if_cms: bool,
     detached_original: Option<&[u8]>,
+    trust: &TrustStore,
 ) -> Result<SignResult> {
     let existing = if cosign_if_cms {
         SignedData::try_parse(input)
@@ -45,10 +47,28 @@ pub fn sign(
             },
         },
     };
-    let mut out = cms::sign_once(content, cms::ID_DATA, attach, &key.private_key, &key.cert)
+    // a co-signature covers the same content type as the existing signatures
+    let content_type = existing
+        .as_ref()
+        .map_or(cms::ID_DATA, |e| e.content_type.as_str());
+    let mut out = cms::sign_once(content, content_type, attach, &key.private_key, &key.cert)
         .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
     if let Some(url) = tsa_url {
         tsp::stamp(&mut out, url, key.private_key.scheme())?;
+        // the token's signature must hold; an untrusted TSA is reported, as verify would
+        let mut check = SignerReport::default();
+        tsp::check(&mut check, &out.signers[0], trust);
+        if check.timestamp_ok != Some(true) {
+            return Err(Error::new(trf(
+                "The timestamp server's answer does not match the request: {}",
+                &[&format!(
+                    "{} ({})",
+                    tr("invalid timestamp signature"),
+                    check.timestamp_info.unwrap_or_default()
+                )],
+            )));
+        }
+        r.warnings.extend(check.warnings);
         r.timestamped = true;
     }
     if let Some(e) = &existing {

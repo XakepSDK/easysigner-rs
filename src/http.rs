@@ -1,11 +1,14 @@
 //! The one network call kzsigner makes: an HTTP POST to the NCA timestamp or OCSP server, with
-//! the ureq client. NCA's servers speak plain http (what they return is signed and checked), so
-//! ureq is built without TLS. A proxy set in the environment (http_proxy, ALL_PROXY) is used.
+//! the ureq client. NCA's servers take requests over plain http only (https answers POST with
+//! 405; what they return is signed and checked), so ureq is built without TLS. A proxy set in the environment (http_proxy, ALL_PROXY) is used.
 
 use std::time::Duration;
 
 use crate::i18n::{tr, trf};
 use crate::{Error, Result};
+
+/// The User-Agent of NCALayer 1.4 (bundled JRE 1.8.0_492).
+const NCALAYER_USER_AGENT: &str = "Java/1.8.0_492";
 
 /// Answers larger than this are refused (timestamp and OCSP answers are a few KB).
 const MAX_ANSWER: u64 = 4 << 20;
@@ -27,12 +30,19 @@ pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Ve
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_global(Some(Duration::from_secs(120)))
         .http_status_as_error(false)
-        .user_agent("kzsigner")
+        // what NCALayer sends: its Kalkan modules set no User-Agent, so Java's default for the
+        // JRE bundled with it goes out
+        .user_agent(NCALAYER_USER_AGENT)
         .build()
         .into();
     let mut resp = agent
         .post(url)
         .header("Content-Type", content_type)
+        // Java's HttpURLConnection default, as NCALayer sends it
+        .header(
+            "Accept",
+            "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2",
+        )
         .send(body)
         .map_err(|e| fail(&e))?;
     let code = resp.status().as_u16();

@@ -74,6 +74,7 @@ impl Engine {
             tsa_url,
             cosign_if_cms,
             detached_original,
+            &self.trust,
         )
     }
 

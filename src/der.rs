@@ -44,8 +44,69 @@ pub struct Tlv<'a> {
     pub raw: &'a [u8],
 }
 
+/// How deep indefinite-length elements and constructed strings may nest (real files use a few
+/// levels); deeper input is refused instead of exhausting the stack.
+const MAX_DEPTH: usize = 64;
+
+/// An element with no content, returned for children that are not there (see [`Items`]).
+static MISSING: Tlv<'static> = Tlv {
+    tag: 0,
+    content: &[],
+    raw: &[],
+};
+
+/// The children of a constructed element. Indexing past the end gives an empty element of tag
+/// 0 instead of panicking, so reading a field that a malformed file lacks fails with an
+/// ASN.1 error (wrong tag, empty content) rather than aborting the program.
+#[derive(Clone, Debug, Default)]
+pub struct Items<'a>(Vec<Tlv<'a>>);
+
+impl<'a> std::ops::Deref for Items<'a> {
+    type Target = [Tlv<'a>];
+    fn deref(&self) -> &[Tlv<'a>] {
+        &self.0
+    }
+}
+
+impl<'a> std::ops::Index<usize> for Items<'a> {
+    type Output = Tlv<'a>;
+    fn index(&self, i: usize) -> &Tlv<'a> {
+        self.0.get(i).unwrap_or(&MISSING)
+    }
+}
+
+impl<'a> std::ops::Index<std::ops::RangeFrom<usize>> for Items<'a> {
+    type Output = [Tlv<'a>];
+    fn index(&self, r: std::ops::RangeFrom<usize>) -> &[Tlv<'a>] {
+        self.0.get(r).unwrap_or(&[])
+    }
+}
+
+impl<'a> IntoIterator for Items<'a> {
+    type Item = Tlv<'a>;
+    type IntoIter = std::vec::IntoIter<Tlv<'a>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, 'b> IntoIterator for &'b Items<'a> {
+    type Item = &'b Tlv<'a>;
+    type IntoIter = std::slice::Iter<'b, Tlv<'a>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 /// Reads one element from the start of `data`; returns it and the remaining bytes.
 pub fn read(data: &[u8]) -> Result<(Tlv<'_>, &[u8])> {
+    read_at(data, 0)
+}
+
+fn read_at(data: &[u8], depth: usize) -> Result<(Tlv<'_>, &[u8])> {
+    if depth > MAX_DEPTH {
+        return Err(bad("nested too deeply"));
+    }
     if data.len() < 2 {
         return Err(bad("truncated"));
     }
@@ -94,7 +155,7 @@ pub fn read(data: &[u8]) -> Result<(Tlv<'_>, &[u8])> {
                 if rest.len() >= 2 && rest[0] == 0 && rest[1] == 0 {
                     break;
                 }
-                let (_, r) = read(rest)?;
+                let (_, r) = read_at(rest, depth + 1)?;
                 rest = r;
             }
             let inner = data.len() - hdr - rest.len();
@@ -125,7 +186,7 @@ impl<'a> Tlv<'a> {
         self.tag & 0x20 != 0
     }
 
-    pub fn children(&self) -> Result<Vec<Tlv<'a>>> {
+    pub fn children(&self) -> Result<Items<'a>> {
         let mut out = Vec::new();
         let mut rest = self.content;
         while !rest.is_empty() {
@@ -133,7 +194,7 @@ impl<'a> Tlv<'a> {
             out.push(t);
             rest = r;
         }
-        Ok(out)
+        Ok(Items(out))
     }
 
     pub fn expect(self, tag: u8) -> Result<Tlv<'a>> {
@@ -147,7 +208,7 @@ impl<'a> Tlv<'a> {
     }
 
     /// The children of a SEQUENCE (or other constructed element with tag `tag`).
-    pub fn items(self, tag: u8) -> Result<Vec<Tlv<'a>>> {
+    pub fn items(self, tag: u8) -> Result<Items<'a>> {
         self.expect(tag)?.children()
     }
 
@@ -163,14 +224,23 @@ impl<'a> Tlv<'a> {
 
     /// The octets of a string type; a constructed (BER) string is joined from its pieces.
     pub fn octets(&self) -> Result<Vec<u8>> {
-        if !self.constructed() {
-            return Ok(self.content.to_vec());
-        }
         let mut out = Vec::new();
-        for c in self.children()? {
-            out.extend(c.octets()?);
-        }
+        self.octets_into(&mut out, 0)?;
         Ok(out)
+    }
+
+    fn octets_into(&self, out: &mut Vec<u8>, depth: usize) -> Result<()> {
+        if !self.constructed() {
+            out.extend(self.content);
+            return Ok(());
+        }
+        if depth > MAX_DEPTH {
+            return Err(bad("nested too deeply"));
+        }
+        for c in self.children()? {
+            c.octets_into(out, depth + 1)?;
+        }
+        Ok(())
     }
 
     pub fn oid(&self) -> Result<String> {
@@ -260,9 +330,15 @@ pub fn oid_to_string(c: &[u8]) -> Result<String> {
     if c.is_empty() {
         return Err(bad("empty OID"));
     }
+    if c[c.len() - 1] & 0x80 != 0 {
+        return Err(bad("unterminated OID"));
+    }
     let mut parts: Vec<u64> = Vec::new();
     let mut v: u64 = 0;
     for &b in c {
+        if v >> 57 != 0 {
+            return Err(bad("OID arc too large"));
+        }
         v = (v << 7) | (b & 0x7f) as u64;
         if b & 0x80 == 0 {
             parts.push(v);

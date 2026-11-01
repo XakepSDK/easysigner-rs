@@ -114,12 +114,13 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
     let (hash_oid, policy) = hash_and_policy(scheme);
     let mut nonce = [0u8; 8];
     crate::random(&mut nonce)?;
-    nonce[0] &= 0x7f;
+    // a positive INTEGER with no leading zero byte, so it reads back exactly as sent
+    nonce[0] = (nonce[0] & 0x7f) | 0x40;
     let req = Request {
         hash_oid: hash_oid.into(),
         hash: gost::hash(hash_oid, &si.signature)?,
         policy: Some(policy.into()),
-        nonce: Some(der::uint(&nonce)[2..].to_vec()),
+        nonce: Some(nonce.to_vec()),
         cert_req: true,
     };
     let resp = http::post(
@@ -184,7 +185,11 @@ fn validate(req: &Request, token: &[u8]) -> Result<()> {
             .as_deref()
             .ok_or_else(|| Error::new("token without TSTInfo"))?,
     )?;
-    if req.nonce.is_some() && info.nonce != req.nonce {
+    let strip = |n: &Option<Vec<u8>>| {
+        n.as_deref()
+            .map(|b| b[b.iter().position(|&x| x != 0).unwrap_or(b.len())..].to_vec())
+    };
+    if req.nonce.is_some() && strip(&info.nonce) != strip(&req.nonce) {
         return Err(Error::new("response contains wrong nonce value."));
     }
     if let Some(p) = &req.policy
@@ -213,15 +218,17 @@ pub fn check(sr: &mut SignerReport, si: &SignerInfo, trust: &TrustStore) {
     else {
         return;
     };
-    if let Err(e) = check_token(sr, si, &value, trust) {
+    if let Err(e) = check_token(sr, &si.signature, &value, trust) {
         sr.timestamp_ok = Some(false);
         sr.timestamp_info = Some(trf("unreadable timestamp: {}", &[&e.0]));
     }
 }
 
-fn check_token(
+/// Checks a timestamp token over `stamped` (for CAdES-T, the signature value) and records the
+/// result in `sr`.
+pub fn check_token(
     sr: &mut SignerReport,
-    si: &SignerInfo,
+    stamped: &[u8],
     token: &[u8],
     trust: &TrustStore,
 ) -> Result<()> {
@@ -253,7 +260,7 @@ fn check_token(
             .map(Cert::cn)
             .unwrap_or_else(|| tr("unknown TSA").into()),
     );
-    let imprint_ok = gost::hash(&info.imprint_alg, &si.signature).is_ok_and(|h| h == info.imprint);
+    let imprint_ok = gost::hash(&info.imprint_alg, stamped).is_ok_and(|h| h == info.imprint);
     let sig_ok = tsa_cert.as_ref().is_some_and(|c| {
         matches!(
             verify::check_signer(tsi, c, &content, TST_INFO),
@@ -279,4 +286,32 @@ fn check_token(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real exchanges with NCA's TSA (tests/fixtures/nca-live, captured 2026-11-01).
+    #[test]
+    fn real_nca_timestamps() {
+        let trust = TrustStore::new(vec![]);
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/nca-live");
+        for case in ["sha256-policy-6.2", "gost2015-policy-6.4"] {
+            let f = |n: &str| std::fs::read(format!("{dir}/{case}/{n}")).unwrap();
+            let req = Request::parse(&f("tsq.der")).unwrap();
+            let resp = f("tsr.der");
+            let token = read_response(&resp).unwrap();
+            validate(&req, token).unwrap_or_else(|e| panic!("{case}: {e}"));
+            let mut sr = SignerReport::default();
+            check_token(&mut sr, &f("data.bin"), token, &trust).unwrap();
+            assert_eq!(sr.timestamp_ok, Some(true), "{case}: token signature");
+            assert_eq!(sr.timestamp_trusted, Some(true), "{case}: TSA trusted");
+            assert!(sr.warnings.is_empty(), "{case}: {:?}", sr.warnings);
+            println!("{case}: {:?} {:?}", sr.timestamp_info, sr.timestamp_time);
+        }
+        let rejected = std::fs::read(format!("{dir}/rejected-policy-6.1/tsr.der")).unwrap();
+        let e = read_response(&rejected).unwrap_err();
+        assert!(e.0.contains("Missing certificate or key error"), "{e}");
+    }
 }
