@@ -25,6 +25,7 @@ pub mod time;
 pub mod trust;
 pub mod tsp;
 pub mod verify;
+pub mod xml;
 
 use cert::Cert;
 use p12::Key;
@@ -122,6 +123,27 @@ impl Engine {
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
+    }
+
+    /// Signs an XML document with an enveloped XAdES signature; see [`xml::sign`]. The key is
+    /// checked first.
+    pub fn sign_xml(
+        &self,
+        input: &[u8],
+        key: &Key,
+        tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
+    ) -> Result<SignResult> {
+        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
+        let mut r = xml::sign(input, key, tsa_url, &self.trust)?;
+        warnings.append(&mut r.warnings);
+        r.warnings = warnings;
+        Ok(r)
+    }
+
+    /// Whether `data` is an XML document.
+    pub fn is_xml(&self, data: &[u8]) -> bool {
+        xml::is_xml(data)
     }
 
     /// Signs `input` into a document card (ddcard), checking the key and the signature
@@ -302,6 +324,9 @@ impl Engine {
         }
         if pdf::is_pdf(cms) {
             return pdf::verify(cms, &self.trust, ocsp_url);
+        }
+        if xml::is_xml(cms) {
+            return xml::verify(cms, &self.trust, ocsp_url);
         }
         verify::verify(cms, detached_original, &self.trust, ocsp_url)
     }

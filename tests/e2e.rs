@@ -1318,3 +1318,139 @@ fn json_ok(s: &str) -> bool {
     ws(b, &mut i);
     ok && i == b.len()
 }
+
+/// XAdES: signing XML documents inside them, and checking them.
+#[test]
+fn xml() {
+    let dir = std::env::temp_dir().join(format!("kzsigner-xml-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = Run {
+        dir: dir.clone(),
+        pass: 0,
+        fail: vec![],
+    };
+    let tsa_key = kzsigner::p12::open(
+        &std::fs::read(fixtures().join("keys/tsa.p12")).unwrap(),
+        PASSWORD,
+        None,
+    )
+    .unwrap();
+    std::fs::write(t.path("tsa.cer"), &tsa_key.cert.der).unwrap();
+    let tsa = fake_tsa();
+    let doc = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- заявка -->\n<z:Request xmlns:z=\"urn:z\" xmlns=\"urn:d\" xml:lang=\"kk\">\n  <z:Item n=\"1\">Договор &amp; №7</z:Item>\n  <Empty/>\n</z:Request>\n";
+    std::fs::write(t.path("req.xml"), doc).unwrap();
+
+    for a in ["gost2015", "gost2015_256", "gost2004", "rsa"] {
+        let key = s(&fixtures().join(format!("keys/alice_{a}.p12")));
+        let ca = s(&fixtures().join(format!("keys/ca_{a}.cer")));
+        let out = format!("req-{a}.xml");
+        let v = t.kz(&["sign", "--xml", "-k", &key, "-o", &out, "req.xml"]);
+        t.check(&format!("xml {a}: signed"), v.contains("Signed by"));
+        let signed = std::fs::read_to_string(t.path(&out)).unwrap_or_default();
+        t.check(
+            &format!("xml {a}: the document is kept as it was, the signature inside"),
+            signed.starts_with(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- заявка -->\n<z:Request",
+            ) && signed.contains("<ds:Signature")
+                && signed.contains("<xades:SigningCertificateV2>")
+                && signed.ends_with("</z:Request>\n"),
+        );
+        let v = t.kz(&["verify", "--trust", &ca, &out]);
+        t.check(
+            &format!("xml {a}: verifies (XAdES B-B)"),
+            v.contains("VALID - all 1") && v.contains("B-B") && !v.contains("plain XML signature"),
+        );
+        // any change to the document is caught
+        std::fs::write(t.path("bad.xml"), signed.replace("№7", "№8")).unwrap();
+        let v = t.kz(&["verify", "--trust", &ca, "bad.xml"]);
+        t.check(
+            &format!("xml {a}: a changed document is caught"),
+            v.contains("NOT VALID") && v.contains("was changed"),
+        );
+    }
+
+    // with an NCA (here: fake) timestamp: XAdES B-T
+    let key = s(&fixtures().join("keys/alice_gost2015.p12"));
+    let ca = s(&fixtures().join("keys/ca_gost2015.cer"));
+    let v = t.kz(&[
+        "sign", "--xml", "-k", &key, "--tsa", &tsa, "--trust", &ca, "--trust", "tsa.cer", "req.xml",
+    ]);
+    t.check("xml B-T: signed", v.contains("Signed by"));
+    let v = t.kz(&[
+        "verify",
+        "--trust",
+        &ca,
+        "--trust",
+        "tsa.cer",
+        "--json",
+        "req-signed.xml",
+    ]);
+    t.check(
+        "xml B-T: verifies with the timestamp",
+        v.contains("\"valid\": true") && v.contains("B-T") && v.contains("FAKE TEST TSA"),
+    );
+    let signed = std::fs::read_to_string(t.path("req-signed.xml")).unwrap();
+    // the timestamp covers the signature value
+    let i = signed.find("<ds:SignatureValue>").unwrap() + 19;
+    let mut bad = signed.clone();
+    bad.replace_range(i..i + 1, if &signed[i..i + 1] == "A" { "B" } else { "A" });
+    std::fs::write(t.path("bad.xml"), bad).unwrap();
+    let v = t.kz(&["verify", "--trust", &ca, "--trust", "tsa.cer", "bad.xml"]);
+    t.check(
+        "xml B-T: a changed signature value is caught",
+        v.contains("NOT VALID"),
+    );
+    // a copy of the signed properties elsewhere does not fool the check
+    let sp = &signed[signed.find("<xades:SignedProperties").unwrap()
+        ..signed.find("</xades:SignedProperties>").unwrap() + 25];
+    // (inside the signature, which the document's digest leaves out)
+    let wrapped = signed.replace(
+        "</ds:Object>",
+        &format!(
+            "<x xmlns:xades=\"{}\">{sp}</x></ds:Object>",
+            kzsigner::xml::XADES
+        ),
+    );
+    std::fs::write(t.path("bad.xml"), wrapped).unwrap();
+    let v = t.kz(&["verify", "--trust", &ca, "--trust", "tsa.cer", "bad.xml"]);
+    t.check(
+        "xml: duplicated signed parts are refused",
+        v.contains("NOT VALID") && v.contains("more than once"),
+    );
+    std::fs::write(t.path("bad.xml"), "<a><b></a>").unwrap();
+    let v = t.kz(&["verify", "bad.xml"]);
+    t.check(
+        "xml: broken XML is reported as such",
+        v.contains("could not be read"),
+    );
+
+    // what is refused
+    let v = t.kz(&[
+        "sign",
+        "--xml",
+        "-k",
+        &key,
+        "-o",
+        "again.xml",
+        "req-signed.xml",
+    ]);
+    t.check(
+        "xml: a signed document is not signed again",
+        v.contains("already signed"),
+    );
+    std::fs::write(t.path("doc.txt"), "not xml").unwrap();
+    let v = t.kz(&["sign", "--xml", "-k", &key, "doc.txt"]);
+    t.check("xml: only XML", v.contains("not an XML document"));
+    let v = t.kz(&["sign", "--xml", "--level", "LTA", "-k", &key, "req.xml"]);
+    t.check(
+        "xml: no long-term level yet",
+        v.contains("--level is not supported"),
+    );
+    let v = t.kz(&["verify", "--trust", &ca, "req.xml"]);
+    t.check("xml: an unsigned document", v.contains("no signatures"));
+
+    println!("\n{} passed, {} failed", t.pass, t.fail.len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(t.fail.is_empty(), "failed: {:?}", t.fail);
+}

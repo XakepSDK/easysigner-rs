@@ -196,39 +196,13 @@ fn check_one(
     }
 
     let tsa_ca = tsp::check(&mut sr, si, trust);
-    // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
-    // self-made "timestamp" could make an expired or revoked certificate look fine.
-    // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
-    // the moment of checking (the signing time the signer's computer wrote in is only a claim)
-    let (at, trusted_time) = reference_time(&sr, time::now_ms());
-    let valid_at = c.valid_on(at);
-    sr.cert_valid_at_signing = Some(valid_at);
-    sr.checked_at = Some(at);
-    if !valid_at {
-        sr.warnings.push(validity_warning(trusted_time, at));
-    }
-    if !trusted_time && sr.signing_time.is_some() {
-        sr.warnings.push(
-            tr("Signing time comes from the signer's own computer clock (no trusted timestamp).")
-                .into(),
-        );
-    }
-    let chain = trust.check(&c, at);
-    sr.chain_ok = chain.ok;
-    sr.chain_status = Some(chain.status);
-    sr.chain = chain.path;
-    sr.usage_error = cert::usage_problem(&c, chain.issuer.as_ref());
-    if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(&mut sr, t, i, trust);
-    }
-    let mut ocsp_good = true;
-    if let Some(url) = ocsp_url {
-        let (good, status, answer, source) = revocation(&c, chain.issuer.as_ref(), url, trust);
-        sr.revocation_source = source;
-        ocsp_good = good;
-        sr.ocsp_status = Some(status);
-        sr.ocsp_answer = Some(answer);
-    }
+    let CertCheck {
+        at,
+        trusted_time,
+        valid_at,
+        issuer,
+        mut ocsp_good,
+    } = check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
 
     // the validation data kept in the signature (B-LT): what it says counts when it was made
     // at the signing time, and stands in for an online check that is off or got no answer
@@ -236,10 +210,7 @@ fn check_one(
     if let Some(e) = extra {
         kept.extend(e);
     }
-    let kept_status = chain
-        .issuer
-        .as_ref()
-        .and_then(|i| kept.status(&c, i, trust, at));
+    let kept_status = issuer.as_ref().and_then(|i| kept.status(&c, i, trust, at));
     if let Some(k) = &kept_status
         && sr.ocsp_answer.is_none_or(str::is_empty)
     {
@@ -292,6 +263,71 @@ fn check_one(
         && ocsp_good
         && archives_ok;
     sr
+}
+
+/// What [`check_certificate`] found.
+pub struct CertCheck {
+    /// The moment the certificates were checked at.
+    pub at: i64,
+    /// Whether `at` comes from a trusted timestamp.
+    pub trusted_time: bool,
+    pub valid_at: bool,
+    /// The signer's issuer, when the chain was built.
+    pub issuer: Option<Cert>,
+    /// No online revocation check, or a good answer.
+    pub ocsp_good: bool,
+}
+
+/// Checks the signer's certificate `c` as Order 500/НҚ p.13-16 and 18-19 ask, at the time of
+/// the signature's timestamp (already checked into `sr`; `tsa_ca` from [`tsp::check`]) or now,
+/// and records it in `sr`.
+pub fn check_certificate(
+    sr: &mut SignerReport,
+    c: &Cert,
+    tsa_ca: Option<Cert>,
+    trust: &TrustStore,
+    ocsp_url: Option<&str>,
+) -> CertCheck {
+    // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
+    // self-made "timestamp" could make an expired or revoked certificate look fine.
+    // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
+    // the moment of checking (the signing time the signer's computer wrote in is only a claim)
+    let (at, trusted_time) = reference_time(sr, time::now_ms());
+    let valid_at = c.valid_on(at);
+    sr.cert_valid_at_signing = Some(valid_at);
+    sr.checked_at = Some(at);
+    if !valid_at {
+        sr.warnings.push(validity_warning(trusted_time, at));
+    }
+    if !trusted_time && sr.signing_time.is_some() {
+        sr.warnings.push(
+            tr("Signing time comes from the signer's own computer clock (no trusted timestamp).")
+                .into(),
+        );
+    }
+    let chain = trust.check(c, at);
+    sr.chain_ok = chain.ok;
+    sr.chain_status = Some(chain.status);
+    sr.chain = chain.path;
+    sr.usage_error = cert::usage_problem(c, chain.issuer.as_ref());
+    if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
+        tsp::same_ca(sr, t, i, trust);
+    }
+    let mut ocsp_good = true;
+    if let Some(url) = ocsp_url {
+        let (good, status, answer, source) = revocation(c, chain.issuer.as_ref(), url, trust);
+        sr.revocation_source = source;
+        ocsp_good = good;
+        sr.ocsp_status = Some(status);
+        sr.ocsp_answer = Some(answer);
+    }
+    CertCheck {
+        at,
+        trusted_time,
+        valid_at,
+        issuer: chain.issuer,
+        ocsp_good,
+    }
 }
 
 /// The ETSI baseline level a signature reaches: a signature timestamp makes it B-T, kept

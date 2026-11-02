@@ -313,6 +313,65 @@ fn pdf_signing_and_cards_in_the_window() {
     settle(&mut h);
     assert_eq!(std::fs::read(&back).unwrap(), doc);
 
+    // an XML document: signed inside it (XAdES) by default, then checked
+    let xml = dir.join("request.xml");
+    std::fs::write(
+        &xml,
+        "<?xml version=\"1.0\"?>\n<request><n>7</n></request>\n",
+    )
+    .unwrap();
+    let dialogs = Scripted::default();
+    let mut app = App::new(
+        kzsigner::Engine::new(vec![ca.clone()]),
+        Box::new(dialogs.clone()),
+    );
+    (app.timestamp, app.ocsp) = (false, false);
+    let mut h = Harness::builder()
+        .with_size([780.0, 760.0])
+        .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+    h.run();
+    h.get_all_by_label("Sign a document")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    dialogs.next(xml.clone());
+    h.get_all_by_label("Browse…").next().unwrap().click();
+    settle(&mut h);
+    let key_field = h.get_by_label("Key file (.p12), for example GOSTKNCA_… or RSA_…");
+    key_field.focus();
+    key_field.type_text(&key_file.display().to_string());
+    h.run();
+    h.key_press(egui::Key::Enter);
+    let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
+    pw.focus();
+    pw.type_text("Qwerty12");
+    h.run();
+    h.key_press(egui::Key::Enter);
+    settle(&mut h);
+    assert_eq!(h.state().sign_as, kzsigner::gui::SignAs::Xml);
+    let xml_out = dir.join("request-signed.xml");
+    dialogs.next(xml_out.clone());
+    h.get_by_label("Sign").click();
+    settle(&mut h);
+    assert_eq!(h.state().screen, Screen::Signed, "{:?}", h.state().message);
+    let signed = std::fs::read_to_string(&xml_out).unwrap();
+    assert!(signed.contains("<ds:Signature") && signed.ends_with("</request>\n"));
+    h.get_by_label("Back").click();
+    h.run();
+    h.get_all_by_label("Check a signed file")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    dialogs.next(xml_out.clone());
+    h.get_by_label("Browse…").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label_contains("The signature is valid")
+            .is_some()
+    );
+
     // a signed file opened from the start screen is checked, not signed again
     let mut app = App::new(
         kzsigner::Engine::new(vec![ca.clone()]),

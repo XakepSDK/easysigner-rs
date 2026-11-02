@@ -1,6 +1,6 @@
 # kzsigner (Rust)
 
-Sign and verify `.cms` files, signed PDFs and document cards with Kazakhstan NCA RK keys, locally, without NCALayer. A port of
+Sign and verify `.cms` files, signed PDFs, signed XML and document cards with Kazakhstan NCA RK keys, locally, without NCALayer. A port of
 [kzsigner](https://github.com/XakepSDK/easysigner) (Java) to Rust: the same commands, messages,
 checks and window, in one small executable with no runtime.
 
@@ -26,6 +26,14 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
   its `.cms` signatures as attachments. Any document can be put in a card, not only a PDF.
   Cards made by kzsigner open in SIGEX's [ddc](https://github.com/sigex-kz/ddc), and kzsigner
   checks and co-signs cards made by SIGEX.
+
+* **Inside an XML document** (XAdES, `--xml`): an enveloped XAdES signature (Order 500 p.10:
+  SignedInfo, SignatureValue, the certificate in KeyInfo, and signed properties with the
+  signing time and the signer's certificate), B-B, or B-T with `--tsa`, using the algorithm
+  names NCA's Kalkan uses (`urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:…`). Checking
+  reads XAdES and plain XMLDSig (inclusive or exclusive canonicalization, enveloped
+  signatures). A signature inside an XML document covers the whole document, so a second one
+  inside it would break the first: a signed XML document is co-signed into a .cms instead.
 
 * **Long-term signatures** (ETSI B-LT and B-LTA, `--level LT|LTA`, or `kzsigner extend` on an
   existing file): the CA certificates and NCA's revocation answers go into the signature (a
@@ -105,6 +113,8 @@ kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # wit
 kzsigner sign contract.docx -k key.p12 --card --qr      # -> contract.docx.card.pdf
 kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to the card
 kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
+kzsigner sign request.xml -k key.p12 --xml --tsa        # -> request-signed.xml, XAdES B-T
+kzsigner verify request-signed.xml                      # checks the XML signature
 kzsigner extract contract.docx.card.pdf                 # -> contract.docx, from inside the card
 kzsigner verify --qr scans.txt --data contract.docx     # signatures read back from QR codes
 ```
@@ -172,6 +182,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
 * `ltv.rs`: long-term validation data (fetching it, keeping it, reading it back) and CAdES
   archive-time-stamp-v3 with its ats-hash-index-v3 (ETSI EN 319 122-1 5.5). PDF document
   timestamps and the DSS are in `pdf/mod.rs`.
+* `xml/`: XAdES signing and checking (`mod.rs`) and C14N 1.0 inclusive and exclusive
+  canonicalization (`c14n.rs`, checked against the W3C recommendation's examples), on
+  [roxmltree](https://github.com/RazrFalcon/roxmltree). The signature goes in by splicing
+  text, so the rest of the document stays byte for byte as it was.
 * `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
   (plain http, which NCA's servers use; a proxy from the environment is honoured).
 * `gui.rs`: the window ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
@@ -213,6 +227,10 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * RSA-PSS signatures are not supported (NCA does not use them).
 * Long-term signatures follow ETSI EN 319 122-1 / 319 142-1; they were checked by kzsigner's
   own tests, not yet against NCALayer's or the EU DSS validator's reading of them.
+* XML signatures pass `xmlsec1` (RSA; it does not know KZ GOST), and kzsigner checks
+  signatures `xmlsec1` makes. The GOST ones use the same signature and hash bytes as Kalkan's
+  CMS (NCALayer's XML bundle passes them through unchanged), but have not been checked
+  against NCALayer itself. XAdES has no LT/LTA level yet.
 * The GOST curve arithmetic is on `num-bigint`, which is not constant-time (no maintained Rust
   crate implements KZ GOST 34.10). Keys never leave the computer. RSA uses the `rsa` crate.
 
@@ -239,6 +257,8 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `tests/e2e.rs` `long_term`: B-LTA .cms and PDFs signed, renewed, co-signed and checked
   offline from the kept answers; removed validation data and changed files are caught; a
   detached signature's archive timestamp needs its document.
+* `tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
+  a duplicated signed part, broken XML.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges

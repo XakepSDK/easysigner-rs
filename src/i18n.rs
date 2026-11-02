@@ -527,6 +527,24 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("The page is too small for the stamp.", "Бет мөр үшін тым кішкентай.", "Страница слишком мала для штампа."),
     ("There is no free room for one more stamp in that corner of the page.", "Беттің осы бұрышында тағы бір мөрге бос орын жоқ.", "В этом углу страницы нет места для ещё одного штампа."),
     ("Show a stamp with your name and the signing time on the last page", "Соңғы бетте атыңыз және қол қойылған уақыт көрсетілген мөрді көрсету", "Показать на последней странице штамп с вашим именем и временем подписания"),
+    ("Inside the XML", "XML ішінде", "Внутри XML"),
+    ("Keeps the XML document, with the signature inside it (XAdES). Only for XML files.", "XML құжаты сақталады, қолтаңба оның ішінде болады (XAdES). Тек XML файлдары үшін.", "XML-документ остаётся прежним, подпись внутри него (XAdES). Только для файлов XML."),
+    ("This XML document carries your signature inside it (XAdES).", "Бұл XML құжатының ішінде сіздің қолтаңбаңыз бар (XAdES).", "Этот XML-документ содержит вашу подпись внутри (XAdES)."),
+    ("Another signature cannot go inside this XML document without breaking the first one; yours can go into a .cms file or a card.", "Бұл XML құжатының ішіне біріншісін бұзбай басқа қолтаңба қою мүмкін емес; сіздің қолтаңбаңыз .cms файлына немесе карточкаға қойылады.", "Ещё одну подпись нельзя поместить внутрь этого XML-документа, не испортив первую; вашу подпись можно сохранить в файл .cms или в карточку."),
+    ("Only XML documents in UTF-8 can be signed or checked.", "Тек UTF-8 кодтауындағы XML құжаттарына қол қоюға немесе тексеруге болады.", "Подписать или проверить можно только XML-документы в кодировке UTF-8."),
+    ("This XML document is already signed. Adding another signature would break the first one, so kzsigner does not do it.", "Бұл XML құжатына қол қойылған. Тағы бір қолтаңба біріншісін бұзады, сондықтан kzsigner мұны істемейді.", "Этот XML-документ уже подписан. Ещё одна подпись испортила бы первую, поэтому kzsigner этого не делает."),
+    ("The signer's certificate is not included in the signature, so it cannot be checked.", "Қол қоюшының сертификаты қолтаңбада жоқ, сондықтан оны тексеру мүмкін емес.", "Сертификат подписавшего не включён в подпись, поэтому её нельзя проверить."),
+    ("This signature covers only part of the document, so the rest could be changed without notice.", "Бұл қолтаңба құжаттың тек бір бөлігін қамтиды, сондықтан қалғанын байқатпай өзгертуге болады.", "Эта подпись покрывает только часть документа, поэтому остальное можно изменить незаметно."),
+    ("This is a plain XML signature without signed XAdES properties (signing time, signer's certificate), which Order 500/НҚ p.10 asks for.", "Бұл қол қойылған XAdES қасиеттері (қол қою уақыты, қол қоюшының сертификаты) жоқ қарапайым XML қолтаңбасы, ал 500/НҚ бұйрығының 10-тармағы оларды талап етеді.", "Это простая XML-подпись без подписанных свойств XAdES (время подписания, сертификат подписавшего), которых требует п.10 Приказа 500/НҚ."),
+    ("The XML signature has no SignedInfo.", "XML қолтаңбасында SignedInfo жоқ.", "В XML-подписи нет SignedInfo."),
+    ("The signature uses a canonicalization method that is not supported.", "Қолтаңба қолдау көрсетілмейтін канонизация әдісін пайдаланады.", "Подпись использует неподдерживаемый метод канонизации."),
+    ("This XML document could not be read: {}", "Бұл XML құжатын оқу мүмкін болмады: {}", "Не удалось прочитать этот XML-документ: {}"),
+    ("The signed part {} is missing or appears more than once.", "Қол қойылған {} бөлігі жоқ немесе бірнеше рет кездеседі.", "Подписанная часть {} отсутствует или встречается больше одного раза."),
+    ("The signature refers to {}, outside the document; such signatures are not supported.", "Қолтаңба құжаттан тыс {} сілтейді; мұндай қолтаңбаларға қолдау көрсетілмейді.", "Подпись ссылается на {} вне документа; такие подписи не поддерживаются."),
+    ("The signature uses a transform that is not supported: {}", "Қолтаңба қолдау көрсетілмейтін түрлендіруді пайдаланады: {}", "Подпись использует неподдерживаемое преобразование: {}"),
+    ("The signature uses a digest algorithm that is not supported: {}", "Қолтаңба қолдау көрсетілмейтін хэш алгоритмін пайдаланады: {}", "Подпись использует неподдерживаемый алгоритм хэширования: {}"),
+    ("The signed part {} was changed after signing.", "Қол қойылған {} бөлігі қол қойылғаннан кейін өзгертілген.", "Подписанная часть {} была изменена после подписания."),
+    ("The signature uses an algorithm that is not supported: {}", "Қолтаңба қолдау көрсетілмейтін алгоритмді пайдаланады: {}", "Подпись использует неподдерживаемый алгоритм: {}"),
 ];
 
 #[cfg(test)]
@@ -539,7 +557,7 @@ mod tests {
         let mut missing = Vec::new();
         let mut found = 0;
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for dir in ["src", "src/pdf"] {
+        for dir in ["src", "src/pdf", "src/xml"] {
             for e in std::fs::read_dir(dir).unwrap() {
                 files.push(e.unwrap().path());
             }

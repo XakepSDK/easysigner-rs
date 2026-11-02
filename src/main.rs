@@ -48,6 +48,8 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --detached           Do not embed the document in the .cms.
       --pdf                Sign a PDF inside the PDF (PAdES), into FILE-signed.pdf; it
                            still opens in any PDF viewer. A signed PDF gets one more.
+      --xml                Sign an XML document inside it (an enveloped XAdES signature),
+                           into FILE-signed.xml.
       --stamp              With --pdf: a visible signature, a stamp on a page saying who
                            signed and when (it is part of what is signed).
       --stamp-page=N       The stamp's page (default: the last page).
@@ -174,6 +176,7 @@ struct Opts {
     data: Option<PathBuf>,
     detached: bool,
     pdf: bool,
+    xml: bool,
     card: bool,
     qr: bool,
     lang: Option<String>,
@@ -255,6 +258,7 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             }
             Long("detached") if allowed(&["sign"]) => o.detached = true,
             Long("pdf") if allowed(&["sign"]) => o.pdf = true,
+            Long("xml") if allowed(&["sign"]) => o.xml = true,
             Long("card") if allowed(&["sign"]) => o.card = true,
             Long("qr") if allowed(&["sign", "verify"]) => o.qr = true,
             Long("lang") if allowed(&["sign"]) => o.lang = Some(p.value()?.string()?),
@@ -341,9 +345,14 @@ fn sign(o: Opts) -> R<u8> {
     if o.qr && !o.card {
         return Err(Fail::Usage("--qr needs --card".into(), HELP_SIGN));
     }
-    if [o.detached, o.pdf, o.card].iter().filter(|x| **x).count() > 1 {
+    if [o.detached, o.pdf, o.card, o.xml]
+        .iter()
+        .filter(|x| **x)
+        .count()
+        > 1
+    {
         return Err(Fail::Usage(
-            "choose one of --detached, --pdf and --card".into(),
+            "choose one of --detached, --pdf, --xml and --card".into(),
             HELP_SIGN,
         ));
     }
@@ -372,9 +381,21 @@ fn sign(o: Opts) -> R<u8> {
             HELP_SIGN,
         ));
     }
+    if o.level.is_some() && o.xml {
+        return Err(Fail::Usage(
+            "--level is not supported for --xml yet (use --tsa for a timestamped XAdES B-T)".into(),
+            HELP_SIGN,
+        ));
+    }
     let input = read(&file)?;
     if o.pdf && !e.is_pdf(&input) {
         return Err(Fail::User(format!("{} is not a PDF file.", file.display())));
+    }
+    if o.xml && !e.is_xml(&input) {
+        return Err(Fail::User(format!(
+            "{} is not an XML document (or is not in UTF-8).",
+            file.display()
+        )));
     }
     let original = o.data.as_deref().map(read).transpose()?;
     // a long-term signature needs a timestamp
@@ -396,6 +417,8 @@ fn sign(o: Opts) -> R<u8> {
             lang,
             o.qr.then_some(true),
         )?
+    } else if o.xml {
+        e.sign_xml(&input, &k, tsa.as_deref(), o.ocsp.as_deref())?
     } else if o.pdf {
         e.sign_pdf_with(
             &input,
@@ -435,7 +458,9 @@ fn sign(o: Opts) -> R<u8> {
         } else if o.card {
             PathBuf::from(format!("{}.card.pdf", file.display()))
         } else if o.pdf {
-            signed_pdf_name(&file)
+            signed_name(&file, "pdf")
+        } else if o.xml {
+            signed_name(&file, "xml")
         } else {
             PathBuf::from(format!("{}.cms", file.display()))
         }
@@ -516,12 +541,12 @@ fn extend(o: Opts) -> R<u8> {
 }
 
 /// document.pdf -> document-signed.pdf
-fn signed_pdf_name(file: &Path) -> PathBuf {
+fn signed_name(file: &Path, ext: &str) -> PathBuf {
     let stem = file
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    file.with_file_name(format!("{stem}-signed.pdf"))
+    file.with_file_name(format!("{stem}-signed.{ext}"))
 }
 
 fn verify(o: Opts) -> R<u8> {

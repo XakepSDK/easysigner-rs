@@ -228,6 +228,9 @@ enum DocKind {
     Pdf,
     SignedPdf,
     Card,
+    Xml,
+    /// An XML document with a signature inside it.
+    SignedXml,
 }
 
 /// What signing makes.
@@ -239,6 +242,8 @@ pub enum SignAs {
     Pdf,
     /// A document card (ddcard).
     Card,
+    /// The signature inside the XML document (XAdES).
+    Xml,
 }
 
 /// A finished signing, for the Signed screen.
@@ -783,6 +788,24 @@ impl App {
         // a signed file keeps its own kind: a .cms gets another .cms signature, and so on
         let locked = matches!(kind, DocKind::Cms | DocKind::Card | DocKind::SignedPdf);
         let pdf_ok = matches!(kind, DocKind::Pdf | DocKind::SignedPdf);
+        // the second way: inside the document itself, a PDF's or an XML document's
+        let inside = if matches!(kind, DocKind::Xml | DocKind::SignedXml) {
+            (
+                SignAs::Xml,
+                tr("Inside the XML"),
+                tr(
+                    "Keeps the XML document, with the signature inside it (XAdES). Only for XML files.",
+                ),
+                kind == DocKind::Xml,
+            )
+        } else {
+            (
+                SignAs::Pdf,
+                tr("Inside the PDF"),
+                tr("Still opens as a normal PDF. Only for PDF files."),
+                pdf_ok && (!locked || kind == DocKind::SignedPdf),
+            )
+        };
         let options = [
             (
                 SignAs::Cms,
@@ -790,12 +813,7 @@ impl App {
                 tr("Saves a .cms file, like NCALayer and eGov. Recommended."),
                 !locked || kind == DocKind::Cms,
             ),
-            (
-                SignAs::Pdf,
-                tr("Inside the PDF"),
-                tr("Still opens as a normal PDF. Only for PDF files."),
-                pdf_ok && (!locked || kind == DocKind::SignedPdf),
-            ),
+            inside,
             (
                 SignAs::Card,
                 tr("Printable card"),
@@ -1010,6 +1028,7 @@ impl App {
                 SignAs::Pdf => {
                     tr("This PDF opens in any PDF viewer and carries your signature inside it.")
                 }
+                SignAs::Xml => tr("This XML document carries your signature inside it (XAdES)."),
                 SignAs::Card => tr(
                     "This PDF shows the document and its signatures; the original file and the signatures are attached inside it.",
                 ),
@@ -1186,6 +1205,14 @@ impl App {
                             }
                             _ => Ok((DocKind::Pdf, None)),
                         }
+                    } else if e.is_xml(&data) {
+                        match e.verify(&data, None, None) {
+                            Ok(rep) if !rep.signers.is_empty() => {
+                                Ok((DocKind::SignedXml, Some(rep)))
+                            }
+                            Ok(_) => Ok((DocKind::Xml, None)),
+                            Err(_) => Ok((DocKind::Other, None)),
+                        }
                     } else {
                         Ok((DocKind::Other, None))
                     }
@@ -1322,8 +1349,10 @@ impl App {
         let det = self.detached && !self.doc_is_cms;
         let tsa = self.timestamp.then(|| DEFAULT_TSA_URL.to_string());
         // the long-term data comes from NCA's OCSP server: not when online checks are off
-        let long_term =
-            self.timestamp && self.ocsp && self.long_term && self.sign_as != SignAs::Card;
+        let long_term = self.timestamp
+            && self.ocsp
+            && self.long_term
+            && matches!(self.sign_as, SignAs::Cms | SignAs::Pdf);
         let stamp = self.stamp.then(|| crate::pdf::stamp::Stamp {
             lang: Some(crate::i18n::lang()),
             ..Default::default()
@@ -1357,6 +1386,7 @@ impl App {
                         true,
                         o.as_deref(),
                     ),
+                    SignAs::Xml => e.sign_xml(&input, &key, tsa.as_deref(), ocsp.as_deref()),
                     SignAs::Pdf => e.sign_pdf_with(
                         &input,
                         &key,
@@ -1410,12 +1440,13 @@ impl App {
         } else {
             match sign_as {
                 SignAs::Cms => PathBuf::from(format!("{}.cms", doc.display())),
-                SignAs::Pdf => {
+                SignAs::Pdf | SignAs::Xml => {
                     let stem = doc
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    doc.with_file_name(format!("{stem}-signed.pdf"))
+                    let ext = if sign_as == SignAs::Xml { "xml" } else { "pdf" };
+                    doc.with_file_name(format!("{stem}-signed.{ext}"))
                 }
                 SignAs::Card => PathBuf::from(format!("{}.card.pdf", doc.display())),
             }
@@ -1645,7 +1676,10 @@ impl App {
                 if route
                     && matches!(
                         &r,
-                        Ok((DocKind::Cms | DocKind::SignedPdf | DocKind::Card, _))
+                        Ok((
+                            DocKind::Cms | DocKind::SignedPdf | DocKind::Card | DocKind::SignedXml,
+                            _
+                        ))
                     )
                     && let Some(f) = self.doc.take()
                 {
@@ -1678,6 +1712,9 @@ impl App {
                                         DocKind::SignedPdf => {
                                             tr("Your signature can be added inside this PDF.")
                                         }
+                                        DocKind::SignedXml => tr(
+                                            "Another signature cannot go inside this XML document without breaking the first one; yours can go into a .cms file or a card.",
+                                        ),
                                         _ => tr("Your signature will be added to this file."),
                                     }
                                     .into(),
@@ -1694,6 +1731,11 @@ impl App {
                             DocKind::Cms => SignAs::Cms,
                             DocKind::Card => SignAs::Card,
                             DocKind::SignedPdf => SignAs::Pdf,
+                            DocKind::Xml => SignAs::Xml,
+                            DocKind::SignedXml => SignAs::Cms,
+                            DocKind::Other | DocKind::Pdf if self.sign_as == SignAs::Xml => {
+                                SignAs::Cms
+                            }
                             DocKind::Other if self.sign_as == SignAs::Pdf => SignAs::Cms,
                             _ => self.sign_as,
                         };
