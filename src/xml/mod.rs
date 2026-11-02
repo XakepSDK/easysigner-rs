@@ -3,6 +3,7 @@
 //! with an NCA timestamp; checking also reads plain XMLDSig.
 
 pub mod c14n;
+pub mod encoding;
 
 use roxmltree::{Document, Node, NodeId};
 
@@ -17,6 +18,9 @@ use c14n::Method;
 pub const DS: &str = "http://www.w3.org/2000/09/xmldsig#";
 pub const XADES: &str = "http://uri.etsi.org/01903/v1.3.2#";
 const ENVELOPED: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+/// XPath Filter 2.0, and the XPath 1.0 transform.
+const FILTER2: &str = "http://www.w3.org/2002/06/xmldsig-filter2";
+const XPATH: &str = "http://www.w3.org/TR/1999/REC-xpath-19991116";
 const SIGNED_PROPERTIES: &str = "http://uri.etsi.org/01903#SignedProperties";
 const SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
 
@@ -82,17 +86,6 @@ fn digest_uri(oid: &str) -> &'static str {
         .iter()
         .find(|d| d.1 == oid)
         .map_or(SHA256, |d| d.0)
-}
-
-/// The document as text, without a byte order mark, and the mark.
-fn text_of(input: &[u8]) -> Result<(&str, &[u8])> {
-    let (bom, rest) = match input.strip_prefix(b"\xef\xbb\xbf") {
-        Some(r) => (&input[..3], r),
-        None => (&input[..0], input),
-    };
-    let text = std::str::from_utf8(rest)
-        .map_err(|_| Error::new(tr("Only XML documents in UTF-8 can be signed or checked.")))?;
-    Ok((text, bom))
 }
 
 fn parse(text: &str) -> Result<Document<'_>> {
@@ -183,16 +176,19 @@ pub fn sign(
     tsa_url: Option<&str>,
     trust: &TrustStore,
 ) -> Result<SignResult> {
-    let (text, bom) = text_of(input)?;
+    let (text, enc, bom) = encoding::decode(input)?;
+    let text = text.as_str();
     let doc = parse(text)?;
-    if !signatures(&doc).is_empty() {
+    let existing = signatures(&doc);
+    if !existing.iter().all(|s| leaves_room(*s)) {
         return Err(Error::new(tr(
-            "This XML document is already signed. Adding another signature would break the first one, so kzsigner does not do it.",
+            "This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file or a card instead.",
         )));
     }
     let mut r = SignResult {
         warnings: cert::key_warnings(&key.cert),
-        signer_count: 1,
+        signer_count: existing.len() + 1,
+        cosigned: !existing.is_empty(),
         ..Default::default()
     };
     let digest = key.private_key.digest_oid();
@@ -205,7 +201,8 @@ pub fn sign(
     let inc = Method::inclusive();
 
     // the document as the signature's enveloped reference will see it
-    let doc_digest = gost::hash(digest, &c14n::canonicalize(text, doc.root(), &inc, None))?;
+    let skip: Vec<NodeId> = existing.iter().map(|n| n.id()).collect();
+    let doc_digest = gost::hash(digest, &c14n::canonicalize(text, doc.root(), &inc, &skip))?;
 
     let mut idb = [0u8; 8];
     crate::random(&mut idb)?;
@@ -230,6 +227,8 @@ pub fn sign(
         "<ds:SignedInfo><ds:CanonicalizationMethod Algorithm=\"{c14n_uri}\"/>\
          <ds:SignatureMethod Algorithm=\"{sig_uri}\"/>\
          <ds:Reference URI=\"\"><ds:Transforms><ds:Transform Algorithm=\"{ENVELOPED}\"/>\
+         <ds:Transform Algorithm=\"{FILTER2}\"><dsig-xpath:XPath xmlns:dsig-xpath=\"{FILTER2}\" \
+         Filter=\"subtract\">/descendant::ds:Signature</dsig-xpath:XPath></ds:Transform>\
          <ds:Transform Algorithm=\"{c14n_uri}\"/></ds:Transforms>\
          <ds:DigestMethod Algorithm=\"{dig_uri}\"/><ds:DigestValue>{}</ds:DigestValue></ds:Reference>\
          <ds:Reference Type=\"{SIGNED_PROPERTIES}\" URI=\"#{id}-sp\"><ds:Transforms>\
@@ -277,7 +276,7 @@ pub fn sign(
         let d = parse(&out)?;
         let sp = by_id(&d, &format!("{id}-sp"))
             .ok_or_else(|| Error::new("signed properties not found"))?;
-        gost::hash(digest, &c14n::canonicalize(&out, sp, &inc, None))?
+        gost::hash(digest, &c14n::canonicalize(&out, sp, &inc, &[]))?
     };
     out = out.replacen(
         &format!("@@{id}-sp@@"),
@@ -289,7 +288,7 @@ pub fn sign(
         let s = by_id(&d, &id).ok_or_else(|| Error::new("signature not found"))?;
         let si = child(s, DS, "SignedInfo").ok_or_else(|| Error::new("SignedInfo not found"))?;
         key.private_key
-            .sign(&c14n::canonicalize(&out, si, &inc, None))?
+            .sign(&c14n::canonicalize(&out, si, &inc, &[]))?
     };
     out = out.replacen(&format!("@@{id}-sv@@"), &crate::base64_encode(&value), 1);
     r.signature = value;
@@ -301,7 +300,7 @@ pub fn sign(
                 let s = by_id(&d, &id).ok_or_else(|| Error::new("signature not found"))?;
                 let sv = child(s, DS, "SignatureValue")
                     .ok_or_else(|| Error::new("SignatureValue not found"))?;
-                c14n::canonicalize(&out, sv, &inc, None)
+                c14n::canonicalize(&out, sv, &inc, &[])
             };
             let token = timestamp(&stamped, url, key, trust, &mut r)?;
             format!(
@@ -316,7 +315,7 @@ pub fn sign(
     };
     out = out.replacen(&format!("@@{id}-up@@"), &unsigned, 1);
     let mut bytes = bom.to_vec();
-    bytes.extend_from_slice(out.as_bytes());
+    bytes.extend_from_slice(&encoding::encode(&out, enc)?);
     r.cms = bytes;
     Ok(r)
 }
@@ -354,7 +353,8 @@ fn timestamp(
 
 /// Checks every XML signature in the document `input`.
 pub fn verify(input: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result<VerifyReport> {
-    let (text, _) = text_of(input)?;
+    let (text, ..) = encoding::decode(input)?;
+    let text = text.as_str();
     let doc = parse(text)?;
     let mut rep = VerifyReport {
         has_content: true,
@@ -413,13 +413,14 @@ fn method_of(n: Node) -> Option<Method> {
     Some(m)
 }
 
-/// Checks one reference of a signature: returns the node it covers.
-fn check_reference<'a, 'i>(
+/// A reference's data after its transforms: the node it covers, the octets, and the digest
+/// algorithm.
+pub(crate) fn reference_octets<'a, 'i>(
     text: &str,
     doc: &'a Document<'i>,
     sig: Node<'a, 'i>,
     r: Node<'a, 'i>,
-) -> Result<Node<'a, 'i>> {
+) -> Result<(Node<'a, 'i>, Vec<u8>, &'static str)> {
     let uri = r.attribute("URI").unwrap_or_default();
     let target = if uri.is_empty() {
         doc.root()
@@ -436,13 +437,15 @@ fn check_reference<'a, 'i>(
             &[&uri],
         )));
     };
-    let mut skip: Option<NodeId> = None;
+    let mut skip: Vec<NodeId> = Vec::new();
     let mut method = Method::inclusive();
     if let Some(ts) = child(r, DS, "Transforms") {
         for t in children(ts, DS, "Transform") {
             let alg = t.attribute("Algorithm").unwrap_or_default();
             if alg == ENVELOPED {
-                skip = Some(sig.id());
+                skip.push(sig.id());
+            } else if excludes_signatures(t) {
+                skip.extend(signatures(doc).iter().map(|n| n.id()));
             } else if let Some(m) = method_of(t) {
                 method = m;
             } else {
@@ -464,9 +467,63 @@ fn check_reference<'a, 'i>(
             &[&dm],
         ))
     })?;
+    Ok((
+        target,
+        c14n::canonicalize(text, target, &method, &skip),
+        oid,
+    ))
+}
+
+/// Whether the Transform `t` leaves out every signature in the document: an XPath Filter 2.0
+/// "subtract" of all ds:Signature elements, or the XPath 1.0 filter
+/// not(ancestor-or-self::ds:Signature). Only these forms are understood.
+fn excludes_signatures(t: Node) -> bool {
+    let alg = t.attribute("Algorithm").unwrap_or_default();
+    let Some(x) = t
+        .children()
+        .find(|c| c.is_element() && c.tag_name().name() == "XPath")
+    else {
+        return false;
+    };
+    let expr: String = x
+        .text()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    // the prefix the expression uses must name the signature namespace there
+    let names_signature = |e: &str| {
+        e.split_once(':').is_some_and(|(p, rest)| {
+            rest == "Signature" && x.lookup_namespace_uri(Some(p)) == Some(DS)
+        })
+    };
+    match alg {
+        FILTER2 => {
+            x.tag_name().namespace() == Some(FILTER2)
+                && x.attribute("Filter") == Some("subtract")
+                && ["//", "/descendant::"]
+                    .iter()
+                    .any(|a| expr.strip_prefix(a).is_some_and(names_signature))
+        }
+        XPATH => expr
+            .strip_prefix("not(ancestor-or-self::")
+            .and_then(|e| e.strip_suffix(')'))
+            .is_some_and(names_signature),
+        _ => false,
+    }
+}
+
+/// Checks one reference of a signature: returns the node it covers.
+fn check_reference<'a, 'i>(
+    text: &str,
+    doc: &'a Document<'i>,
+    sig: Node<'a, 'i>,
+    r: Node<'a, 'i>,
+) -> Result<Node<'a, 'i>> {
+    let uri = r.attribute("URI").unwrap_or_default();
+    let (target, octets, oid) = reference_octets(text, doc, sig, r)?;
     let want = b64(child(r, DS, "DigestValue")).unwrap_or_default();
-    let got = gost::hash(oid, &c14n::canonicalize(text, target, &method, skip))?;
-    if got != want {
+    if gost::hash(oid, &octets)? != want {
         return Err(Error::new(if uri.is_empty() {
             tr("Signature check failed: the document's content hash does not match the signed hash (the document was changed).").to_string()
         } else {
@@ -474,6 +531,27 @@ fn check_reference<'a, 'i>(
         }));
     }
     Ok(target)
+}
+
+/// Whether another signature can go inside the XML document `input`: every signature there
+/// leaves the others out of what it signs.
+pub fn has_room(input: &[u8]) -> bool {
+    encoding::decode(input).is_ok_and(|(text, ..)| {
+        parse(&text).is_ok_and(|doc| signatures(&doc).into_iter().all(leaves_room))
+    })
+}
+
+/// Whether the signature `sig` still holds when another signature is added to the document:
+/// each reference to the whole document leaves out every signature.
+fn leaves_room(sig: Node) -> bool {
+    child(sig, DS, "SignedInfo").is_some_and(|si| {
+        children(si, DS, "Reference")
+            .filter(|r| r.attribute("URI").unwrap_or_default().is_empty())
+            .all(|r| {
+                child(r, DS, "Transforms")
+                    .is_some_and(|ts| children(ts, DS, "Transform").any(excludes_signatures))
+            })
+    })
 }
 
 /// Checks the signature `sig` and its signer.
@@ -554,7 +632,7 @@ fn check_one(
             .and_then(method_of)
             .unwrap_or_else(Method::inclusive);
         let stamped = child(sig, DS, "SignatureValue")
-            .map(|sv| c14n::canonicalize(text, sv, &method, None))
+            .map(|sv| c14n::canonicalize(text, sv, &method, &[]))
             .unwrap_or_default();
         match b64(child(st, XADES, "EncapsulatedTimeStamp"))
             .ok_or_else(|| Error::new("no EncapsulatedTimeStamp"))
@@ -610,7 +688,7 @@ fn check_signed_info(
     let ok = c.public_key()?.verify(
         sig_oid,
         Some(dig_oid),
-        &c14n::canonicalize(text, si, &method, None),
+        &c14n::canonicalize(text, si, &method, &[]),
         &value,
     )?;
     if !ok {

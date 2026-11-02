@@ -125,6 +125,22 @@ impl Engine {
         Ok(r)
     }
 
+    /// Signs a document known only by its hash into a detached .cms; see [`sign::sign_hash`].
+    /// The key is checked first.
+    pub fn sign_hash(
+        &self,
+        hash: &[u8],
+        key: &Key,
+        tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
+    ) -> Result<SignResult> {
+        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
+        let mut r = sign::sign_hash(hash, key, tsa_url, &self.trust)?;
+        warnings.append(&mut r.warnings);
+        r.warnings = warnings;
+        Ok(r)
+    }
+
     /// Signs an XML document with an enveloped XAdES signature; see [`xml::sign`]. The key is
     /// checked first.
     pub fn sign_xml(
@@ -139,6 +155,12 @@ impl Engine {
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
+    }
+
+    /// Whether another signature can go inside the signed XML document `data` without breaking
+    /// the ones there.
+    pub fn xml_has_room(&self, data: &[u8]) -> bool {
+        xml::has_room(data)
     }
 
     /// Whether `data` is an XML document.

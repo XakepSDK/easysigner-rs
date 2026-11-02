@@ -413,8 +413,25 @@ pub fn sign_once_with(
     signing_time: bool,
     extra: &[Vec<u8>],
 ) -> Result<SignedData> {
+    let md = gost::hash(key.digest_oid(), content)?;
+    let mut sd = sign_digest(&md, content_type, key, cert, signing_time, extra)?;
+    if attach {
+        sd.content = Some(content.to_vec());
+    }
+    Ok(sd)
+}
+
+/// A detached signature over a document whose hash, made with `key`'s digest algorithm, is
+/// `md` (the document itself is never seen).
+pub fn sign_digest(
+    md: &[u8],
+    content_type: &str,
+    key: &PrivateKey,
+    cert: &Cert,
+    signing_time: bool,
+    extra: &[Vec<u8>],
+) -> Result<SignedData> {
     let digest_oid = key.digest_oid();
-    let md = gost::hash(digest_oid, content)?;
     // CAdES-BES signed attributes, the same set NCALayer writes
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&gost::sha256(
         &cert.der,
@@ -422,7 +439,7 @@ pub fn sign_once_with(
     let mut attrs = vec![
         attribute(ATTR_CONTENT_TYPE, &der::oid(content_type)),
         attribute(ATTR_SIGNING_CERT_V2, &ess),
-        attribute(ATTR_MESSAGE_DIGEST, &der::octets(&md)),
+        attribute(ATTR_MESSAGE_DIGEST, &der::octets(md)),
     ];
     if signing_time {
         attrs.push(attribute(ATTR_SIGNING_TIME, &time::encode(time::now_ms())));
@@ -446,7 +463,7 @@ pub fn sign_once_with(
     Ok(SignedData {
         digest_algs: vec![si.digest_alg_raw.clone()],
         content_type: content_type.to_string(),
-        content: attach.then(|| content.to_vec()),
+        content: None,
         certs: vec![cert.der.clone()],
         crls: None,
         signers: vec![si],

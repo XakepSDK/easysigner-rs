@@ -49,9 +49,9 @@ impl Method {
 type Rendered = BTreeMap<String, String>;
 
 /// The canonical form of `apex` (an element, or the document's root node for all of it),
-/// leaving out the subtree at `skip` (an enveloped signature). `text` is the source the
+/// leaving out the subtrees at `skip` (signatures). `text` is the source the
 /// document was parsed from.
-pub fn canonicalize(text: &str, apex: Node, m: &Method, skip: Option<NodeId>) -> Vec<u8> {
+pub fn canonicalize(text: &str, apex: Node, m: &Method, skip: &[NodeId]) -> Vec<u8> {
     let mut out = String::new();
     let c = Canon { text, m, skip };
     if apex.node_type() == NodeType::Root {
@@ -83,13 +83,13 @@ pub fn canonicalize(text: &str, apex: Node, m: &Method, skip: Option<NodeId>) ->
     out.into_bytes()
 }
 
-struct Canon<'t, 'm> {
+struct Canon<'t, 'm, 's> {
     text: &'t str,
     m: &'m Method,
-    skip: Option<NodeId>,
+    skip: &'s [NodeId],
 }
 
-impl Canon<'_, '_> {
+impl Canon<'_, '_, '_> {
     /// The element's name as written (prefix:local).
     fn qname<'a>(&'a self, n: Node) -> &'a str {
         let s = &self.text[n.range().start + 1..];
@@ -122,7 +122,7 @@ impl Canon<'_, '_> {
     }
 
     fn element(&self, out: &mut String, n: Node, parent: &Rendered, apex: bool) {
-        if Some(n.id()) == self.skip {
+        if self.skip.contains(&n.id()) {
             return;
         }
         let qname = self.qname(n);
@@ -276,7 +276,7 @@ mod tests {
 
     fn c14n(s: &str, m: &Method) -> String {
         let doc = roxmltree::Document::parse(s).unwrap();
-        String::from_utf8(canonicalize(s, doc.root(), m, None)).unwrap()
+        String::from_utf8(canonicalize(s, doc.root(), m, &[])).unwrap()
     }
 
     // examples from the C14N 1.0 recommendation, section 3
@@ -305,7 +305,7 @@ mod tests {
             },
         )
         .unwrap();
-        let out = String::from_utf8(canonicalize(s, doc.root(), &inc, None)).unwrap();
+        let out = String::from_utf8(canonicalize(s, doc.root(), &inc, &[])).unwrap();
         // (roxmltree does not add DTD default attributes, so e9 has no attr="default")
         assert_eq!(
             out,
@@ -324,13 +324,13 @@ mod tests {
         let s = "<a:r xmlns:a=\"urn:a\" xmlns:b=\"urn:b\" xml:lang=\"kk\"><a:x b:y=\"1\"><c/></a:x></a:r>";
         let doc = roxmltree::Document::parse(s).unwrap();
         let x = doc.root_element().first_child().unwrap();
-        let inc = String::from_utf8(canonicalize(s, x, &Method::inclusive(), None)).unwrap();
+        let inc = String::from_utf8(canonicalize(s, x, &Method::inclusive(), &[])).unwrap();
         assert_eq!(
             inc,
             "<a:x xmlns:a=\"urn:a\" xmlns:b=\"urn:b\" xml:lang=\"kk\" b:y=\"1\"><c></c></a:x>"
         );
-        let exc = String::from_utf8(canonicalize(s, x, &Method::by_uri(EXC_C14N).unwrap(), None))
-            .unwrap();
+        let exc =
+            String::from_utf8(canonicalize(s, x, &Method::by_uri(EXC_C14N).unwrap(), &[])).unwrap();
         assert_eq!(
             exc,
             "<a:x xmlns:a=\"urn:a\" xmlns:b=\"urn:b\" b:y=\"1\"><c></c></a:x>"
@@ -343,7 +343,7 @@ mod tests {
             s,
             ps,
             &Method::by_uri(EXC_C14N).unwrap(),
-            None,
+            &[],
         ))
         .unwrap();
         assert_eq!(exc, "<p:s xmlns:p=\"urn:p\"><t xmlns=\"urn:d\"></t></p:s>");
@@ -351,8 +351,8 @@ mod tests {
         let s = "<r><s>1</s><t/></r>";
         let doc = roxmltree::Document::parse(s).unwrap();
         let sid = doc.root_element().first_child().unwrap().id();
-        let out = String::from_utf8(canonicalize(s, doc.root(), &Method::inclusive(), Some(sid)))
-            .unwrap();
+        let out =
+            String::from_utf8(canonicalize(s, doc.root(), &Method::inclusive(), &[sid])).unwrap();
         assert_eq!(out, "<r><t></t></r>");
     }
 }

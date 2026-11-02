@@ -1230,6 +1230,38 @@ fn long_term() {
     );
     let v = kz(&t, &["verify", "stamped2.pdf"]);
     t.check("stamp: both verify", v.contains("VALID - all 2"));
+    // signing by hash, long-term (LT: no archive timestamp, which would need the document)
+    let h = t
+        .kz(&["hash", "--alg", "sha256", "doc.txt"])
+        .trim()
+        .to_string();
+    let v = kz(
+        &t,
+        &[
+            "sign",
+            "--hash",
+            &h,
+            "-k",
+            &carol,
+            "--tsa",
+            &tsa,
+            "--ocsp",
+            &ocsp,
+            "--level",
+            "LT",
+            "-o",
+            "hash-lt.cms",
+        ],
+    );
+    t.check(
+        "hash LT: signed",
+        v.contains("Signed by") && !v.contains("not as a long-term"),
+    );
+    let v = kz(&t, &["verify", "--data", "doc.txt", "hash-lt.cms"]);
+    t.check(
+        "hash LT: verifies, B-LT",
+        v.contains("VALID - all 1") && v.contains("B-LT"),
+    );
     let v = kz(&t, &["sign", "--stamp", "-k", &carol, "doc.txt"]);
     t.check("stamp: only with --pdf", v.contains("need --pdf"));
 
@@ -1425,20 +1457,67 @@ fn xml() {
         v.contains("could not be read"),
     );
 
-    // what is refused
+    // single-byte encodings keep their bytes; the signature checks out
+    for (name, body) in [
+        ("windows-1251", &b"\xc4\xee\xe3\xee\xe2\xee\xf0 \xb9 7"[..]),
+        ("KZ-1048", &b"\xd8\xe0\xf0\xf2 \xe3\xe0 \xbe\xee\xb3"[..]),
+    ] {
+        let mut doc = format!("<?xml version=\"1.0\" encoding=\"{name}\"?>\n<doc>").into_bytes();
+        doc.extend_from_slice(body);
+        doc.extend_from_slice(b"</doc>\n");
+        std::fs::write(t.path("enc.xml"), &doc).unwrap();
+        let _ = std::fs::remove_file(t.path("enc-signed.xml"));
+        let v = t.kz(&["sign", "--xml", "-k", &key, "enc.xml"]);
+        t.check(&format!("xml {name}: signed"), v.contains("Signed by"));
+        let signed = std::fs::read(t.path("enc-signed.xml")).unwrap_or_default();
+        t.check(
+            &format!("xml {name}: the document's bytes are kept"),
+            signed.starts_with(&doc[..doc.len() - 7]) && signed.ends_with(b"</doc>\n"),
+        );
+        let v = t.kz(&["verify", "--trust", &ca, "enc-signed.xml"]);
+        t.check(
+            &format!("xml {name}: verifies"),
+            v.contains("VALID - all 1"),
+        );
+    }
+
+    // a second signature inside: both hold
+    let bob = s(&fixtures().join("keys/bob_gost2015.p12"));
     let v = t.kz(&[
         "sign",
         "--xml",
         "-k",
-        &key,
+        &bob,
+        "--trust",
+        &ca,
         "-o",
-        "again.xml",
+        "two.xml",
         "req-signed.xml",
     ]);
+    t.check("xml: a second signature inside", v.contains("2 signatures"));
+    let v = t.kz(&["verify", "--trust", &ca, "--trust", "tsa.cer", "two.xml"]);
     t.check(
-        "xml: a signed document is not signed again",
-        v.contains("already signed"),
+        "xml: both signatures verify",
+        v.contains("VALID - all 2") && v.contains("ПЕТРОВА"),
     );
+    // a signature that covers other signatures leaves no room for another
+    let closed = std::fs::read_to_string(t.path("req-signed.xml")).unwrap();
+    let a = closed
+        .find("<ds:Transform Algorithm=\"http://www.w3.org/2002/06/xmldsig-filter2\"")
+        .unwrap();
+    let b = a + closed[a..].find("</ds:Transform>").unwrap() + 15;
+    std::fs::write(
+        t.path("closed.xml"),
+        format!("{}{}", &closed[..a], &closed[b..]),
+    )
+    .unwrap();
+    let v = t.kz(&["sign", "--xml", "-k", &bob, "-o", "again.xml", "closed.xml"]);
+    t.check(
+        "xml: no second signature when the first covers everything",
+        v.contains("covers everything"),
+    );
+
+    // what is refused
     std::fs::write(t.path("doc.txt"), "not xml").unwrap();
     let v = t.kz(&["sign", "--xml", "-k", &key, "doc.txt"]);
     t.check("xml: only XML", v.contains("not an XML document"));
@@ -1472,6 +1551,73 @@ fn xml() {
         "xml: --data is not for XML",
         v.contains("check the signed XML file alone"),
     );
+
+    println!("\n{} passed, {} failed", t.pass, t.fail.len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(t.fail.is_empty(), "failed: {:?}", t.fail);
+}
+
+/// Signing a document by its hash only, as NCALayer's createCAdESFromBase64Hash does.
+#[test]
+fn by_hash() {
+    let dir = std::env::temp_dir().join(format!("kzsigner-hash-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = Run {
+        dir: dir.clone(),
+        pass: 0,
+        fail: vec![],
+    };
+    std::fs::write(t.path("doc.txt"), "Договор №7\n").unwrap();
+    for (a, alg) in [
+        ("gost2015", "gost2015"),
+        ("gost2015_256", "gost2015-256"),
+        ("gost2004", "gost2004"),
+        ("rsa", "sha256"),
+    ] {
+        let key = s(&fixtures().join(format!("keys/alice_{a}.p12")));
+        let ca = s(&fixtures().join(format!("keys/ca_{a}.cer")));
+        let h = t.kz(&["hash", "--alg", alg, "doc.txt"]).trim().to_string();
+        let out = format!("doc-{a}.cms");
+        let v = t.kz(&["sign", "--hash", &h, "-k", &key, "-o", &out]);
+        t.check(&format!("hash {a}: signed"), v.contains("Signed by"));
+        let v = t.kz(&["verify", "--trust", &ca, "--data", "doc.txt", &out]);
+        t.check(
+            &format!("hash {a}: verifies against the document"),
+            v.contains("VALID - all 1"),
+        );
+        std::fs::write(t.path("other.txt"), "Договор №8\n").unwrap();
+        let v = t.kz(&["verify", "--trust", &ca, "--data", "other.txt", &out]);
+        t.check(
+            &format!("hash {a}: another document does not"),
+            v.contains("NOT VALID"),
+        );
+    }
+    let key = s(&fixtures().join("keys/alice_gost2015.p12"));
+    // hex works too; the length must fit the key
+    let h = t
+        .kz(&["hash", "--alg", "gost2015", "doc.txt"])
+        .trim()
+        .to_string();
+    let hex: String = kzsigner::base64_decode(&h)
+        .unwrap()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let v = t.kz(&["sign", "--hash", &hex, "-k", &key, "-o", "hex.cms"]);
+    t.check("hash: hex", v.contains("Signed by"));
+    let sha = t
+        .kz(&["hash", "--alg", "sha256", "doc.txt"])
+        .trim()
+        .to_string();
+    let v = t.kz(&["sign", "--hash", &sha, "-k", &key, "-o", "x.cms"]);
+    t.check("hash: wrong length refused", v.contains("64-byte"));
+    let v = t.kz(&["sign", "--hash", &h, "-k", &key, "doc.txt"]);
+    t.check("hash: no FILE with --hash", v.contains("not a file"));
+    let v = t.kz(&[
+        "sign", "--hash", &h, "-k", &key, "--level", "LTA", "-o", "x.cms",
+    ]);
+    t.check("hash: no LTA", v.contains("use LT with --hash"));
 
     println!("\n{} passed, {} failed", t.pass, t.fail.len());
     let _ = std::fs::remove_dir_all(&dir);

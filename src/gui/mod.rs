@@ -179,8 +179,8 @@ enum DocKind {
     SignedPdf,
     Card,
     Xml,
-    /// An XML document with a signature inside it.
-    SignedXml,
+    /// An XML document with a signature inside it; true when another one can go in too.
+    SignedXml(bool),
 }
 
 /// What signing makes.

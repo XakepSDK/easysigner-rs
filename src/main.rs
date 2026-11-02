@@ -28,16 +28,18 @@ Commands:
            Exit code 0 only if all are valid.
   extend   Make the signatures in a .cms or signed PDF long-term (B-LT/B-LTA).
   extract  Write out the document embedded in a .cms or document card.
+  hash     Print a document's hash, for signing it by its hash (sign --hash).
   info     Show the certificate inside a key file.
 Run 'kzsigner COMMAND --help' for a command's options.
 ";
 
 const HELP_SIGN: &str = "\
-Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
+Usage: kzsigner sign [-hV] [--detached | --pdf | --xml | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
                      [--level=LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
                      [--stamp-lang=LANG] [--stamp-logo=IMAGE]] [--data=ORIGINAL]
                      [--trust=CA.cer]... FILE
+       kzsigner sign [options] --hash=HASH -o=OUT
 Sign FILE into FILE.cms.
 If FILE is already a .cms, your signature is ADDED to it (co-signing).
       FILE                 Document, or .cms to co-sign.
@@ -48,6 +50,10 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --detached           Do not embed the document in the .cms.
       --pdf                Sign a PDF inside the PDF (PAdES), into FILE-signed.pdf; it
                            still opens in any PDF viewer. A signed PDF gets one more.
+      --hash=HASH          Sign a document known only by its hash (base64 or hex, made with
+                           the key's algorithm; see `kzsigner hash`) into a detached .cms,
+                           written to OUT (-o). No FILE then. Checking the signature
+                           needs the document (verify --data).
       --xml                Sign an XML document inside it (an enveloped XAdES signature),
                            into FILE-signed.xml.
       --stamp              With --pdf: a visible signature, a stamp on a page saying who
@@ -108,6 +114,14 @@ certificate expires to renew it. Signatures need a timestamp already (sign with 
       --tsa[=URL]       Timestamp server (default http://tsp.pki.gov.kz:80).
       --ocsp[=URL]      OCSP server (default http://ocsp.pki.gov.kz).
       --trust=CA.cer    Extra trusted CA certificate (repeatable), on top of NCA RK's.
+";
+
+const HELP_HASH: &str = "\
+Usage: kzsigner hash [-hV] [--alg=ALG] FILE
+Print FILE's hash in base64, for `kzsigner sign --hash` (signing a document by its hash).
+      FILE        The document.
+      --alg=ALG   gost2015 (default; GOST 34.11-2015, 512 bits, for GOST 2015 keys),
+                  gost2015-256, gost2004 (GOST 34.311-95, for GOST 2004 keys) or sha256 (RSA).
 ";
 
 const HELP_EXTRACT: &str = "\
@@ -186,6 +200,8 @@ struct Opts {
     level: Option<kzsigner::ltv::Level>,
     stamp: Option<kzsigner::pdf::stamp::Stamp>,
     stamp_logo: Option<PathBuf>,
+    hash: Option<String>,
+    alg: Option<String>,
 }
 
 /// Parses a command's options; prints help or version and returns None when asked to.
@@ -258,6 +274,8 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             }
             Long("detached") if allowed(&["sign"]) => o.detached = true,
             Long("pdf") if allowed(&["sign"]) => o.pdf = true,
+            Long("hash") if allowed(&["sign"]) => o.hash = Some(p.value()?.string()?),
+            Long("alg") if allowed(&["hash"]) => o.alg = Some(p.value()?.string()?),
             Long("xml") if allowed(&["sign"]) => o.xml = true,
             Long("card") if allowed(&["sign"]) => o.card = true,
             Long("qr") if allowed(&["sign", "verify"]) => o.qr = true,
@@ -270,7 +288,8 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
                 o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?)
             }
             Value(v)
-                if o.file.is_none() && allowed(&["sign", "verify", "extract", "gui", "extend"]) =>
+                if o.file.is_none()
+                    && allowed(&["sign", "verify", "extract", "gui", "extend", "hash"]) =>
             {
                 o.file = Some(v.into())
             }
@@ -339,6 +358,9 @@ fn open_key(e: &Engine, o: &Opts, help: &'static str) -> R<kzsigner::p12::Key> {
 }
 
 fn sign(o: Opts) -> R<u8> {
+    if o.hash.is_some() {
+        return sign_hash(o);
+    }
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
@@ -393,7 +415,7 @@ fn sign(o: Opts) -> R<u8> {
     }
     if o.xml && !e.is_xml(&input) {
         return Err(Fail::User(format!(
-            "{} is not an XML document (or is not in UTF-8).",
+            "{} is not an XML document.",
             file.display()
         )));
     }
@@ -564,6 +586,89 @@ fn verify(o: Opts) -> R<u8> {
     Ok(if r.valid { 0 } else { 1 })
 }
 
+/// sign --hash: a detached .cms from a document's hash.
+fn sign_hash(o: Opts) -> R<u8> {
+    let value = o.hash.as_deref().unwrap_or_default();
+    if o.file.is_some() || o.detached || o.pdf || o.xml || o.card || o.data.is_some() {
+        return Err(Fail::Usage(
+            "--hash signs a hash, not a file: give no FILE, --pdf, --xml, --card or --data".into(),
+            HELP_SIGN,
+        ));
+    }
+    let out = need(&o.out, "option: '--out=OUT' (with --hash)", HELP_SIGN)?;
+    let hash = parse_hash(value).ok_or_else(|| {
+        Fail::Usage(
+            format!("--hash {value} is neither base64 nor hex"),
+            HELP_SIGN,
+        )
+    })?;
+    if o.level == Some(kzsigner::ltv::Level::Lta) {
+        return Err(Fail::Usage(
+            "--level LTA needs the document itself (its archive timestamp covers it); use LT with --hash".into(),
+            HELP_SIGN,
+        ));
+    }
+    let e = engine(&o)?;
+    let k = open_key(&e, &o, HELP_SIGN)?;
+    let tsa = o
+        .tsa
+        .clone()
+        .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
+    let mut r = e.sign_hash(&hash, &k, tsa.as_deref(), o.ocsp.as_deref())?;
+    if let (Some(level), Some(tsa)) = (o.level, &tsa) {
+        r = e.extend_new(
+            r,
+            None,
+            level,
+            tsa,
+            o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
+        );
+    }
+    write(out, &r.cms)?;
+    for w in &r.warnings {
+        println!("Warning: {w}");
+    }
+    println!("Signed by {}", kzsigner::cert::holder_name(&k.cert));
+    println!(
+        "Output: {}  (detached; check it with: kzsigner verify {} --data DOCUMENT)",
+        out.display(),
+        out.display()
+    );
+    Ok(0)
+}
+
+/// A hash given as hex or base64.
+fn parse_hash(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len().is_multiple_of(2) && s.len() >= 32 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+            .collect();
+    }
+    kzsigner::base64_decode(s)
+}
+
+/// hash: a document's hash in base64.
+fn hash(o: Opts) -> R<u8> {
+    let file = need(&o.file, "parameter: 'FILE'", HELP_HASH)?;
+    let alg = match o.alg.as_deref().unwrap_or("gost2015") {
+        "gost2015" | "gost2015-512" => kzsigner::gost::H_GOST2015_512,
+        "gost2015-256" => kzsigner::gost::H_GOST2015_256,
+        "gost2004" => kzsigner::gost::H_GOST34311,
+        "sha256" => kzsigner::gost::H_SHA256,
+        other => {
+            return Err(Fail::Usage(
+                format!("unknown --alg {other} (use gost2015, gost2015-256, gost2004 or sha256)"),
+                HELP_HASH,
+            ));
+        }
+    };
+    let h = kzsigner::gost::hash(alg, &read(file)?)?;
+    println!("{}", kzsigner::base64_encode(&h));
+    Ok(0)
+}
+
 fn extract(o: Opts) -> R<u8> {
     let file = need(&o.file, "parameter: 'FILE'", HELP_EXTRACT)?;
     let data = read(file)?;
@@ -691,6 +796,7 @@ fn run() -> R<u8> {
         "sign" => (HELP_SIGN, sign),
         "verify" => (HELP_VERIFY, verify),
         "extract" => (HELP_EXTRACT, extract),
+        "hash" => (HELP_HASH, hash),
         "extend" => (HELP_EXTEND, extend),
         "info" => (HELP_INFO, info),
         "gui" => (HELP_GUI, gui),

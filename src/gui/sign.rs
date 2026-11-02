@@ -169,14 +169,14 @@ impl App {
         let locked = matches!(kind, DocKind::Cms | DocKind::Card | DocKind::SignedPdf);
         let pdf_ok = matches!(kind, DocKind::Pdf | DocKind::SignedPdf);
         // the second way: inside the document itself, a PDF's or an XML document's
-        let inside = if matches!(kind, DocKind::Xml | DocKind::SignedXml) {
+        let inside = if matches!(kind, DocKind::Xml | DocKind::SignedXml(_)) {
             (
                 SignAs::Xml,
                 tr("Inside the XML"),
                 tr(
                     "Keeps the XML document, with the signature inside it (XAdES). Only for XML files.",
                 ),
-                kind == DocKind::Xml,
+                matches!(kind, DocKind::Xml | DocKind::SignedXml(true)),
             )
         } else {
             (
@@ -489,7 +489,7 @@ impl App {
                     } else if e.is_xml(&data) {
                         match e.verify(&data, None, None) {
                             Ok(rep) if !rep.signers.is_empty() => {
-                                Ok((DocKind::SignedXml, Some(rep)))
+                                Ok((DocKind::SignedXml(e.xml_has_room(&data)), Some(rep)))
                             }
                             Ok(_) => Ok((DocKind::Xml, None)),
                             Err(_) => Ok((DocKind::Other, None)),
@@ -736,7 +736,7 @@ impl App {
             && matches!(
                 &r,
                 Ok((
-                    DocKind::Cms | DocKind::SignedPdf | DocKind::Card | DocKind::SignedXml,
+                    DocKind::Cms | DocKind::SignedPdf | DocKind::Card | DocKind::SignedXml(_),
                     _
                 ))
             )
@@ -770,7 +770,10 @@ impl App {
                                     DocKind::SignedPdf => {
                                         tr("Your signature can be added inside this PDF.")
                                     }
-                                    DocKind::SignedXml => tr(
+                                    DocKind::SignedXml(true) => tr(
+                                        "Your signature can be added inside this XML document.",
+                                    ),
+                                    DocKind::SignedXml(false) => tr(
                                         "Another signature cannot go inside this XML document without breaking the first one; yours can go into a .cms file or a card.",
                                     ),
                                     _ => tr("Your signature will be added to this file."),
@@ -790,7 +793,8 @@ impl App {
                     DocKind::Card => SignAs::Card,
                     DocKind::SignedPdf => SignAs::Pdf,
                     DocKind::Xml => SignAs::Xml,
-                    DocKind::SignedXml => SignAs::Cms,
+                    DocKind::SignedXml(true) => SignAs::Xml,
+                    DocKind::SignedXml(false) => SignAs::Cms,
                     DocKind::Other | DocKind::Pdf if self.sign.sign_as == SignAs::Xml => {
                         SignAs::Cms
                     }
