@@ -64,6 +64,12 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Glo
 members = ["android"]
 default-members = ["."]
 
+# jni-macros 0.22.4 (used by android-activity) writes its generated checks in HashMap order,
+# which changes from one build to the next: the Android library was not reproducible. The copy
+# in third_party sorts them; see third_party/README.md.
+[patch.crates-io]
+jni-macros = { path = "third_party/jni-macros" }
+
 [profile.release]
 opt-level = "z"
 lto = true
