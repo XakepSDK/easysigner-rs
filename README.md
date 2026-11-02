@@ -27,13 +27,35 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
 The network is used only for an NCA timestamp (`--tsa`, always for a card) and the NCA
 revocation check (`--ocsp`, always for a card, whose signatures keep the answer).
 
+### What is checked (Order 500/НҚ)
+
+* **Before signing**, the key's own certificate is checked (p.4): it must be in force, its chain
+  must lead to a trusted CA, and it must be meant for signing documents. With `--ocsp` (and
+  always for a card, and in the window when the revocation check is on) it must also not be
+  revoked; when NCA cannot be reached, signing goes ahead with a warning. kzsigner trusts NCA RK
+  only, so test keys need their CA added with `--trust`.
+* **Purpose** (p.16.4): a CA certificate, a key whose usage allows neither digital signature nor
+  non-repudiation, a timestamp or OCSP service key, or a certificate policy outside its CA's
+  policy is not accepted for document signatures (`usageError` in `--json`, "Usage" in text).
+* **Revocation** (p.18): OCSP first; if it gives no answer, the CA's CRL (with its delta CRL) is
+  used instead. `revocationSource` in `--json` says which answered. Lists are cached until their
+  next update (at most an hour), failures for five minutes.
+* **Timestamps** (p.17.2): a warning when the timestamp comes from a different CA than the
+  signer's (NCA's own CAs count as one).
+* **Kept answers** (p.8): card signatures carry the OCSP answer in `crls` and in the
+  revocationValues attribute, and the issuer and responder certificates in certValues.
+* **Seeing the document** (Digital Code Art. 50): the window has **Open the document**, before
+  signing and when checking, which opens it in the system's viewer (on a phone, through the
+  app chooser).
+
 ## Use
 
 Run `kzsigner` with no arguments (or double-click it) for the window. It starts with two choices,
 **Sign a document** and **Check a signed file**, each on a screen of its own in plain words; the
 technical details are folded away. A file opened with it (`kzsigner document.pdf`) or dropped on
 the window goes where it belongs: a document to signing, a signed file (.cms, signed PDF, card)
-to checking, a key file to the key field. Safe by default: signing adds NCA's official time and
+to checking, a key file to the key field. On a phone, or in a narrow window, the screens
+switch to one column with full-width buttons. Safe by default: signing adds NCA's official time and
 checking asks NCA whether the keys were revoked (both need internet; they can be turned off
 under More options). When NCA cannot be reached, a check says the signatures are valid but not
 checked for revocation, rather than failing. The window is in Kazakh, Russian or English: it starts in the
@@ -126,11 +148,14 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   signing time, signingCertificateV2, message digest), co-signing by merging signers.
 * `verify.rs`, `tsp.rs`, `ocsp.rs`, `trust.rs`: signature, signing-certificate binding,
   timestamps (CAdES-T), certificate paths built only from trusted certificates, OCSP.
-* `http.rs`: the POST to the timestamp and OCSP servers, with `ureq` (plain http, which NCA's
-  servers use; a proxy from the environment is honoured).
+* `crl.rs`, `cert.rs`: CRLs and delta CRLs (the OCSP fallback), key usage and certificate
+  policies.
+* `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
+  (plain http, which NCA's servers use; a proxy from the environment is honoured).
 * `gui.rs`: the window ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
-  and over remote desktop). Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
+  and over remote desktop). `icons.rs` draws the icons from SVG path data as vector shapes, so
+they stay sharp at any scale with no image files. Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
   letters (`assets/`).
 * `pdf/`: PDF signatures and document cards, on [lopdf](https://github.com/J-F-Liu/lopdf).
   `pdf/mod.rs` signs a PDF as an incremental update (ETSI.CAdES.detached, the `ByteRange`
@@ -180,13 +205,15 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
   refused. Test PDFs are in `tests/fixtures/pdf`.
 * `tests/gui.rs`: drives the window without a display (egui_kittest): from the start screen picks
-  a document and key, types the password, signs, checks the result, saves the document back out
+  a document and key, types the password, opens the document, signs, checks the result, saves the document back out
   and switches languages; signs a PDF inside, checks it and a card, saves the card's document;
   and opens a signed PDF from the start, which goes to checking.
 * `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken: .cms, .p12, plain and
   signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
 * `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later
   signatures alone keep earlier ones valid, and a no-changes certified PDF is not signed.
+* `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
+  documents (key usage, service keys, policies against the real NCA CAs).
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges
   with NCA's timestamp server (`tests/fixtures/nca-live`, RSA and GOST 2015 TSA signatures).
 
