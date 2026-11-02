@@ -169,8 +169,11 @@ fn trim(s: &[u8]) -> &[u8] {
     &s[n.min(s.len().saturating_sub(1))..]
 }
 
-/// Lists fetched in this run, by address, until their nextUpdate.
-static CACHE: Mutex<Option<HashMap<String, (Vec<u8>, i64)>>> = Mutex::new(None);
+/// A fetched list and its nextUpdate, by address.
+type Cache = HashMap<String, (Vec<u8>, i64)>;
+
+/// Lists fetched in this run, kept until their nextUpdate.
+static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
 fn fetch(url: &str, now: i64) -> Result<Vec<u8>> {
     if let Some((data, until)) = CACHE
