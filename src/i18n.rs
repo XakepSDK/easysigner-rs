@@ -523,6 +523,9 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("The logo must be a JPEG or PNG image.", "Логотип JPEG немесе PNG суреті болуы керек.", "Логотип должен быть изображением JPEG или PNG."),
     ("The logo image could not be read.", "Логотип суретін оқу мүмкін болмады.", "Не удалось прочитать изображение логотипа."),
     ("This PNG logo is not supported (use 8 bits per channel or a palette, not interlaced), or use a JPEG.", "Бұл PNG логотипіне қолдау көрсетілмейді (арнаға 8 бит немесе палитра, interlace-сіз қолданыңыз) немесе JPEG қолданыңыз.", "Этот логотип PNG не поддерживается (нужны 8 бит на канал или палитра, без чересстрочности), или используйте JPEG."),
+    ("This JPEG logo is not supported (use 8 bits per channel), or use a PNG.", "Бұл JPEG логотипіне қолдау көрсетілмейді (арнаға 8 бит қолданыңыз) немесе PNG қолданыңыз.", "Этот логотип JPEG не поддерживается (нужны 8 бит на канал), или используйте PNG."),
+    ("The page is too small for the stamp.", "Бет мөр үшін тым кішкентай.", "Страница слишком мала для штампа."),
+    ("There is no free room for one more stamp in that corner of the page.", "Беттің осы бұрышында тағы бір мөрге бос орын жоқ.", "В этом углу страницы нет места для ещё одного штампа."),
     ("Show a stamp with your name and the signing time on the last page", "Соңғы бетте атыңыз және қол қойылған уақыт көрсетілген мөрді көрсету", "Показать на последней странице штамп с вашим именем и временем подписания"),
 ];
 

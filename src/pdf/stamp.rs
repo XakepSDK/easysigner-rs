@@ -3,11 +3,12 @@
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
+use super::import::{inherited, rect};
 use super::layout::{MM, Page, Writer, leading};
 use crate::cert::{self, Cert};
 use crate::i18n::{Lang, tr, trf};
 use crate::report::SignerReport;
-use crate::{Error, Result, time};
+use crate::{Error, Result};
 
 /// Where a page's stamp goes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,22 +89,23 @@ pub struct Drawn {
     pub objects: Vec<(ObjectId, Object)>,
 }
 
-/// Draws the stamp for `c`, signing now, onto the page `stamp` names; `alloc` gives new object
-/// ids.
+/// Draws the stamp for `c`, signing at `at` (ms), onto the page `stamp` names, beside any
+/// stamps already there; `alloc` gives new object ids.
 pub fn draw(
     doc: &Document,
+    pages: &std::collections::BTreeMap<u32, ObjectId>,
     stamp: &Stamp,
     c: &Cert,
+    at: i64,
     alloc: &mut dyn FnMut() -> ObjectId,
 ) -> Result<Drawn> {
-    let pages = doc.get_pages();
     let n = stamp.page.unwrap_or(pages.len());
     let page_id = *pages
         .get(&(n as u32))
         .ok_or_else(|| Error::new(trf("This PDF has no page {}.", &[&n])))?;
     let page = doc
         .get_dictionary(page_id)
-        .map_err(|e| Error::new(format!("damaged page: {e}")))?;
+        .map_err(|e| Error::new(trf("This PDF could not be read: {}", &[&e])))?;
     let bx = rect(inherited(doc, page, b"CropBox"))
         .or_else(|| rect(inherited(doc, page, b"MediaBox")))
         .unwrap_or([0.0, 0.0, 595.28, 841.89]);
@@ -149,11 +151,7 @@ pub fn draw(
             t[4].replace("{}", &until)
         ),
     ));
-    lines.push((
-        6.0,
-        0.3,
-        t[5].replace("{}", &super::card::astana(time::now_ms())),
-    ));
+    lines.push((6.0, 0.3, t[5].replace("{}", &super::card::astana(at))));
     let mut w = Writer::new();
     let mut height = PAD;
     let mut wrapped = Vec::new();
@@ -236,12 +234,52 @@ pub fn draw(
     };
     let (sw, sh) = (W * MM, height * MM);
     let m = MARGIN * MM;
-    let (dx, dy) = match stamp.corner {
+    if sw + 2.0 * m > pw || sh + 2.0 * m > ph {
+        return Err(Error::new(tr("The page is too small for the stamp.")));
+    }
+    let (dx, mut dy) = match stamp.corner {
         Corner::BottomRight => (pw - m - sw, m),
         Corner::BottomLeft => (m, m),
         Corner::TopRight => (pw - m - sw, ph - m - sh),
         Corner::TopLeft => (m, ph - m - sh),
     };
+    // stamps already on the page, as shown: the new one goes above (or below) them
+    let from_user = |x: f64, y: f64| -> (f64, f64) {
+        match rot {
+            90 => (y - y0, x1 - x),
+            180 => (x1 - x, y1 - y),
+            270 => (y1 - y, x - x0),
+            _ => (x - x0, y - y0),
+        }
+    };
+    let taken: Vec<[f64; 4]> = widget_rects(doc, page)
+        .into_iter()
+        .map(|[a, b, c, d]| {
+            let (p, q) = from_user(a, b);
+            let (r, s) = from_user(c, d);
+            [p.min(r), q.min(s), p.max(r), q.max(s)]
+        })
+        .collect();
+    let step = if matches!(stamp.corner, Corner::TopRight | Corner::TopLeft) {
+        -1.0
+    } else {
+        1.0
+    };
+    while let Some(r) = taken
+        .iter()
+        .find(|r| dx < r[2] && dx + sw > r[0] && dy < r[3] && dy + sh > r[1])
+    {
+        dy = if step > 0.0 {
+            r[3] + m / 2.0
+        } else {
+            r[1] - m / 2.0 - sh
+        };
+        if dy < m || dy + sh > ph - m {
+            return Err(Error::new(tr(
+                "There is no free room for one more stamp in that corner of the page.",
+            )));
+        }
+    }
     let to_user = |x: f64, y: f64| -> (f64, f64) {
         match rot {
             90 => (x1 - y, y0 + x),
@@ -298,6 +336,31 @@ pub fn draw(
     })
 }
 
+/// The rectangles of the signature widgets already on `page` that show something.
+fn widget_rects(doc: &Document, page: &Dictionary) -> Vec<[f64; 4]> {
+    let Some(annots) = page
+        .get(b"Annots")
+        .ok()
+        .and_then(|a| doc.dereference(a).ok())
+        .and_then(|(_, a)| a.as_array().ok())
+    else {
+        return Vec::new();
+    };
+    annots
+        .iter()
+        .filter_map(|a| doc.dereference(a).ok()?.1.as_dict().ok())
+        .filter(|d| d.get(b"FT").ok().and_then(|f| f.as_name().ok()) == Some(b"Sig".as_slice()))
+        .filter_map(|d| {
+            rect(
+                d.get(b"Rect")
+                    .ok()
+                    .and_then(|r| doc.dereference(r).ok().map(|(_, o)| o)),
+            )
+        })
+        .filter(|r| r[2] - r[0] > 1.0 && r[3] - r[1] > 1.0)
+        .collect()
+}
+
 /// A long serial number shortened for the stamp: its start and end.
 fn short_serial(s: &str) -> String {
     if s.len() <= 16 {
@@ -309,34 +372,6 @@ fn short_serial(s: &str) -> String {
 fn num(v: f64) -> String {
     let s = format!("{v:.3}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
-fn inherited<'a>(doc: &'a Document, page: &'a Dictionary, key: &[u8]) -> Option<&'a Object> {
-    let mut d = page;
-    for _ in 0..32 {
-        if let Ok(v) = d.get(key) {
-            return doc.dereference(v).ok().map(|(_, o)| o);
-        }
-        let parent = d.get(b"Parent").ok()?.as_reference().ok()?;
-        d = doc.get_dictionary(parent).ok()?;
-    }
-    None
-}
-
-fn rect(o: Option<&Object>) -> Option<[f64; 4]> {
-    let a = o?.as_array().ok()?;
-    let v: Vec<f64> = a
-        .iter()
-        .filter_map(|x| x.as_float().ok().map(f64::from))
-        .collect();
-    (v.len() == 4).then(|| {
-        [
-            v[0].min(v[2]),
-            v[1].min(v[3]),
-            v[0].max(v[2]),
-            v[1].max(v[3]),
-        ]
-    })
 }
 
 // ------------------------------------------------------------------ the logo
@@ -370,6 +405,7 @@ fn image_dict(w: u32, h: u32, color: &str) -> Dictionary {
 /// A JPEG as is (DCTDecode); its size and colours from the frame header.
 fn jpeg(data: &[u8]) -> Result<(Stream, Option<Stream>, f64, f64)> {
     let mut i = 2;
+    let mut adobe = false;
     while i + 9 < data.len() {
         if data[i] != 0xff {
             return Err(bad_logo());
@@ -377,7 +413,16 @@ fn jpeg(data: &[u8]) -> Result<(Stream, Option<Stream>, f64, f64)> {
         let marker = data[i + 1];
         let len = usize::from(u16::from_be_bytes([data[i + 2], data[i + 3]]));
         // start of frame: baseline, extended or progressive
+        // APP14 "Adobe": its CMYK is stored inverted
+        if marker == 0xee && data.get(i + 4..i + 9) == Some(b"Adobe".as_slice()) {
+            adobe = true;
+        }
         if matches!(marker, 0xc0..=0xc2) {
+            if data[i + 4] != 8 {
+                return Err(Error::new(tr(
+                    "This JPEG logo is not supported (use 8 bits per channel), or use a PNG.",
+                )));
+            }
             let h = u32::from(u16::from_be_bytes([data[i + 5], data[i + 6]]));
             let w = u32::from(u16::from_be_bytes([data[i + 7], data[i + 8]]));
             let color = match data[i + 9] {
@@ -391,6 +436,12 @@ fn jpeg(data: &[u8]) -> Result<(Stream, Option<Stream>, f64, f64)> {
             }
             let mut d = image_dict(w, h, color);
             d.set("Filter", "DCTDecode");
+            if adobe && color == "DeviceCMYK" {
+                d.set(
+                    "Decode",
+                    Object::Array([1, 0, 1, 0, 1, 0, 1, 0].map(Object::from).to_vec()),
+                );
+            }
             return Ok((
                 Stream::new(d, data.to_vec()),
                 None,

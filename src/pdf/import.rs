@@ -15,7 +15,11 @@ pub struct Imported {
 
 /// A page attribute, looked up through the page tree (MediaBox, CropBox, Resources and
 /// Rotate are inherited).
-fn inherited<'a>(src: &'a Document, page: &'a Dictionary, key: &[u8]) -> Option<&'a Object> {
+pub(super) fn inherited<'a>(
+    src: &'a Document,
+    page: &'a Dictionary,
+    key: &[u8],
+) -> Option<&'a Object> {
     let mut d = page;
     for _ in 0..32 {
         if let Ok(v) = d.get(key) {
@@ -27,7 +31,7 @@ fn inherited<'a>(src: &'a Document, page: &'a Dictionary, key: &[u8]) -> Option<
     None
 }
 
-fn rect(o: Option<&Object>) -> Option<[f64; 4]> {
+pub(super) fn rect(o: Option<&Object>) -> Option<[f64; 4]> {
     let a = o?.as_array().ok()?;
     let v: Vec<f64> = a
         .iter()

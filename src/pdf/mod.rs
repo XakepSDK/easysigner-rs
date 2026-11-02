@@ -66,6 +66,7 @@ pub fn sign(
     stamp: Option<&stamp::Stamp>,
 ) -> Result<SignResult> {
     let doc = open(input)?;
+    let now = time::now_ms();
     if docmdp_level(&doc) == Some(1) {
         return Err(Error::new(tr(
             "This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.",
@@ -86,10 +87,10 @@ pub fn sign(
         ("Type", Object::from("Sig")),
         ("Filter", "Adobe.PPKLite".into()),
         ("SubFilter", "ETSI.CAdES.detached".into()),
-        ("M", Object::string_literal(pdf_date(time::now_ms()))),
+        ("M", Object::string_literal(pdf_date(now))),
         ("Name", text_string(&cert::holder_name(&key.cert))),
     ]);
-    let visible = stamp.map(|s| (s, &key.cert));
+    let visible = stamp.map(|s| (s, &key.cert, now));
     let data = add_field(input, doc, "Signature", sig, room, visible, |signed| {
         let mut sd = cms::sign_once_with(
             signed,
@@ -120,7 +121,7 @@ fn add_field(
     prefix: &str,
     mut sig: Dictionary,
     room: usize,
-    visible: Option<(&stamp::Stamp, &Cert)>,
+    visible: Option<(&stamp::Stamp, &Cert, i64)>,
     fill: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
     let existing = signature_fields(&doc);
@@ -140,19 +141,21 @@ fn add_field(
     while names.contains(&format!("{prefix}{k}").into_bytes()) {
         k += 1;
     }
-    let first_page = *doc
-        .get_pages()
-        .values()
-        .next()
-        .ok_or_else(|| Error::new(tr("This PDF has no pages.")))?;
+    let pages = doc.get_pages();
     // an invisible signature's widget sits on the first page; a visible one where its stamp is
     let (first_page, rect, appearance) = match visible {
-        Some((st, c)) => {
-            let d = stamp::draw(&doc, st, c, &mut alloc)?;
+        Some((st, c, at)) => {
+            let d = stamp::draw(&doc, &pages, st, c, at, &mut alloc)?;
             out.extend(d.objects);
             (d.page, d.rect, Some(d.appearance))
         }
-        None => (first_page, [0.0; 4], None),
+        None => {
+            let first = *pages
+                .values()
+                .next()
+                .ok_or_else(|| Error::new(tr("This PDF has no pages.")))?;
+            (first, [0.0; 4], None)
+        }
     };
     let mut widget = Dictionary::from_iter([
         ("Type", Object::from("Annot")),

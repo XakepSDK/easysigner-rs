@@ -1184,6 +1184,52 @@ fn long_term() {
         "stamp: verifies, long-term",
         v.contains("VALID - all 1") && v.contains("B-LTA"),
     );
+    // a second stamp in the same corner goes below the first, not over it
+    kz(
+        &t,
+        &[
+            "sign",
+            "--pdf",
+            "--stamp-page",
+            "1",
+            "--stamp-at",
+            "tl",
+            "-k",
+            &carol,
+            "-o",
+            "stamped2.pdf",
+            "stamped-signed.pdf",
+        ],
+    );
+    let data = std::fs::read(t.path("stamped2.pdf")).unwrap_or_default();
+    let rects: Vec<Vec<f32>> = lopdf::Document::load_mem(&data)
+        .map(|doc| {
+            let page1 = *doc.get_pages().get(&1).unwrap();
+            let annots = doc.get_dictionary(page1).unwrap().get(b"Annots").unwrap();
+            annots
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| doc.get_dictionary(a.as_reference().unwrap()).unwrap())
+                .filter(|w| w.has(b"AP"))
+                .map(|w| {
+                    w.get(b"Rect")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_float().unwrap())
+                        .collect()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    t.check(
+        "stamp: a second stamp sits below the first",
+        rects.len() == 2 && rects[1][3] < rects[0][1],
+    );
+    let v = kz(&t, &["verify", "stamped2.pdf"]);
+    t.check("stamp: both verify", v.contains("VALID - all 2"));
     let v = kz(&t, &["sign", "--stamp", "-k", &carol, "doc.txt"]);
     t.check("stamp: only with --pdf", v.contains("need --pdf"));
 
