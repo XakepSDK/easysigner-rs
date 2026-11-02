@@ -17,7 +17,7 @@ use jni::{jni_sig, jni_str};
 
 use crate::Engine;
 use crate::gui::{App, DialogEvent, Dialogs};
-use crate::i18n::{self, trf};
+use crate::i18n::{self, tr, trf};
 
 pub use winit::platform::android::activity::AndroidApp;
 
@@ -75,16 +75,8 @@ fn info() -> &'static Info {
         let mut l = s.lines();
         let files = l.next().unwrap_or("/data/local/tmp").to_string();
         let cache = l.next().unwrap_or(&files).to_string();
-        let lang = l.next().unwrap_or("").to_string();
-        // i18n keeps the chosen language under XDG_CONFIG_HOME; LANG gives the phone's own
-        // Safety: set once, before any other thread reads the environment
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &files);
-            std::env::set_var("HOME", &files);
-            if !lang.is_empty() {
-                std::env::set_var("LANG", &lang);
-            }
-        }
+        let lang = l.next().unwrap_or("");
+        i18n::set_platform(lang, PathBuf::from(&files));
         Info {
             cache: PathBuf::from(cache),
         }
@@ -94,16 +86,23 @@ fn info() -> &'static Info {
 /// Android's file chooser and "Save as", through the activity.
 #[derive(Default)]
 struct AndroidDialogs {
-    /// The file field waiting for the chooser.
-    waiting: Option<&'static str>,
-    /// Polls left before giving up on the activity (it answers within a frame or two).
+    /// The file fields a chooser was opened for (the answer names its field).
+    fields: Vec<&'static str>,
+    /// When the activity was last asked.
     last_poll: Option<std::time::Instant>,
+}
+
+/// Names and paths travel in newline-separated requests: keep them on one line.
+fn one_line(s: &str) -> String {
+    s.replace(['\n', '\r'], "_")
 }
 
 impl Dialogs for AndroidDialogs {
     fn open(&mut self, field: &'static str, _start: Option<&Path>) -> Option<PathBuf> {
-        self.waiting = Some(field);
-        java("pick");
+        if !self.fields.contains(&field) {
+            self.fields.push(field);
+        }
+        java(&format!("pick\n{field}"));
         None
     }
 
@@ -127,11 +126,15 @@ impl Dialogs for AndroidDialogs {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        java(&format!("save\n{name}\n{}", path.display()));
+        java(&format!(
+            "save\n{}\n{}",
+            one_line(&name),
+            one_line(&path.display().to_string())
+        ));
     }
 
     fn reveal(&mut self, path: &Path) {
-        java(&format!("share\n{}", path.display()));
+        java(&format!("share\n{}", one_line(&path.display().to_string())));
     }
 
     fn keyboard(&mut self, show: bool) {
@@ -153,14 +156,16 @@ impl Dialogs for AndroidDialogs {
         let (kind, rest) = s.split_once('\n').unwrap_or((&s, ""));
         match kind {
             "picked" => {
-                let field = self.waiting.take()?;
-                Some(DialogEvent::Picked(field, PathBuf::from(rest)))
+                let (name, path) = rest.split_once('\n')?;
+                let field = *self.fields.iter().find(|f| **f == name)?;
+                Some(DialogEvent::Picked(field, PathBuf::from(path)))
             }
-            "cancelled" => {
-                self.waiting = None;
-                // nothing to say; poll again for anything queued behind it
-                self.poll()
-            }
+            // nothing to say; poll again for anything queued behind it
+            "cancelled" => self.poll(),
+            "notsaved" => Some(DialogEvent::Message(
+                tr("Not saved. Use Save to the phone or Share on this screen.").into(),
+                false,
+            )),
             "open" => Some(DialogEvent::Open(PathBuf::from(rest))),
             "saved" => Some(DialogEvent::Message(trf("Saved: {}", &[&rest]), false)),
             "error" => Some(DialogEvent::Message(
@@ -178,6 +183,7 @@ pub fn main(app: AndroidApp) {
         app.activity_as_ptr() as usize,
         std::sync::atomic::Ordering::Release,
     );
+    info();
     let options = eframe::NativeOptions {
         android_app: Some(app),
         ..Default::default()
@@ -186,7 +192,6 @@ pub fn main(app: AndroidApp) {
         "kzsigner",
         options,
         Box::new(|cc| {
-            info();
             i18n::set(i18n::detect());
             // bigger text and touch targets than on the desktop
             cc.egui_ctx.all_styles_mut(|s| {
@@ -194,7 +199,7 @@ pub fn main(app: AndroidApp) {
                 s.spacing.button_padding = egui::vec2(12.0, 8.0);
             });
             let app = App::new(Engine::new(vec![]), Box::<AndroidDialogs>::default());
-            Ok(Box::new(AndroidWindow(app)))
+            Ok(Box::new(AndroidWindow(app, std::time::Instant::now())))
         }),
     );
     if let Err(e) = r {
@@ -202,17 +207,24 @@ pub fn main(app: AndroidApp) {
     }
 }
 
-/// The desktop window's screens, asking the activity regularly for chosen and shared files.
-struct AndroidWindow(App);
+/// The desktop window's screens. Chosen, saved and shared files come back from the activity
+/// while the app is in the background; it is asked for them for a few seconds after the app
+/// comes back or is touched, not all the time.
+struct AndroidWindow(App, std::time::Instant);
 
 impl eframe::App for AndroidWindow {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            self.1 = std::time::Instant::now();
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             // clear of the status bar
             ui.add_space(24.0);
             self.0.ui(ui);
         });
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(250));
+        if self.1.elapsed() < std::time::Duration::from_secs(5) || self.0.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
     }
 }

@@ -813,18 +813,22 @@ impl App {
         });
         card(ui, |ui| {
             file_title(ui, &d.saved);
-            ui.label(
-                Tone::Muted.text(
-                    ui,
-                    trf(
-                        "Saved in {}",
-                        &[&d.saved
-                            .parent()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default()],
+            // on Android the file is in the app's own folder until Android's Save as or Share
+            // takes it somewhere the user can see
+            if !cfg!(target_os = "android") {
+                ui.label(
+                    Tone::Muted.text(
+                        ui,
+                        trf(
+                            "Saved in {}",
+                            &[&d.saved
+                                .parent()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default()],
+                        ),
                     ),
-                ),
-            );
+                );
+            }
             let what = match d.sign_as {
                 SignAs::Cms if d.detached => tr(
                     "Send this .cms file together with the document: it holds only your signature.",
@@ -853,6 +857,16 @@ impl App {
             };
             if ui.add(primary_button(reveal)).clicked() {
                 self.dialogs.reveal(&d.saved);
+            }
+            if cfg!(target_os = "android")
+                && ui
+                    .add(
+                        egui::Button::new(RichText::new(tr("Save to the phone…")).size(15.0))
+                            .min_size(egui::vec2(0.0, 36.0)),
+                    )
+                    .clicked()
+            {
+                self.dialogs.saved(&d.saved);
             }
             if ui
                 .add(

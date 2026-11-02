@@ -20,6 +20,16 @@ JAR=$ANDROID_HOME/platforms/android-35/android.jar
 TC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
 V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
+# zip stores local times: the same on every machine only in one time zone
+export TZ=UTC
+# a release must not be signed with the development key, whose password is public
+case "$V" in
+*-*) ;;
+*) [ -n "${KZSIGNER_KEYSTORE:-}" ] || {
+    echo "release $V: set KZSIGNER_KEYSTORE (the release signing key); the dev key is for -dev versions only" >&2
+    exit 1
+} ;;
+esac
 
 # the Rust library, for each phone architecture
 for t in aarch64-linux-android x86_64-linux-android; do

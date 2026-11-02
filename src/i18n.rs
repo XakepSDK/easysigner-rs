@@ -125,8 +125,22 @@ fn system() -> Option<Lang> {
     Lang::parse(&String::from_utf16_lossy(&buf[..n as usize - 1]))
 }
 
+/// Set by the Android app: the phone's language, and the app's private folder for the saved
+/// choice (Android has no HOME or LANG for apps).
+static SYSTEM_LANG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static CONFIG_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Tells i18n the system language and the folder to remember the choice in.
+pub fn set_platform(language: &str, config_dir: std::path::PathBuf) {
+    let _ = SYSTEM_LANG.set(language.to_string());
+    let _ = CONFIG_DIR.set(config_dir);
+}
+
 #[cfg(not(windows))]
 fn system() -> Option<Lang> {
+    if let Some(l) = SYSTEM_LANG.get() {
+        return Lang::parse(l);
+    }
     // LANGUAGE is a list ("kk:ru"); the others a single locale
     for var in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(v) = std::env::var(var)
@@ -139,6 +153,9 @@ fn system() -> Option<Lang> {
 }
 
 fn config_file() -> Option<std::path::PathBuf> {
+    if let Some(d) = CONFIG_DIR.get() {
+        return Some(d.join("kzsigner").join("language"));
+    }
     let dir = if cfg!(windows) {
         std::env::var_os("APPDATA").map(std::path::PathBuf::from)
     } else {
@@ -395,6 +412,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("Show in folder", "Қалтада көрсету", "Показать в папке"),
     ("Share", "Бөлісу", "Поделиться"),
     ("Saved: {}", "Сақталды: {}", "Сохранено: {}"),
+    ("Save to the phone…", "Телефонға сақтау…", "Сохранить на телефон…"),
+    ("Not saved. Use Save to the phone or Share on this screen.", "Сақталмады. Осы экрандағы «Телефонға сақтау» немесе «Бөлісу» батырмасын басыңыз.", "Не сохранено. Нажмите «Сохранить на телефон» или «Поделиться» на этом экране."),
     ("Sign a document", "Құжатқа қол қою", "Подписать документ"),
     ("Sign another document", "Басқа құжатқа қол қою", "Подписать другой документ"),
     ("Signature file", "Қолтаңба файлы", "Файл подписи"),

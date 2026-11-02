@@ -5,10 +5,13 @@
 # version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,
 # with release-notes/X.Y.Z.md.
 #
-# To save CI minutes: commits that only touch documentation start nothing, a newer push
-# cancels the run still going for the same branch, and the Android job (APK, rebuild check,
-# emulator) runs only when the app's Android parts, the window, the crates or this file
-# change, for a release, or when started by hand (Actions > build > Run workflow).
+# To save CI minutes: commits that only touch documentation start nothing, pushes made while
+# a run is going wait as one (the run in between is skipped; a running one is never cancelled,
+# so a release can't be cut off), and the Android job (APK, rebuild check, emulator) runs only
+# when code that goes into the app changes, for a release, or when started by hand
+# (Actions > build > Run workflow). A release APK is signed with the key in the secrets
+# ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD (alias kzsigner); without them the
+# release stops.
 name: build
 on:
   push:
@@ -19,7 +22,7 @@ on:
   workflow_dispatch:
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -38,7 +41,7 @@ jobs:
           case "$V" in *-*)
             if [ "${{ github.event_name }}" != workflow_dispatch ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               git diff --name-only "$BEFORE" HEAD | tee changed.txt
-              grep -qE '^(android/|src/android\.rs|src/gui\.rs|src/i18n\.rs|scripts/apk\.sh|scripts/cargo\.sh|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
+              grep -qE '^(android/|src/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
             fi ;;
           esac
           echo "android=$android" | tee -a "$GITHUB_OUTPUT"
@@ -180,14 +183,26 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "build-tools;35.0.0" "platforms;android-35" > /dev/null
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Release signing key (secrets; none for -dev versions)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KZSIGNER_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          fi
       - name: Build the APK
+        env:
+          KZSIGNER_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: sh scripts/apk.sh
       - name: Same APK when built again in another folder
         id: again
         continue-on-error: true
+        env:
+          PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           git clone -q . "$RUNNER_TEMP/again"
-          (cd "$RUNNER_TEMP/again" && sh scripts/apk.sh > /dev/null)
+          (cd "$RUNNER_TEMP/again" && KZSIGNER_KEYSTORE_PASS="$PASS" sh scripts/apk.sh > /dev/null)
           sha256sum dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk
           cmp target/apk/unsigned.apk "$RUNNER_TEMP/again/target/apk/unsigned.apk" || {
             unzip -lv target/apk/unsigned.apk; unzip -lv "$RUNNER_TEMP/again/target/apk/unsigned.apk"

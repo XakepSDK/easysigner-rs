@@ -28,12 +28,27 @@ public class MainActivity extends NativeActivity {
 
     private final ArrayDeque<String> events = new ArrayDeque<>();
     /** The written file waiting for "Save as". */
-    private String saveFrom;
+    private volatile String saveFrom;
+    /** The file field the chooser was opened for. */
+    private volatile String pickFor;
 
     @Override
     protected void onCreate(Bundle state) {
+        // copies of chosen files (keys too) and signed files from earlier runs
+        delete(new File(getCacheDir(), "in"));
+        delete(new File(getCacheDir(), "out"));
         super.onCreate(state);
         received(getIntent());
+    }
+
+    private static void delete(File f) {
+        File[] children = f.listFiles();
+        if (children != null) {
+            for (File c : children) {
+                delete(c);
+            }
+        }
+        f.delete();
     }
 
     @Override
@@ -54,6 +69,7 @@ public class MainActivity extends NativeActivity {
                 return getFilesDir().getAbsolutePath() + "\n" + getCacheDir().getAbsolutePath()
                         + "\n" + Locale.getDefault().getLanguage();
             case "pick":
+                pickFor = r.length > 1 ? r[1] : "";
                 runOnUiThread(() -> {
                     Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -108,15 +124,18 @@ public class MainActivity extends NativeActivity {
         super.onActivityResult(request, result, data);
         Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
         if (request == PICK) {
+            String field = pickFor;
             if (uri == null) {
                 event("cancelled");
             } else {
                 new Thread(() -> {
                     String p = copyIn(uri);
-                    event(p != null ? "picked\n" + p : "cancelled");
+                    event(p != null ? "picked\n" + field + "\n" + p : "cancelled");
                 }).start();
             }
-        } else if (request == SAVE && uri != null) {
+        } else if (request == SAVE && uri == null) {
+            event("notsaved");
+        } else if (request == SAVE) {
             String from = saveFrom;
             new Thread(() -> {
                 try (InputStream in = new FileInputStream(from);
@@ -190,7 +209,8 @@ public class MainActivity extends NativeActivity {
             n = uri.getLastPathSegment();
         }
         if (n != null) {
-            n = n.substring(n.lastIndexOf('/') + 1);
+            // its last part, on one line (requests to and from Rust are line-separated)
+            n = n.substring(n.lastIndexOf('/') + 1).replaceAll("[\\p{Cntrl}\\\\]", "_");
         }
         if (n == null || n.isEmpty() || n.equals(".") || n.equals("..")) {
             n = fallback;
