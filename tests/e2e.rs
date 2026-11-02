@@ -630,11 +630,28 @@ fn pdf_and_card() {
         .iter()
         .any(|(o, _)| o == kzsigner::pdf::card::ATTR_REVOCATION_VALUES);
     sd.crls = None;
+    // the BasicOCSPResponse inside an OCSPResponse
+    let basic = |raw: &[u8]| -> Vec<u8> {
+        let r = kzsigner::der::parse(raw)
+            .unwrap()
+            .items(kzsigner::der::SEQUENCE)
+            .unwrap();
+        let b = r[1]
+            .inner()
+            .unwrap()
+            .items(kzsigner::der::SEQUENCE)
+            .unwrap();
+        b[1].octets().unwrap()
+    };
+    let has_certs = sd.signers[0]
+        .unsigned()
+        .iter()
+        .any(|(o, _)| o == kzsigner::pdf::card::ATTR_CERT_VALUES);
     t.check(
-        "card: revocationValues holds the same OCSP answer",
+        "card: revocationValues holds the same OCSP answer, with certValues",
         has_attr
-            && kzsigner::ocsp::basic_response(&kzsigner::pdf::card::embedded_ocsp(&sd).unwrap())
-                == kzsigner::ocsp::basic_response(&in_crls),
+            && has_certs
+            && basic(&kzsigner::pdf::card::embedded_ocsp(&sd).unwrap()) == basic(&in_crls),
     );
     let v = t.kz(&[
         "sign",

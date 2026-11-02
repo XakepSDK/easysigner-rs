@@ -179,7 +179,9 @@ pub fn mime_type(file_name: &str) -> &'static str {
 
 /// A detached CMS over `doc` the way the card wants it: CAdES with mime-type, an NCA
 /// timestamp, the certificate chain up to the root, and the OCSP answer for the signer's
-/// certificate in `crls` (RFC 5940). A missing OCSP answer only warns.
+/// certificate in `crls` (RFC 5940) and again in the CAdES revocationValues attribute, with
+/// certValues (the CA path and the responder) beside it (Order 500/НҚ p.8). Without an OCSP
+/// answer the CA's revocation list decides; a missing answer only warns.
 pub fn sign_for_card(
     doc: &[u8],
     file_name: &str,
@@ -221,10 +223,17 @@ pub fn sign_for_card(
             sd.crls = Some(der::tlv(der::ctx(1), &other));
             // the same answer where Order 500/НҚ p.8 names it: the CAdES revocationValues
             // attribute, ocspVals [1] SEQUENCE OF BasicOCSPResponse (RFC 5126 §6.3.4)
-            if let Some(basic) = ocsp::basic_response(&a.raw) {
-                let values = der::seq(&[&der::tlv(der::ctx(1), &der::seq(&[&basic]))]);
-                sd.signers[0].add_unsigned(ATTR_REVOCATION_VALUES, &values);
+            let values = der::seq(&[&der::tlv(der::ctx(1), &der::seq(&[&a.basic]))]);
+            sd.signers[0].add_unsigned(ATTR_REVOCATION_VALUES, &values);
+            // and the certificates to check it with: the CA path and the OCSP responder
+            // (certValues, p.8)
+            let mut certs: Vec<&[u8]> = chain.issuers.iter().map(|c| c.der.as_slice()).collect();
+            if let Some(r) = &a.responder
+                && !certs.contains(&r.der.as_slice())
+            {
+                certs.push(&r.der);
             }
+            sd.signers[0].add_unsigned(ATTR_CERT_VALUES, &der::seq(&certs));
         }
         Ok(a) => {
             return Err(Error::new(trf(
@@ -258,6 +267,8 @@ pub fn sign_for_card(
 
 /// id-aa-ets-revocationValues (CAdES, RFC 5126).
 pub const ATTR_REVOCATION_VALUES: &str = "1.2.840.113549.1.9.16.2.24";
+/// id-aa-ets-certValues (CAdES, RFC 5126).
+pub const ATTR_CERT_VALUES: &str = "1.2.840.113549.1.9.16.2.23";
 
 /// The OCSP response embedded in a SignedData's `crls` (RFC 5940), or else in the first
 /// signer's revocationValues attribute, if any.

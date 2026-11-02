@@ -46,6 +46,8 @@ pub struct Answer {
     pub responder: Option<Cert>,
     /// The OCSPResponse, as received.
     pub raw: Vec<u8>,
+    /// The BasicOCSPResponse inside it (empty on an error), as CAdES revocationValues holds it.
+    pub basic: Vec<u8>,
 }
 
 impl Answer {
@@ -57,18 +59,9 @@ impl Answer {
             this_update: None,
             responder: None,
             raw: raw.to_vec(),
+            basic: vec![],
         }
     }
-}
-
-/// The BasicOCSPResponse inside an OCSPResponse, as CAdES revocationValues holds it.
-pub fn basic_response(raw: &[u8]) -> Option<Vec<u8>> {
-    let resp = der::parse(raw).ok()?.items(der::SEQUENCE).ok()?;
-    let rb = resp.get(1)?.inner().ok()?.items(der::SEQUENCE).ok()?;
-    if rb.first()?.oid().ok()? != BASIC {
-        return None;
-    }
-    rb.get(1)?.octets().ok()
 }
 
 /// An OCSPResponse (successful) around a BasicOCSPResponse.
@@ -132,6 +125,14 @@ pub fn read_embedded(raw: &[u8], c: &Cert, issuer: &Cert, trust: &TrustStore) ->
     evaluate(raw, c, issuer, None, trust)
 }
 
+/// Element `n` of a DER sequence, or an error for a short one.
+fn at<'a>(items: &[Tlv<'a>], n: usize) -> Result<Tlv<'a>> {
+    items
+        .get(n)
+        .copied()
+        .ok_or_else(|| Error::new("OCSP response is incomplete"))
+}
+
 /// `nonce`: the one sent, for a fresh answer; None for a stored one.
 fn evaluate(
     body: &[u8],
@@ -156,14 +157,15 @@ fn evaluate(
         .ok_or_else(|| Error::new("OCSP response without content"))?
         .inner()?
         .items(der::SEQUENCE)?;
-    if rb[0].oid()? != BASIC {
+    if at(&rb, 0)?.oid()? != BASIC {
         return Err(Error::new("not a basic OCSP response"));
     }
-    let basic_raw = rb[1].octets()?;
+    let basic_raw = at(&rb, 1)?.octets()?;
+    let basic_der = basic_raw.clone();
     let basic = der::parse(&basic_raw)?.items(der::SEQUENCE)?;
-    let tbs_t = basic[0];
-    let sig_alg = alg_id(&basic[1])?.0;
-    let sig = basic[2].bits()?;
+    let tbs_t = at(&basic, 0)?;
+    let sig_alg = alg_id(&at(&basic, 1)?)?.0;
+    let sig = at(&basic, 2)?.bits()?;
     let certs: Vec<Cert> = match basic.get(3) {
         Some(t) if t.tag == der::ctx(0) => t
             .inner()?
@@ -180,10 +182,10 @@ fn evaluate(
 
     let rd = tbs_t.items(der::SEQUENCE)?;
     let mut i = 0;
-    if rd[0].tag == der::ctx(0) {
+    if at(&rd, 0)?.tag == der::ctx(0) {
         i = 1; // version
     }
-    let responses = rd[i + 2].items(der::SEQUENCE)?;
+    let responses = at(&rd, i + 2)?.items(der::SEQUENCE)?;
     let mut nonce_ok = false;
     if let Some(nonce) = nonce
         && let Some(ext) = rd.get(i + 3).filter(|t| t.tag == der::ctx(1))
@@ -204,19 +206,20 @@ fn evaluate(
     }
     for s in responses {
         let k = s.items(der::SEQUENCE)?;
-        let id = k[0].items(der::SEQUENCE)?;
-        let id_alg = alg_id(&id[0])?.0;
-        if id[3].uint()? != c.serial.as_slice() {
+        let id = at(&k, 0)?.items(der::SEQUENCE)?;
+        let id_alg = alg_id(&at(&id, 0)?)?.0;
+        if at(&id, 3)?.uint()? != c.serial.as_slice() {
             continue;
         }
         let Ok((nh, kh)) = issuer_hashes(issuer, &id_alg) else {
             continue;
         };
-        if id[1].octets()? != nh || id[2].octets()? != kh {
+        if at(&id, 1)?.octets()? != nh || at(&id, 2)?.octets()? != kh {
             continue;
         }
-        let next_update = k[3..]
+        let next_update = k
             .iter()
+            .skip(3)
             .find(|t| t.tag == der::ctx(0))
             .map(|t| t.inner().and_then(|x| x.time()))
             .transpose()?;
@@ -243,14 +246,18 @@ fn evaluate(
         } else {
             this_update
         };
-        let (good, cert_status, status) = match k[1].tag {
+        let (good, cert_status, status) = match at(&k, 1)?.tag {
             0x80 => (
                 true,
                 "good",
                 trf("GOOD (not revoked, checked {})", &[&time::fmt(checked)]),
             ),
             0xa1 => {
-                let when = k[1].children()?.first().map(|t| t.time()).transpose()?;
+                let when = at(&k, 1)?
+                    .children()?
+                    .first()
+                    .map(|t| t.time())
+                    .transpose()?;
                 (false, "revoked", trf("REVOKED on {}", &[&time::fmt(when)]))
             }
             _ => (
@@ -266,6 +273,7 @@ fn evaluate(
             this_update,
             responder: Some(responder),
             raw: body.to_vec(),
+            basic: basic_der,
         });
     }
     Ok(Answer::error(
@@ -324,4 +332,31 @@ fn check_responder(
         };
     }
     Err(tr("OCSP response signature is invalid").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Short or empty pieces in a stored answer are errors, not crashes.
+    #[test]
+    fn broken_stored_answers_are_errors() {
+        let trust = TrustStore::new(vec![]);
+        let (_, d) = crate::trust::BUNDLED_CA[4];
+        let ca = Cert::parse_any(d).unwrap();
+        let empty = der::seq(&[]);
+        let short = der::seq(&[&der::seq(&[]), &der::seq(&[])]);
+        for basic in [&empty, &short] {
+            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust).is_err());
+        }
+        assert!(
+            read_embedded(
+                &der::seq(&[&der::tlv(der::ENUMERATED, &[0])]),
+                &ca,
+                &ca,
+                &trust
+            )
+            .is_err()
+        );
+    }
 }
