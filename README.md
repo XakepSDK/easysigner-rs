@@ -188,7 +188,7 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   text, so the rest of the document stays byte for byte as it was.
 * `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
   (plain http, which NCA's servers use; a proxy from the environment is honoured).
-* `gui.rs`: the window ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
+* `gui/`: the window (`mod.rs` the app, its state grouped as `SignForm`, `KeyForm` and `CheckForm`, and the routing between screens; `sign.rs`, `check.rs` the two screens; `report.rs` a check's result; `files.rs`, `widgets.rs`) ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). `icons.rs` draws the icons from SVG path data as vector shapes, so
 they stay sharp at any scale with no image files. Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh

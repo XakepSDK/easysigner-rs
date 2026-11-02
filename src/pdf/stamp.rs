@@ -106,15 +106,67 @@ pub fn draw(
     let page = doc
         .get_dictionary(page_id)
         .map_err(|e| Error::new(trf("This PDF could not be read: {}", &[&e])))?;
-    let bx = rect(inherited(doc, page, b"CropBox"))
-        .or_else(|| rect(inherited(doc, page, b"MediaBox")))
-        .unwrap_or([0.0, 0.0, 595.28, 841.89]);
-    let rot = inherited(doc, page, b"Rotate")
-        .and_then(|r| r.as_i64().ok())
-        .unwrap_or(0)
-        .rem_euclid(360);
+    let space = PageSpace {
+        bx: rect(inherited(doc, page, b"CropBox"))
+            .or_else(|| rect(inherited(doc, page, b"MediaBox")))
+            .unwrap_or([0.0, 0.0, 595.28, 841.89]),
+        rot: inherited(doc, page, b"Rotate")
+            .and_then(|r| r.as_i64().ok())
+            .unwrap_or(0)
+            .rem_euclid(360),
+    };
+    let mut objects = Vec::new();
+    let (ops, resources, height) = compose(stamp, c, at, alloc, &mut objects)?;
+    let (sw, sh) = (W * MM, height * MM);
+    let rect = space.place(&widget_rects(doc, page), stamp.corner, sw, sh)?;
+    let mut form = Stream::new(
+        Dictionary::from_iter([
+            ("Type", Object::from("XObject")),
+            ("Subtype", "Form".into()),
+            (
+                "BBox",
+                Object::Array(vec![
+                    0.into(),
+                    0.into(),
+                    Object::Real(sw as f32),
+                    Object::Real(sh as f32),
+                ]),
+            ),
+            (
+                "Matrix",
+                Object::Array(
+                    space
+                        .matrix()
+                        .iter()
+                        .map(|&v| Object::Integer(v as i64))
+                        .chain([0.into(), 0.into()])
+                        .collect(),
+                ),
+            ),
+            ("Resources", resources.into()),
+        ]),
+        ops.into_bytes(),
+    );
+    let _ = form.compress();
+    let appearance = alloc();
+    objects.push((appearance, Object::Stream(form)));
+    Ok(Drawn {
+        page: page_id,
+        rect,
+        appearance,
+        objects,
+    })
+}
 
-    // the appearance, upright, in mm
+/// The stamp's appearance, upright: its content, its resources (the objects they need go
+/// into `objects`) and its height in mm.
+fn compose(
+    stamp: &Stamp,
+    c: &Cert,
+    at: i64,
+    alloc: &mut dyn FnMut() -> ObjectId,
+    objects: &mut Vec<(ObjectId, Object)>,
+) -> Result<(String, Dictionary, f64)> {
     let lang = stamp.lang.unwrap_or(Lang::Ru);
     let t = texts(lang);
     let mut sr = SignerReport::default();
@@ -185,7 +237,6 @@ pub fn draw(
         y += lh;
         w.text(&mut p, text_x, y - lh * 0.25, *size, *grey, l);
     }
-    let mut objects = Vec::new();
     let mut resources = Dictionary::new();
     if let Some((img, smask, iw, ih)) = logo {
         let smask = smask.map(|s| {
@@ -224,116 +275,95 @@ pub fn draw(
         "Font",
         Dictionary::from_iter([("F1", Object::Reference(font))]),
     );
+    Ok((p.ops, resources, height))
+}
 
-    // where it goes on the page as shown (rotation applied), then in the page's own space
-    let [x0, y0, x1, y1] = bx;
-    let (pw, ph) = if rot == 90 || rot == 270 {
-        (y1 - y0, x1 - x0)
-    } else {
-        (x1 - x0, y1 - y0)
-    };
-    let (sw, sh) = (W * MM, height * MM);
-    let m = MARGIN * MM;
-    if sw + 2.0 * m > pw || sh + 2.0 * m > ph {
-        return Err(Error::new(tr("The page is too small for the stamp.")));
-    }
-    let (dx, mut dy) = match stamp.corner {
-        Corner::BottomRight => (pw - m - sw, m),
-        Corner::BottomLeft => (m, m),
-        Corner::TopRight => (pw - m - sw, ph - m - sh),
-        Corner::TopLeft => (m, ph - m - sh),
-    };
-    // stamps already on the page, as shown: the new one goes above (or below) them
-    let from_user = |x: f64, y: f64| -> (f64, f64) {
-        match rot {
-            90 => (y - y0, x1 - x),
-            180 => (x1 - x, y1 - y),
-            270 => (y1 - y, x - x0),
-            _ => (x - x0, y - y0),
-        }
-    };
-    let taken: Vec<[f64; 4]> = widget_rects(doc, page)
-        .into_iter()
-        .map(|[a, b, c, d]| {
-            let (p, q) = from_user(a, b);
-            let (r, s) = from_user(c, d);
-            [p.min(r), q.min(s), p.max(r), q.max(s)]
-        })
-        .collect();
-    let step = if matches!(stamp.corner, Corner::TopRight | Corner::TopLeft) {
-        -1.0
-    } else {
-        1.0
-    };
-    while let Some(r) = taken
-        .iter()
-        .find(|r| dx < r[2] && dx + sw > r[0] && dy < r[3] && dy + sh > r[1])
-    {
-        dy = if step > 0.0 {
-            r[3] + m / 2.0
+/// A page's visible box and rotation: where things go on it as it is shown.
+struct PageSpace {
+    bx: [f64; 4],
+    rot: i64,
+}
+
+impl PageSpace {
+    /// The rectangle, in the page's own space, for a stamp `sw` x `sh` (points) in `corner`
+    /// of the page as shown, clear of the stamps already at `taken`.
+    fn place(&self, taken: &[[f64; 4]], corner: Corner, sw: f64, sh: f64) -> Result<[f64; 4]> {
+        let rot = self.rot;
+        let [x0, y0, x1, y1] = self.bx;
+        let (pw, ph) = if rot == 90 || rot == 270 {
+            (y1 - y0, x1 - x0)
         } else {
-            r[1] - m / 2.0 - sh
+            (x1 - x0, y1 - y0)
         };
-        if dy < m || dy + sh > ph - m {
-            return Err(Error::new(tr(
-                "There is no free room for one more stamp in that corner of the page.",
-            )));
+        let m = MARGIN * MM;
+        if sw + 2.0 * m > pw || sh + 2.0 * m > ph {
+            return Err(Error::new(tr("The page is too small for the stamp.")));
+        }
+        let (dx, mut dy) = match corner {
+            Corner::BottomRight => (pw - m - sw, m),
+            Corner::BottomLeft => (m, m),
+            Corner::TopRight => (pw - m - sw, ph - m - sh),
+            Corner::TopLeft => (m, ph - m - sh),
+        };
+        // stamps already on the page, as shown: the new one goes above (or below) them
+        let from_user = |x: f64, y: f64| -> (f64, f64) {
+            match rot {
+                90 => (y - y0, x1 - x),
+                180 => (x1 - x, y1 - y),
+                270 => (y1 - y, x - x0),
+                _ => (x - x0, y - y0),
+            }
+        };
+        let taken: Vec<[f64; 4]> = taken
+            .iter()
+            .map(|&[a, b, c, d]| {
+                let (p, q) = from_user(a, b);
+                let (r, s) = from_user(c, d);
+                [p.min(r), q.min(s), p.max(r), q.max(s)]
+            })
+            .collect();
+        let step = if matches!(corner, Corner::TopRight | Corner::TopLeft) {
+            -1.0
+        } else {
+            1.0
+        };
+        while let Some(r) = taken
+            .iter()
+            .find(|r| dx < r[2] && dx + sw > r[0] && dy < r[3] && dy + sh > r[1])
+        {
+            dy = if step > 0.0 {
+                r[3] + m / 2.0
+            } else {
+                r[1] - m / 2.0 - sh
+            };
+            if dy < m || dy + sh > ph - m {
+                return Err(Error::new(tr(
+                    "There is no free room for one more stamp in that corner of the page.",
+                )));
+            }
+        }
+        let to_user = |x: f64, y: f64| -> (f64, f64) {
+            match rot {
+                90 => (x1 - y, y0 + x),
+                180 => (x1 - x, y1 - y),
+                270 => (x0 + y, y1 - x),
+                _ => (x0 + x, y0 + y),
+            }
+        };
+        let (ax, ay) = to_user(dx, dy);
+        let (bx2, by2) = to_user(dx + sw, dy + sh);
+        Ok([ax.min(bx2), ay.min(by2), ax.max(bx2), ay.max(by2)])
+    }
+
+    /// The appearance's matrix, turned so that it reads upright on the rotated page.
+    fn matrix(&self) -> [f64; 4] {
+        match self.rot {
+            90 => [0.0, 1.0, -1.0, 0.0],
+            180 => [-1.0, 0.0, 0.0, -1.0],
+            270 => [0.0, -1.0, 1.0, 0.0],
+            _ => [1.0, 0.0, 0.0, 1.0],
         }
     }
-    let to_user = |x: f64, y: f64| -> (f64, f64) {
-        match rot {
-            90 => (x1 - y, y0 + x),
-            180 => (x1 - x, y1 - y),
-            270 => (x0 + y, y1 - x),
-            _ => (x0 + x, y0 + y),
-        }
-    };
-    let (ax, ay) = to_user(dx, dy);
-    let (bx2, by2) = to_user(dx + sw, dy + sh);
-    let rect = [ax.min(bx2), ay.min(by2), ax.max(bx2), ay.max(by2)];
-    // the appearance turned so that it reads upright on the rotated page
-    let matrix: [f64; 4] = match rot {
-        90 => [0.0, 1.0, -1.0, 0.0],
-        180 => [-1.0, 0.0, 0.0, -1.0],
-        270 => [0.0, -1.0, 1.0, 0.0],
-        _ => [1.0, 0.0, 0.0, 1.0],
-    };
-    let mut form = Stream::new(
-        Dictionary::from_iter([
-            ("Type", Object::from("XObject")),
-            ("Subtype", "Form".into()),
-            (
-                "BBox",
-                Object::Array(vec![
-                    0.into(),
-                    0.into(),
-                    Object::Real(sw as f32),
-                    Object::Real(sh as f32),
-                ]),
-            ),
-            (
-                "Matrix",
-                Object::Array(
-                    matrix
-                        .iter()
-                        .map(|&v| Object::Integer(v as i64))
-                        .chain([0.into(), 0.into()])
-                        .collect(),
-                ),
-            ),
-            ("Resources", resources.into()),
-        ]),
-        p.ops.into_bytes(),
-    );
-    let _ = form.compress();
-    let appearance = alloc();
-    objects.push((appearance, Object::Stream(form)));
-    Ok(Drawn {
-        page: page_id,
-        rect,
-        appearance,
-        objects,
-    })
 }
 
 /// The rectangles of the signature widgets already on `page` that show something.

@@ -439,11 +439,111 @@ pub fn signature_file_name(file_name: &str, n: usize) -> String {
     format!("{file_name}.{n}.cms")
 }
 
+/// A signature checked for the card, with what its page shows.
+struct Checked {
+    /// The proven (or claimed) signing time, for the order.
+    at: i64,
+    /// The attachment's file name.
+    name: String,
+    cms: Vec<u8>,
+    view: SigView,
+}
+
 /// Builds the card. Every signature is checked first: a card is only made for signatures that
 /// are valid.
 pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
     let l = input.lang;
-    // check, then order the signatures by their proven time
+    let sigs = checked_signatures(input, trust)?;
+    let mut w = Writer::new();
+    let mut out = Document::with_version("1.7");
+    let created = astana(time::now_ms());
+    let builder = format!("kzsigner {}", crate::version());
+
+    // the document's own pages
+    let imported = if super::is_pdf(input.doc) {
+        Document::load_mem(input.doc)
+            .ok()
+            .filter(|d| !d.is_encrypted())
+            .and_then(|d| import::import_pages(&d, &mut out).ok())
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    let attachments: Vec<(String, String)> = std::iter::once((
+        input.file_name.to_string(),
+        t(l, "Подлинник электронного документа", &[]),
+    ))
+    .chain(
+        sigs.iter()
+            .map(|s| (s.name.clone(), t(l, "ЭЦП, {}", &[&s.view.name]))),
+    )
+    .collect();
+
+    // the information block takes as many pages as it needs; lay it out once to count them
+    let info = Info {
+        input,
+        attachments: &attachments,
+        created: &created,
+        builder: &builder,
+    };
+    let info_pages = info.pages(&mut Writer::new(), 1, 1).len();
+    let first_doc = if imported.is_empty() {
+        0
+    } else {
+        info_pages + 1
+    };
+    let first_sig = info_pages + imported.len() + 1;
+    let mut sections: Vec<Section> = info
+        .pages(&mut w, first_doc, first_sig)
+        .into_iter()
+        .map(|page| Section { page, header: None })
+        .collect();
+    sections.extend(document_pages(&mut w, &imported, l));
+    for (k, sig) in sigs.iter().enumerate() {
+        sections.extend(signature_pages(&mut w, k, sig, l, input.qr)?);
+    }
+    headers_and_footers(&mut w, &mut sections, input);
+    let pages_id = assemble(&mut out, &w, sections);
+    let names = attach(&mut out, input, &sigs, &attachments);
+
+    let catalog = out.add_object(Dictionary::from_iter([
+        ("Type", Object::from("Catalog")),
+        ("Pages", pages_id.into()),
+        (
+            "Names",
+            Object::Dictionary(Dictionary::from_iter([(
+                "EmbeddedFiles",
+                Object::Dictionary(Dictionary::from_iter([("Names", Object::Array(names))])),
+            )])),
+        ),
+        ("PageMode", "UseAttachments".into()),
+    ]));
+    let info = out.add_object(Dictionary::from_iter([
+        (
+            "Title",
+            utf16(&format!(
+                "{} - {}",
+                t(l, "Карточка электронного документа", &[]),
+                input.file_name
+            )),
+        ),
+        ("Producer", Object::string_literal(builder)),
+        // how the card was made, so that adding a signature keeps it
+        (
+            "KzsignerCard",
+            Object::string_literal(format!("{}{}", l.code(), if input.qr { ";qr" } else { "" })),
+        ),
+    ]));
+    out.trailer.set("Root", catalog);
+    out.trailer.set("Info", info);
+    let mut data = Vec::new();
+    out.save_to(&mut data)
+        .map_err(|e| Error::new(format!("could not write the card: {e}")))?;
+    Ok(data)
+}
+
+/// Checks every signature of the card, ordered by their proven time.
+fn checked_signatures(input: &CardInput, trust: &TrustStore) -> Result<Vec<Checked>> {
     let mut sigs = Vec::new();
     for (name, cms) in &input.signatures {
         let rep = verify::verify(cms, Some(input.doc), trust, None)?;
@@ -469,39 +569,33 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
             .trusted_time()
             .or(rep.signers[0].signing_time)
             .unwrap_or(0);
-        sigs.push((at, name.clone(), cms.clone(), v));
+        sigs.push(Checked {
+            at,
+            name: name.clone(),
+            cms: cms.clone(),
+            view: v,
+        });
     }
-    sigs.sort_by_key(|s| s.0);
+    sigs.sort_by_key(|s| s.at);
+    Ok(sigs)
+}
 
-    let mut w = Writer::new();
-    let mut out = Document::with_version("1.7");
-    let created = astana(time::now_ms());
-    let builder = format!("kzsigner {}", crate::version());
-    let width = A4.0 - LEFT - RIGHT;
+/// The information block's content.
+struct Info<'a> {
+    input: &'a CardInput<'a>,
+    /// (file name, description) of each attachment.
+    attachments: &'a [(String, String)],
+    created: &'a str,
+    builder: &'a str,
+}
 
-    // the document's own pages
-    let imported = if super::is_pdf(input.doc) {
-        Document::load_mem(input.doc)
-            .ok()
-            .filter(|d| !d.is_encrypted())
-            .and_then(|d| import::import_pages(&d, &mut out).ok())
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    let attachments: Vec<(String, String)> = std::iter::once((
-        input.file_name.to_string(),
-        t(l, "Подлинник электронного документа", &[]),
-    ))
-    .chain(
-        sigs.iter()
-            .map(|(_, n, _, v)| (n.clone(), t(l, "ЭЦП, {}", &[&v.name]))),
-    )
-    .collect();
-
-    // the information block takes as many pages as it needs; lay it out once to count them
-    let info = |w: &mut Writer, first_doc_page: usize, first_sig_page: usize| -> Vec<Page> {
+impl Info<'_> {
+    /// The information block's pages, its table of contents pointing at `first_doc_page` and
+    /// `first_sig_page` (0: none).
+    fn pages(&self, w: &mut Writer, first_doc_page: usize, first_sig_page: usize) -> Vec<Page> {
+        let (input, attachments, l) = (self.input, self.attachments, self.input.lang);
+        let (created, builder) = (self.created, self.builder);
+        let width = A4.0 - LEFT - RIGHT;
         let mut pages = vec![Page::new(false)];
         let bottom = A4.1 - BOTTOM - FOOTER;
         let mut y = TOP + 2.0;
@@ -552,16 +646,7 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
             0.35,
             &t(l, "Дата и время формирования", &[]),
         );
-        put(
-            w,
-            &mut pages,
-            &mut y1,
-            LEFT,
-            half - 2.0,
-            11.0,
-            0.0,
-            &created,
-        );
+        put(w, &mut pages, &mut y1, LEFT, half - 2.0, 11.0, 0.0, created);
         let mut y2 = y0;
         put(
             w,
@@ -581,7 +666,7 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
             half,
             11.0,
             0.0,
-            &builder,
+            builder,
         );
         y = y1.max(y2) + 5.0;
 
@@ -698,25 +783,12 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
         };
         put(w, &mut pages, &mut y, LEFT, width, 9.0, 0.2, &note);
         pages
-    };
-    let mut probe = Writer::new();
-    let info_pages = info(&mut probe, 1, 1).len();
-    let first_doc = if imported.is_empty() {
-        0
-    } else {
-        info_pages + 1
-    };
-    let first_sig = info_pages + imported.len() + 1;
+    }
+}
 
-    let mut sections: Vec<Section> = info(&mut w, first_doc, first_sig)
-        .into_iter()
-        .map(|p| Section {
-            page: p,
-            header: None,
-        })
-        .collect();
-
-    // the document's pages, scaled into the content area, with a watermark
+/// The document's pages, scaled into the content area, with a watermark.
+fn document_pages(w: &mut Writer, imported: &[import::Imported], l: CardLang) -> Vec<Section> {
+    let mut out = Vec::new();
     for (i, im) in imported.iter().enumerate() {
         let landscape = im.w > im.h;
         let mut p = Page::new(landscape);
@@ -737,175 +809,180 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
         let mark = t(l, "ВИЗУАЛИЗАЦИЯ ЭЛЕКТРОННОГО ДОКУМЕНТА", &[]);
         let size = (20.0f64).min(pw.hypot(ph) * MM * 0.8 / w.font.text_width(&mark, 1.0).max(1.0));
         w.watermark(&mut p, x + pw / 2.0, y + ph / 2.0, size, 45.0, &mark);
-        sections.push(Section {
+        out.push(Section {
             page: p,
             header: Some(t(l, "Визуализация электронного документа", &[])),
         });
     }
+    out
+}
 
-    // one page per signature
-    for (k, (_, name, cms, v)) in sigs.iter().enumerate() {
-        let mut p = Page::new(false);
-        let left_w = width / 3.0 * 2.0;
-        let right_x = LEFT + left_w;
-        let right_w = width / 3.0;
-        let mut y = CONTENT_TOP;
-        let put = |w: &mut Writer, p: &mut Page, y: &mut f64, size: f64, grey: f64, s: &str| {
-            *y = w.para(p, LEFT, *y, left_w - 3.0, size, grey, s);
-        };
-        put(
-            &mut w,
-            &mut p,
-            &mut y,
-            10.5,
-            0.0,
-            &t(l, "Подпись №{}", &[&(k + 1).to_string()]),
-        );
+/// The page (or pages, with QR codes) for signature `k`.
+fn signature_pages(
+    w: &mut Writer,
+    k: usize,
+    sig: &Checked,
+    l: CardLang,
+    qr: bool,
+) -> Result<Vec<Section>> {
+    let (cms, v) = (&sig.cms, &sig.view);
+    let width = A4.0 - LEFT - RIGHT;
+    let mut p = Page::new(false);
+    let left_w = width / 3.0 * 2.0;
+    let right_x = LEFT + left_w;
+    let right_w = width / 3.0;
+    let mut y = CONTENT_TOP;
+    let put = |w: &mut Writer, p: &mut Page, y: &mut f64, size: f64, grey: f64, s: &str| {
+        *y = w.para(p, LEFT, *y, left_w - 3.0, size, grey, s);
+    };
+    put(
+        w,
+        &mut p,
+        &mut y,
+        10.5,
+        0.0,
+        &t(l, "Подпись №{}", &[&(k + 1).to_string()]),
+    );
+    y += 1.5;
+    put(
+        w,
+        &mut p,
+        &mut y,
+        8.0,
+        0.35,
+        &t(l, "Дата формирования подписи:", &[]),
+    );
+    put(
+        w,
+        &mut p,
+        &mut y,
+        8.5,
+        0.0,
+        &v.tsp
+            .as_ref()
+            .map(|t| t.0.clone())
+            .unwrap_or_else(|| "-".into()),
+    );
+    y += 1.5;
+    put(w, &mut p, &mut y, 8.0, 0.35, &t(l, "Подписал(а):", &[]));
+    let mut who = v.name.clone();
+    if let Some(iin) = &v.iin {
+        who = format!("{who}, {}", t(l, "ИИН {}", &[iin]));
+    }
+    if let Some((org, bin)) = &v.org {
+        who = format!("{who}\n{}", t(l, "{}, БИН {}", &[org, bin]));
+    }
+    put(w, &mut p, &mut y, 8.5, 0.0, &who);
+    if !v.policies.is_empty() {
+        y += 1.5;
+        put(w, &mut p, &mut y, 8.0, 0.35, &t(l, "Шаблон:", &[]));
+        for s in &v.policies {
+            put(w, &mut p, &mut y, 8.5, 0.0, &format!("- {s}"));
+        }
+    }
+    if !v.usages.is_empty() {
         y += 1.5;
         put(
-            &mut w,
+            w,
             &mut p,
             &mut y,
             8.0,
             0.35,
-            &t(l, "Дата формирования подписи:", &[]),
+            &t(l, "Допустимое использование:", &[]),
         );
-        put(
-            &mut w,
-            &mut p,
-            &mut y,
-            8.5,
+        for s in &v.usages {
+            put(w, &mut p, &mut y, 8.5, 0.0, &format!("- {s}"));
+        }
+    }
+    // the right column: boxes with the certificate, timestamp and OCSP details
+    let mut yr = CONTENT_TOP;
+    let boxed = |w: &mut Writer, p: &mut Page, yr: &mut f64, lines: Vec<String>| {
+        let top = *yr;
+        *yr = w.para(
+            p,
+            right_x + 1.0,
+            *yr + 0.5,
+            right_w - 2.0,
+            6.0,
             0.0,
-            &v.tsp
-                .as_ref()
-                .map(|t| t.0.clone())
-                .unwrap_or_else(|| "-".into()),
-        );
-        y += 1.5;
-        put(
-            &mut w,
-            &mut p,
-            &mut y,
-            8.0,
-            0.35,
-            &t(l, "Подписал(а):", &[]),
-        );
-        let mut who = v.name.clone();
-        if let Some(iin) = &v.iin {
-            who = format!("{who}, {}", t(l, "ИИН {}", &[iin]));
-        }
-        if let Some((org, bin)) = &v.org {
-            who = format!("{who}\n{}", t(l, "{}, БИН {}", &[org, bin]));
-        }
-        put(&mut w, &mut p, &mut y, 8.5, 0.0, &who);
-        if !v.policies.is_empty() {
-            y += 1.5;
-            put(&mut w, &mut p, &mut y, 8.0, 0.35, &t(l, "Шаблон:", &[]));
-            for s in &v.policies {
-                put(&mut w, &mut p, &mut y, 8.5, 0.0, &format!("- {s}"));
-            }
-        }
-        if !v.usages.is_empty() {
-            y += 1.5;
-            put(
-                &mut w,
-                &mut p,
-                &mut y,
-                8.0,
-                0.35,
-                &t(l, "Допустимое использование:", &[]),
-            );
-            for s in &v.usages {
-                put(&mut w, &mut p, &mut y, 8.5, 0.0, &format!("- {s}"));
-            }
-        }
-        // the right column: boxes with the certificate, timestamp and OCSP details
-        let mut yr = CONTENT_TOP;
-        let boxed = |w: &mut Writer, p: &mut Page, yr: &mut f64, lines: Vec<String>| {
-            let top = *yr;
-            *yr = w.para(
-                p,
-                right_x + 1.0,
-                *yr + 0.5,
-                right_w - 2.0,
-                6.0,
-                0.0,
-                &lines.join("\n"),
-            ) + 0.8;
-            p.rect(right_x, top, right_w, *yr - top, 0.83);
-            *yr += 1.5;
-        };
+            &lines.join("\n"),
+        ) + 0.8;
+        p.rect(right_x, top, right_w, *yr - top, 0.83);
+        *yr += 1.5;
+    };
+    boxed(
+        w,
+        &mut p,
+        &mut yr,
+        vec![
+            t(l, "Субъект: {}", &[&v.subject]),
+            t(l, "Серийный номер: {}", &[&v.serial]),
+            t(l, "С: {}", &[&v.from]),
+            t(l, "По: {}", &[&v.until]),
+            t(l, "Издатель: {}", &[&v.issuer]),
+            t(l, "Алгоритм: {}", &[&v.algorithm]),
+        ],
+    );
+    if let Some((at, serial, subject, issuer)) = &v.tsp {
         boxed(
-            &mut w,
+            w,
             &mut p,
             &mut yr,
             vec![
-                t(l, "Субъект: {}", &[&v.subject]),
-                t(l, "Серийный номер: {}", &[&v.serial]),
-                t(l, "С: {}", &[&v.from]),
-                t(l, "По: {}", &[&v.until]),
-                t(l, "Издатель: {}", &[&v.issuer]),
-                t(l, "Алгоритм: {}", &[&v.algorithm]),
+                t(l, "Метка времени: {}", &[at]),
+                t(l, "Субъект: {}", &[subject]),
+                t(l, "Серийный номер: {}", &[serial]),
+                t(l, "Издатель: {}", &[issuer]),
             ],
         );
-        if let Some((at, serial, subject, issuer)) = &v.tsp {
-            boxed(
-                &mut w,
-                &mut p,
-                &mut yr,
-                vec![
-                    t(l, "Метка времени: {}", &[at]),
-                    t(l, "Субъект: {}", &[subject]),
-                    t(l, "Серийный номер: {}", &[serial]),
-                    t(l, "Издатель: {}", &[issuer]),
-                ],
-            );
-        }
-        if let Some((status, at, serial, subject, issuer)) = &v.ocsp {
-            boxed(
-                &mut w,
-                &mut p,
-                &mut yr,
-                vec![
-                    format!("OCSP: {status}"),
-                    t(l, "Сформирован: {}", &[at]),
-                    t(l, "Субъект: {}", &[subject]),
-                    t(l, "Серийный номер: {}", &[serial]),
-                    t(l, "Издатель: {}", &[issuer]),
-                ],
-            );
-        }
-        let mut pages = vec![p];
-        if input.qr {
-            let codes = qr::payloads((k + 1) as u32, cms)?;
-            let size = 42.0;
-            let per_row = 4;
-            let gap = (width - size * per_row as f64) / (per_row as f64 + 2.0);
-            let mut qy = y.max(yr) + 5.0 + gap;
-            for (i, c) in codes.iter().enumerate() {
-                let col = i % per_row;
-                if col == 0 && i > 0 {
-                    qy += gap + size;
-                }
-                if qy + size > A4.1 - BOTTOM - FOOTER {
-                    pages.push(Page::new(false));
-                    qy = CONTENT_TOP;
-                }
-                let x = LEFT + gap * (col as f64 + 1.0) + size * col as f64;
-                let q = qr::code(c)?;
-                pages.last_mut().expect("a page").qr(x, qy, size, &q);
+    }
+    if let Some((status, at, serial, subject, issuer)) = &v.ocsp {
+        boxed(
+            w,
+            &mut p,
+            &mut yr,
+            vec![
+                format!("OCSP: {status}"),
+                t(l, "Сформирован: {}", &[at]),
+                t(l, "Субъект: {}", &[subject]),
+                t(l, "Серийный номер: {}", &[serial]),
+                t(l, "Издатель: {}", &[issuer]),
+            ],
+        );
+    }
+    let mut pages = vec![p];
+    if qr {
+        let codes = qr::payloads((k + 1) as u32, cms)?;
+        let size = 42.0;
+        let per_row = 4;
+        let gap = (width - size * per_row as f64) / (per_row as f64 + 2.0);
+        let mut qy = y.max(yr) + 5.0 + gap;
+        for (i, c) in codes.iter().enumerate() {
+            let col = i % per_row;
+            if col == 0 && i > 0 {
+                qy += gap + size;
             }
-        }
-        let _ = name;
-        for p in pages {
-            sections.push(Section {
-                page: p,
-                header: Some(t(l, "Визуализация электронной цифровой подписи", &[])),
-            });
+            if qy + size > A4.1 - BOTTOM - FOOTER {
+                pages.push(Page::new(false));
+                qy = CONTENT_TOP;
+            }
+            let x = LEFT + gap * (col as f64 + 1.0) + size * col as f64;
+            let q = qr::code(c)?;
+            pages.last_mut().expect("a page").qr(x, qy, size, &q);
         }
     }
+    Ok(pages
+        .into_iter()
+        .map(|page| Section {
+            page,
+            header: Some(t(l, "Визуализация электронной цифровой подписи", &[])),
+        })
+        .collect())
+}
 
-    // headers and footers, now that the page count is known
+/// Headers and footers on every page, now that the page count is known.
+fn headers_and_footers(w: &mut Writer, sections: &mut [Section], input: &CardInput) {
+    let l = input.lang;
     let total = sections.len().to_string();
     let footer = t(l, "Карточка электронного документа", &[]);
     let desc: String = {
@@ -934,8 +1011,10 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
             w.text(p, nx, fy + 6.5, 10.0, 0.0, &n);
         }
     }
+}
 
-    // assemble the PDF
+/// Adds the pages to `out`; returns the page tree's id.
+fn assemble(out: &mut Document, w: &Writer, sections: Vec<Section>) -> lopdf::ObjectId {
     let font_id = w.font.embed(&w.used, &mut |o| out.add_object(o));
     let gs = out.add_object(Dictionary::from_iter([
         ("Type", Object::from("ExtGState")),
@@ -996,11 +1075,20 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
         ])
         .into(),
     );
+    pages_id
+}
 
-    // attachments: the original first, then the signatures in time order (as ddc writes them)
+/// Attaches the original first, then the signatures in time order (as ddc writes them);
+/// returns the EmbeddedFiles name tree's entries.
+fn attach(
+    out: &mut Document,
+    input: &CardInput,
+    sigs: &[Checked],
+    attachments: &[(String, String)],
+) -> Vec<Object> {
     let mut names = Vec::new();
     let files = std::iter::once((input.file_name.to_string(), input.doc.to_vec()))
-        .chain(sigs.iter().map(|(_, n, c, _)| (n.clone(), c.clone())));
+        .chain(sigs.iter().map(|s| (s.name.clone(), s.cms.clone())));
     for (i, ((name, data), (_, desc))) in files.zip(attachments.iter()).enumerate() {
         let mut ef = Stream::new(
             Dictionary::from_iter([
@@ -1030,40 +1118,7 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
         names.push(Object::string_literal(format!("Attachement{}", i + 1)));
         names.push(Object::Reference(spec));
     }
-    let catalog = out.add_object(Dictionary::from_iter([
-        ("Type", Object::from("Catalog")),
-        ("Pages", pages_id.into()),
-        (
-            "Names",
-            Object::Dictionary(Dictionary::from_iter([(
-                "EmbeddedFiles",
-                Object::Dictionary(Dictionary::from_iter([("Names", Object::Array(names))])),
-            )])),
-        ),
-        ("PageMode", "UseAttachments".into()),
-    ]));
-    let info = out.add_object(Dictionary::from_iter([
-        (
-            "Title",
-            utf16(&format!(
-                "{} - {}",
-                t(l, "Карточка электронного документа", &[]),
-                input.file_name
-            )),
-        ),
-        ("Producer", Object::string_literal(builder)),
-        // how the card was made, so that adding a signature keeps it
-        (
-            "KzsignerCard",
-            Object::string_literal(format!("{}{}", l.code(), if input.qr { ";qr" } else { "" })),
-        ),
-    ]));
-    out.trailer.set("Root", catalog);
-    out.trailer.set("Info", info);
-    let mut data = Vec::new();
-    out.save_to(&mut data)
-        .map_err(|e| Error::new(format!("could not write the card: {e}")))?;
-    Ok(data)
+    names
 }
 
 fn utf16(s: &str) -> Object {

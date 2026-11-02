@@ -66,8 +66,8 @@ fn sign_then_verify_in_the_window() {
     let dialogs = Scripted::default();
     let mut app = App::new(kzsigner::Engine::new(vec![ca]), Box::new(dialogs.clone()));
     // safe by default: NCA time and the revocation check are on
-    assert!(app.timestamp && app.ocsp);
-    (app.timestamp, app.ocsp) = (false, false);
+    assert!(app.sign.timestamp && app.ocsp);
+    (app.sign.timestamp, app.ocsp) = (false, false);
     let mut h = Harness::builder()
         .with_size([780.0, 720.0])
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
@@ -90,7 +90,7 @@ fn sign_then_verify_in_the_window() {
     h.run();
     h.key_press(egui::Key::Enter);
     settle(&mut h);
-    assert_eq!(h.state().key_file, Some(fx.join("alice_gost2015.p12")));
+    assert_eq!(h.state().key.file, Some(fx.join("alice_gost2015.p12")));
     let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
     pw.focus();
     pw.type_text("Qwerty12");
@@ -127,7 +127,7 @@ fn sign_then_verify_in_the_window() {
     h.get_by_label("Sign").click();
     settle(&mut h);
     assert_eq!(h.state().screen, Screen::Signed, "{:?}", h.state().message);
-    let done = h.state().done.clone().unwrap();
+    let done = h.state().sign.done.clone().unwrap();
     assert_eq!(done.saved, out);
     assert_eq!(done.signer, "ИВАНОВ АЛИБЕК");
     assert!(
@@ -233,7 +233,7 @@ fn pdf_signing_and_cards_in_the_window() {
 
     let dialogs = Scripted::default();
     let mut app = App::new(engine, Box::new(dialogs.clone()));
-    (app.timestamp, app.ocsp) = (false, false);
+    (app.sign.timestamp, app.ocsp) = (false, false);
     let mut h = Harness::builder()
         .with_size([780.0, 760.0])
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
@@ -263,14 +263,14 @@ fn pdf_signing_and_cards_in_the_window() {
     h.get_by_label("Still opens as a normal PDF. Only for PDF files.")
         .click();
     h.run();
-    assert_eq!(h.state().sign_as, kzsigner::gui::SignAs::Pdf);
+    assert_eq!(h.state().sign.sign_as, kzsigner::gui::SignAs::Pdf);
     // with a visible stamp (More options)
     h.get_by_label("More options").click();
     h.run();
     h.get_by_label("Show a stamp with your name and the signing time on the last page")
         .click();
     h.run();
-    assert!(h.state().stamp);
+    assert!(h.state().sign.stamp);
     h.get_by_label("More options").click();
     h.run();
     let out = dir.join("plain-signed.pdf");
@@ -325,7 +325,7 @@ fn pdf_signing_and_cards_in_the_window() {
         kzsigner::Engine::new(vec![ca.clone()]),
         Box::new(dialogs.clone()),
     );
-    (app.timestamp, app.ocsp) = (false, false);
+    (app.sign.timestamp, app.ocsp) = (false, false);
     let mut h = Harness::builder()
         .with_size([780.0, 760.0])
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
@@ -349,7 +349,7 @@ fn pdf_signing_and_cards_in_the_window() {
     h.run();
     h.key_press(egui::Key::Enter);
     settle(&mut h);
-    assert_eq!(h.state().sign_as, kzsigner::gui::SignAs::Xml);
+    assert_eq!(h.state().sign.sign_as, kzsigner::gui::SignAs::Xml);
     let xml_out = dir.join("request-signed.xml");
     dialogs.next(xml_out.clone());
     h.get_by_label("Sign").click();

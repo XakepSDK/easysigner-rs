@@ -560,7 +560,7 @@ mod tests {
         let mut missing = Vec::new();
         let mut found = 0;
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for dir in ["src", "src/pdf", "src/xml"] {
+        for dir in ["src", "src/pdf", "src/xml", "src/gui"] {
             for e in std::fs::read_dir(dir).unwrap() {
                 files.push(e.unwrap().path());
             }
