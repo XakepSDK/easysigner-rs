@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use eframe::egui::{self, Color32, RichText};
 
 use crate::i18n::{self, Lang, tr, trf};
+use crate::icons::{self, Icon};
 use crate::p12::Key;
 use crate::pdf::card::CardLang;
 use crate::report::{SignResult, SignerReport, VerifyReport};
@@ -26,21 +27,36 @@ enum Tone {
 
 impl Tone {
     fn text(self, ui: &egui::Ui, t: impl Into<String>) -> RichText {
+        let r = RichText::new(t);
+        match self {
+            Tone::Plain => r,
+            Tone::Strong => r.strong(),
+            _ => r.color(self.color(ui)),
+        }
+    }
+
+    /// The tone's colour, for text and icons.
+    fn color(self, ui: &egui::Ui) -> Color32 {
         let dark = ui.visuals().dark_mode;
         let rgb = |l: (u8, u8, u8), d: (u8, u8, u8)| {
             let (r, g, b) = if dark { d } else { l };
             Color32::from_rgb(r, g, b)
         };
-        let r = RichText::new(t);
         match self {
-            Tone::Plain => r,
-            Tone::Strong => r.strong(),
-            Tone::Good => r.color(rgb((0x1a, 0x7f, 0x37), (0x4a, 0xc2, 0x6b))),
-            Tone::Bad => r.color(rgb((0xc6, 0x28, 0x28), (0xff, 0x7b, 0x72))),
-            Tone::Warn => r.color(rgb((0x8a, 0x5a, 0x00), (0xe3, 0xb3, 0x41))),
-            Tone::Muted => r.color(rgb((0x5d, 0x66, 0x73), (0x9a, 0xa4, 0xb0))),
+            Tone::Plain => ui.visuals().text_color(),
+            Tone::Strong => ui.visuals().strong_text_color(),
+            Tone::Good => rgb((0x1a, 0x7f, 0x37), (0x4a, 0xc2, 0x6b)),
+            Tone::Bad => rgb((0xc6, 0x28, 0x28), (0xff, 0x7b, 0x72)),
+            Tone::Warn => rgb((0x8a, 0x5a, 0x00), (0xe3, 0xb3, 0x41)),
+            Tone::Muted => rgb((0x5d, 0x66, 0x73), (0x9a, 0xa4, 0xb0)),
         }
     }
+}
+
+/// The accent colour for icons and lines (the theme's link colour, which reads well on its
+/// background; filled buttons use the selection colour).
+fn accent(ui: &egui::Ui) -> Color32 {
+    ui.visuals().hyperlink_color
 }
 
 /// File choosers: the system's own, or scripted ones in tests.
@@ -192,8 +208,8 @@ enum Msg {
     Verified(u64, Result<VerifyReport, String>),
     /// (file, (suggested name for the saved document, bytes))
     Extracted(PathBuf, Result<(String, Vec<u8>), String>),
-    /// The document to read before signing (for the document request with this number).
-    ToView(u64, Result<PathBuf, String>),
+    /// A document to read (for the document request with this number, if any).
+    ToView(Option<u64>, Result<PathBuf, String>),
 }
 
 /// What the chosen document is.
@@ -248,6 +264,8 @@ pub struct App {
     /// A file chosen for a file field (by its id) that the field has not taken yet.
     picked: Option<(&'static str, PathBuf)>,
     keyboard_shown: bool,
+    /// A phone-sized window: one column, full-width buttons.
+    narrow: bool,
     pub screen: Screen,
     /// A message box: (text, is error).
     pub message: Option<(String, bool)>,
@@ -309,6 +327,7 @@ impl App {
             pending_open: None,
             picked: None,
             keyboard_shown: false,
+            narrow: false,
             screen: Screen::Start,
             message: None,
             done: None,
@@ -405,6 +424,7 @@ impl App {
         if let Some(f) = dropped.into_iter().find(|p| !p.as_os_str().is_empty()) {
             self.open_file(&ctx, f);
         }
+        self.narrow = ui.available_width() < 600.0;
         self.header(ui);
         ui.separator();
         egui::ScrollArea::vertical()
@@ -443,12 +463,31 @@ impl App {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
             if self.screen == Screen::Start {
+                icons::show(ui, Icon::Logo, 26.0, accent(ui));
                 ui.label(RichText::new("kzsigner").strong().size(18.0));
             } else {
-                if ui
-                    .button(RichText::new(format!("‹ {}", tr("Back"))).size(15.0))
-                    .clicked()
-                {
+                let back = if self.narrow {
+                    // an icon only, as phones show it
+                    let r = ui.add_sized([40.0, 40.0], egui::Button::new("").frame(false));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Back"))
+                    });
+                    let color = ui.style().interact(&r).fg_stroke.color;
+                    let rect =
+                        egui::Rect::from_center_size(r.rect.center(), egui::vec2(24.0, 24.0));
+                    icons::paint(ui.painter(), rect, Icon::Back, color, 2.0);
+                    r.on_hover_text(tr("Back"))
+                } else {
+                    icons::button(
+                        ui,
+                        Icon::Back,
+                        tr("Back"),
+                        15.0,
+                        egui::vec2(0.0, 30.0),
+                        false,
+                    )
+                };
+                if back.clicked() {
                     self.screen = Screen::Start;
                 }
                 let title = match self.screen {
@@ -487,42 +526,77 @@ impl App {
                 .strong(),
         );
         ui.add_space(14.0);
-        ui.columns(2, |cols| {
-            let left = egui::Layout::top_down(egui::Align::Min);
-            if cols[0].with_layout(left, |ui| choice_card(
+        let sign = |ui: &mut egui::Ui| {
+            let c = accent(ui);
+            choice_card(
                 ui,
                 "start_sign",
                 tr("Sign a document"),
-                tr("Put your electronic signature (ЭЦП) on a contract, a letter or any other file."),
+                tr(
+                    "Put your electronic signature (ЭЦП) on a contract, a letter or any other file.",
+                ),
                 true,
-            )).inner
-            .clicked()
-            {
-                self.screen = Screen::Sign;
-            }
-            if cols[1].with_layout(left, |ui| choice_card(
+                (Icon::Pen, c),
+            )
+        };
+        let check = |ui: &mut egui::Ui| {
+            let c = Tone::Good.color(ui);
+            choice_card(
                 ui,
                 "start_check",
                 tr("Check a signed file"),
-                tr("See who signed it and when, and whether it was changed. Get the document out of a .cms file."),
+                tr(
+                    "See who signed it and when, and whether it was changed. Get the document out of a .cms file.",
+                ),
                 false,
-            )).inner
-            .clicked()
-            {
+                (Icon::ShieldCheck, c),
+            )
+        };
+        if self.narrow {
+            if sign(ui).clicked() {
+                self.screen = Screen::Sign;
+            }
+            ui.add_space(12.0);
+            if check(ui).clicked() {
                 self.screen = Screen::Check;
             }
-        });
+        } else {
+            ui.columns(2, |cols| {
+                let left = egui::Layout::top_down(egui::Align::Min);
+                if cols[0].with_layout(left, sign).inner.clicked() {
+                    self.screen = Screen::Sign;
+                }
+                if cols[1].with_layout(left, check).inner.clicked() {
+                    self.screen = Screen::Check;
+                }
+            });
+        }
         ui.add_space(18.0);
         card(ui, |ui| {
+            if cfg!(target_os = "android") {
+                ui.horizontal_top(|ui| {
+                    icons::show(ui, Icon::Share, 24.0, Tone::Muted.color(ui));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(tr("Got a file in Telegram, WhatsApp or e-mail?")).strong());
+                        ui.add(egui::Label::new(Tone::Muted.text(
+                            ui,
+                            tr("Tap Share or Open with on the file, then choose kzsigner. It opens in the right place."),
+                        )).wrap());
+                    });
+                });
+                return;
+            }
             ui.vertical_centered(|ui| {
-                ui.add_space(14.0);
+                ui.add_space(10.0);
+                icons::show(ui, Icon::Download, 28.0, Tone::Muted.color(ui));
+                ui.add_space(4.0);
                 ui.label(RichText::new(tr("Or drop a file onto this window")).size(16.0));
                 ui.add_space(4.0);
                 ui.label(Tone::Muted.text(
                     ui,
                     tr("A document opens for signing, a signed file is checked, and a key file (.p12) is remembered for signing."),
                 ));
-                ui.add_space(14.0);
+                ui.add_space(12.0);
             });
         });
     }
@@ -587,7 +661,11 @@ impl App {
                     .add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(!self.show_password)
-                            .desired_width(240.0),
+                            .desired_width(if self.narrow {
+                                ui.available_width() - 56.0
+                            } else {
+                                240.0
+                            }),
                     )
                     .labelled_by(l.id);
                 if r.lost_focus() {
@@ -635,28 +713,51 @@ impl App {
             && self.doc.is_some()
             && self.key.is_some()
             && (!self.doc_is_detached_cms || self.sign_original.is_some());
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = if self.signing {
-                    tr("Signing…")
-                } else {
-                    tr("Sign")
-                };
-                if ui.add_enabled(can_sign, primary_button(label)).clicked() {
-                    self.sign(&ctx);
-                }
-                let hint = if self.doc.is_none() {
-                    tr("Choose the document first.")
-                } else if self.key.is_none() {
-                    tr("Choose your key file and type its password.")
-                } else if self.doc_is_detached_cms && self.sign_original.is_none() {
-                    tr("Choose the signed document.")
-                } else {
-                    ""
-                };
-                ui.label(Tone::Muted.text(ui, hint));
+        let label = if self.signing {
+            tr("Signing…")
+        } else {
+            tr("Sign")
+        };
+        let hint = if self.doc.is_none() {
+            tr("Choose the document first.")
+        } else if self.key.is_none() {
+            tr("Choose your key file and type its password.")
+        } else if self.doc_is_detached_cms && self.sign_original.is_none() {
+            tr("Choose the signed document.")
+        } else {
+            ""
+        };
+        if self.narrow {
+            let w = ui.available_width();
+            let clicked = ui
+                .add_enabled_ui(can_sign, |ui| {
+                    icons::button(ui, Icon::Pen, label, 17.0, egui::vec2(w, 52.0), true)
+                })
+                .inner
+                .clicked();
+            if clicked {
+                self.sign(&ctx);
+            }
+            if !hint.is_empty() {
+                ui.vertical_centered(|ui| ui.label(Tone::Muted.text(ui, hint)));
+            }
+            ui.add_space(8.0);
+        } else {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let clicked = ui
+                        .add_enabled_ui(can_sign, |ui| {
+                            icons::button(ui, Icon::Pen, label, 16.0, egui::vec2(120.0, 38.0), true)
+                        })
+                        .inner
+                        .clicked();
+                    if clicked {
+                        self.sign(&ctx);
+                    }
+                    ui.label(Tone::Muted.text(ui, hint));
+                });
             });
-        });
+        }
     }
 
     /// The three ways to sign, and their options.
@@ -692,15 +793,18 @@ impl App {
             .data(|d| d.get_temp::<f32>(height_id))
             .unwrap_or(60.0);
         let mut tallest: f32 = 0.0;
-        ui.columns(3, |cols| {
-            for (i, (value, title, desc, enabled)) in options.into_iter().enumerate() {
-                let ui = &mut cols[i];
+        let narrow = self.narrow;
+        let sign_as = &mut self.sign_as;
+        let mut option =
+            |ui: &mut egui::Ui,
+             i: usize,
+             (value, title, desc, enabled): (SignAs, &str, &str, bool)| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     let id = ui.scope_id().with(("how", i));
                     let hovered =
                         enabled && ui.ctx().read_response(id).is_some_and(|r| r.hovered());
                     let v = ui.visuals();
-                    let stroke = if self.sign_as == value {
+                    let stroke = if *sign_as == value {
                         egui::Stroke::new(2.0, v.selection.bg_fill)
                     } else if hovered {
                         egui::Stroke::new(1.0, v.widgets.hovered.fg_stroke.color)
@@ -709,18 +813,16 @@ impl App {
                     };
                     let frame = egui::Frame::new()
                         .stroke(stroke)
-                        .corner_radius(8.0)
-                        .inner_margin(10.0)
+                        .corner_radius(10.0)
+                        .inner_margin(if narrow { 12.0 } else { 10.0 })
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.set_min_height(height);
+                            if !narrow {
+                                ui.set_min_height(height);
+                            }
                             ui.add_enabled_ui(enabled, |ui| {
                                 ui.vertical(|ui| {
-                                    ui.radio_value(
-                                        &mut self.sign_as,
-                                        value,
-                                        RichText::new(title).strong(),
-                                    );
+                                    ui.radio_value(sign_as, value, RichText::new(title).strong());
                                     ui.add(
                                         egui::Label::new(Tone::Muted.text(ui, desc).size(12.5))
                                             .wrap()
@@ -738,15 +840,26 @@ impl App {
                     let r = ui.interact(frame.response.rect, id, egui::Sense::click());
                     if enabled {
                         if r.clicked() {
-                            self.sign_as = value;
+                            *sign_as = value;
                         }
                         if r.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                     }
                 });
+            };
+        if narrow {
+            for (i, o) in options.into_iter().enumerate() {
+                option(ui, i, o);
+                ui.add_space(4.0);
             }
-        });
+        } else {
+            ui.columns(3, |cols| {
+                for (i, o) in options.into_iter().enumerate() {
+                    option(&mut cols[i], i, o);
+                }
+            });
+        }
         if (tallest - height).abs() > 0.5 {
             ui.ctx().data_mut(|d| d.insert_temp(height_id, tallest));
             ui.ctx().request_repaint();
@@ -808,7 +921,9 @@ impl App {
         };
         ui.vertical_centered(|ui| {
             ui.add_space(24.0);
-            ui.label(Tone::Good.text(ui, "✔").size(48.0));
+            let good = Tone::Good.color(ui);
+            icons::badge(ui, Icon::Check, 80.0, good, good.gamma_multiply(0.14));
+            ui.add_space(6.0);
             ui.label(
                 RichText::new(if d.cosigned {
                     tr("Signature added")
@@ -838,7 +953,7 @@ impl App {
             ui.add_space(12.0);
         });
         card(ui, |ui| {
-            file_title(ui, &d.saved);
+            file_title_with(ui, &d.saved, Icon::FileCheck);
             // on Android the file is in the app's own folder until Android's Save as or Share
             // takes it somewhere the user can see
             if !cfg!(target_os = "android") {
@@ -872,34 +987,44 @@ impl App {
             ui.add(egui::Label::new(what).wrap());
         });
         for w in &d.warnings {
-            ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
+            warning(ui, w);
         }
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            let reveal = if cfg!(target_os = "android") {
-                tr("Share")
+        let android = cfg!(target_os = "android");
+        let narrow = self.narrow;
+        let mut buttons = |ui: &mut egui::Ui| {
+            let w = if narrow { ui.available_width() } else { 0.0 };
+            let (h, size) = if narrow { (52.0, 17.0) } else { (38.0, 15.0) };
+            let (icon, reveal) = if android {
+                (Icon::Share, tr("Share"))
             } else {
-                tr("Show in folder")
+                (Icon::Folder, tr("Show in folder"))
             };
-            if ui.add(primary_button(reveal)).clicked() {
+            if icons::button(ui, icon, reveal, size, egui::vec2(w, h), true).clicked() {
                 self.dialogs.reveal(&d.saved);
             }
-            if cfg!(target_os = "android")
-                && ui
-                    .add(
-                        egui::Button::new(RichText::new(tr("Save to the phone…")).size(15.0))
-                            .min_size(egui::vec2(0.0, 36.0)),
-                    )
-                    .clicked()
+            if android
+                && icons::button(
+                    ui,
+                    Icon::Download,
+                    tr("Save to the phone…"),
+                    size,
+                    egui::vec2(w, h),
+                    false,
+                )
+                .clicked()
             {
                 self.dialogs.saved(&d.saved);
             }
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(tr("Sign another document")).size(15.0))
-                        .min_size(egui::vec2(0.0, 36.0)),
-                )
-                .clicked()
+            if icons::button(
+                ui,
+                Icon::Pen,
+                tr("Sign another document"),
+                size,
+                egui::vec2(w, h),
+                false,
+            )
+            .clicked()
             {
                 self.doc = None;
                 self.doc_note = Note::default();
@@ -909,7 +1034,15 @@ impl App {
                 self.sign_original = None;
                 self.screen = Screen::Sign;
             }
-        });
+        };
+        if narrow {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 10.0;
+                buttons(ui)
+            });
+        } else {
+            ui.horizontal(buttons);
+        }
     }
 
     // ------------------------------------------------------------------ fields
@@ -941,6 +1074,20 @@ impl App {
             field.shown = current.clone();
         }
         let dialogs = &mut self.dialogs;
+        if cfg!(target_os = "android") {
+            // a phone has no paths to type: one big button opens Android's file chooser
+            let w = ui.available_width();
+            let text = if current.is_some() {
+                tr("Choose another…")
+            } else {
+                tr("Choose a file…")
+            };
+            if icons::button(ui, Icon::File, text, 15.0, egui::vec2(w, 44.0), false).clicked() {
+                chosen = dialogs.open(id, current.as_deref());
+            }
+            let _ = l;
+            return chosen;
+        }
         ui.horizontal(|ui| {
             let w = ui.available_width() - 90.0;
             let r = ui
@@ -1033,8 +1180,20 @@ impl App {
     /// detached .cms, the original chosen beside it.
     pub fn view_doc(&mut self, ctx: &egui::Context, doc: PathBuf) {
         let original = self.sign_original.clone();
+        self.view_file(ctx, doc, original, Some(self.doc_request));
+    }
+
+    /// Opens `doc` for reading, or the document inside it when it is signed (`original` for a
+    /// detached .cms). `request`: the document request it is for, if any.
+    fn view_file(
+        &mut self,
+        ctx: &egui::Context,
+        doc: PathBuf,
+        original: Option<PathBuf>,
+        request: Option<u64>,
+    ) {
         let dir = self.dialogs.view_dir();
-        let id = self.doc_request;
+        let id = request;
         self.background(ctx, move |e| {
             let r = (|| -> Result<PathBuf, String> {
                 let data =
@@ -1321,13 +1480,46 @@ impl App {
                 let r = r.clone();
                 report(ui, &r);
                 let can_extract = r.has_content && !r.is_pdf;
-                if can_extract {
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        if ui.add(primary_button(tr("Save the document…"))).clicked() {
-                            self.extract(&ctx);
-                        }
+                ui.add_space(10.0);
+                let narrow = self.narrow;
+                let mut buttons = |ui: &mut egui::Ui| {
+                    let w = if narrow { ui.available_width() } else { 0.0 };
+                    let (h, size) = if narrow { (52.0, 17.0) } else { (38.0, 15.0) };
+                    if icons::button(
+                        ui,
+                        Icon::Open,
+                        tr("Open the document"),
+                        size,
+                        egui::vec2(w, h),
+                        true,
+                    )
+                    .clicked()
+                        && let Some(c) = self.cms.clone()
+                    {
+                        let o = self.verify_original.clone();
+                        self.view_file(&ctx, c, o, None);
+                    }
+                    if can_extract
+                        && icons::button(
+                            ui,
+                            Icon::Download,
+                            tr("Save the document…"),
+                            size,
+                            egui::vec2(w, h),
+                            false,
+                        )
+                        .clicked()
+                    {
+                        self.extract(&ctx);
+                    }
+                };
+                if narrow {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 10.0;
+                        buttons(ui)
                     });
+                } else {
+                    ui.horizontal(buttons);
                 }
             }
             Some(Err(e)) => {
@@ -1545,7 +1737,7 @@ impl App {
                 Err(e) => self.message = Some((e, true)),
             },
             // another document has been chosen since: don't show the old one
-            Msg::ToView(id, _) if id != self.doc_request => {}
+            Msg::ToView(Some(id), _) if id != self.doc_request => {}
             Msg::ToView(_, r) => {
                 if let Err(e) = r.and_then(|f| self.dialogs.view(&f)) {
                     self.message = Some((trf("Could not open the document: {}", &[&e]), true));
@@ -1589,33 +1781,15 @@ struct PathField {
 
 /// A small button with an eye (crossed out while the password is hidden).
 fn eye_button(ui: &mut egui::Ui, open: bool, hint: &str) -> egui::Response {
+    let h = ui.spacing().interact_size.y.max(22.0);
     let r = ui
-        .add_sized([30.0, 22.0], egui::Button::new(""))
+        .add_sized([h + 8.0, h], egui::Button::new(""))
         .on_hover_text(hint);
     r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, hint));
-    let c = r.rect.center();
     let color = ui.style().interact(&r).fg_stroke.color;
-    let stroke = egui::Stroke::new(1.5, color);
-    let p = ui.painter();
-    // the eye: two arcs meeting at the corners, and the iris
-    let (w, h) = (9.0, 5.5);
-    let arc = |sign: f32| -> Vec<egui::Pos2> {
-        (0..=16)
-            .map(|i| {
-                let t = i as f32 / 16.0 * std::f32::consts::PI;
-                egui::pos2(c.x - w * t.cos(), c.y + sign * h * t.sin())
-            })
-            .collect()
-    };
-    p.add(egui::Shape::line(arc(-1.0), stroke));
-    p.add(egui::Shape::line(arc(1.0), stroke));
-    p.circle_filled(c, 2.6, color);
-    if !open {
-        p.line_segment(
-            [c + egui::vec2(-8.0, 6.5), c + egui::vec2(8.0, -6.5)],
-            stroke,
-        );
-    }
+    let rect = egui::Rect::from_center_size(r.rect.center(), egui::Vec2::splat(h * 0.8));
+    let icon = if open { Icon::Eye } else { Icon::EyeOff };
+    icons::paint(ui.painter(), rect, icon, color, 2.0);
     r
 }
 
@@ -1659,6 +1833,14 @@ fn banner<R>(ui: &mut egui::Ui, tone: Tone, add: impl FnOnce(&mut egui::Ui) -> R
         .inner
 }
 
+/// A warning line, with the warning sign.
+fn warning(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        icons::show(ui, Icon::Warning, 18.0, Tone::Warn.color(ui));
+        ui.add(egui::Label::new(Tone::Warn.text(ui, text)).wrap());
+    });
+}
+
 /// A step's heading inside a card.
 fn step(ui: &mut egui::Ui, title: &str) {
     ui.label(Tone::Muted.text(ui, title).strong().size(13.5));
@@ -1670,13 +1852,14 @@ fn primary_button(text: &str) -> egui::Button<'static> {
         .min_size(egui::vec2(120.0, 38.0))
 }
 
-/// A big clickable choice with a title and a line of explanation.
+/// A big clickable choice with an icon, a title and a line of explanation.
 fn choice_card(
     ui: &mut egui::Ui,
     id: &str,
     title: &str,
     text: &str,
     first: bool,
+    (icon, color): (Icon, Color32),
 ) -> egui::Response {
     let v = ui.visuals().clone();
     let id = ui.scope_id().with(id);
@@ -1689,18 +1872,27 @@ fn choice_card(
     let inner = egui::Frame::new()
         .fill(v.faint_bg_color)
         .stroke(stroke)
-        .corner_radius(12.0)
+        .corner_radius(14.0)
         .inner_margin(18.0)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.set_min_height(120.0);
-            ui.add(egui::Label::new(RichText::new(title).size(19.0).strong()).selectable(false));
-            ui.add_space(4.0);
-            ui.add(
-                egui::Label::new(Tone::Muted.text(ui, text).size(14.0))
-                    .wrap()
-                    .selectable(false),
-            );
+            ui.set_min_height(96.0);
+            ui.horizontal_top(|ui| {
+                icons::badge(ui, icon, 52.0, color, color.gamma_multiply(0.14));
+                ui.add_space(4.0);
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(title).size(19.0).strong())
+                            .selectable(false),
+                    );
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(Tone::Muted.text(ui, text).size(14.0))
+                            .wrap()
+                            .selectable(false),
+                    );
+                });
+            });
         });
     let r = ui.interact(inner.response.rect, id, egui::Sense::click());
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
@@ -1712,11 +1904,18 @@ fn choice_card(
 
 /// A chosen file: its name large, its folder small.
 fn file_title(ui: &mut egui::Ui, f: &Path) {
+    file_title_with(ui, f, Icon::File);
+}
+
+fn file_title_with(ui: &mut egui::Ui, f: &Path, icon: Icon) {
     let name = f
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| f.display().to_string());
-    ui.label(RichText::new(name).size(16.0).strong());
+    ui.horizontal(|ui| {
+        icons::show(ui, icon, 24.0, Tone::Muted.color(ui));
+        ui.add(egui::Label::new(RichText::new(name).size(16.0).strong()).truncate());
+    });
 }
 
 /// The name for the document taken out of signed `file`: a card's document keeps its own name
@@ -1894,7 +2093,7 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
             } else {
                 trf("✔ All {} signatures are valid", &[&n])
             };
-            ui.label(Tone::Good.text(ui, title).size(20.0).strong());
+            verdict(ui, Icon::ShieldCheck, Tone::Good, &title);
             let text = if r.card_document.is_some() {
                 tr(
                     "The document inside the card has not been changed since it was signed, and the keys were issued by NCA RK.",
@@ -1908,11 +2107,11 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
         });
     } else if revocation_unchecked(r) {
         banner(ui, Tone::Warn, |ui| {
-            ui.label(
-                Tone::Warn
-                    .text(ui, tr("⚠ Valid, but not checked for revocation"))
-                    .size(20.0)
-                    .strong(),
+            verdict(
+                ui,
+                Icon::Warning,
+                Tone::Warn,
+                tr("⚠ Valid, but not checked for revocation"),
             );
             ui.add(
                 egui::Label::new(tr(
@@ -1923,17 +2122,17 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
         });
     } else {
         banner(ui, Tone::Bad, |ui| {
-            ui.label(
-                Tone::Bad
-                    .text(ui, tr("✖ Do not trust this document"))
-                    .size(20.0)
-                    .strong(),
+            verdict(
+                ui,
+                Icon::XCircle,
+                Tone::Bad,
+                tr("✖ Do not trust this document"),
             );
             ui.add(egui::Label::new(failure_reason(r)).wrap());
         });
     }
     for w in &r.warnings {
-        ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
+        warning(ui, w);
     }
     for s in &r.signers {
         ui.add_space(8.0);
@@ -1941,14 +2140,23 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     }
 }
 
+/// A verdict's title with its icon; a leading ✔ ✖ ⚠ in the text gives way to the icon.
+fn verdict(ui: &mut egui::Ui, icon: Icon, tone: Tone, title: &str) {
+    let title = title.trim_start_matches(['✔', '✖', '⚠', ' ']);
+    ui.horizontal(|ui| {
+        icons::show(ui, icon, 30.0, tone.color(ui));
+        ui.add(egui::Label::new(tone.text(ui, title).size(20.0).strong()).wrap());
+    });
+}
+
 fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
     ui.horizontal(|ui| {
-        let mark = if s.valid {
-            Tone::Good.text(ui, "✔")
+        let (icon, tone) = if s.valid {
+            (Icon::Check, Tone::Good)
         } else {
-            Tone::Bad.text(ui, "✖")
+            (Icon::Close, Tone::Bad)
         };
-        ui.label(mark.size(16.0));
+        icons::show(ui, icon, 18.0, tone.color(ui));
         ui.label(RichText::new(s.name()).strong().size(16.0));
     });
     egui::Grid::new(("signer", s.index))
@@ -1998,7 +2206,7 @@ fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
             row(tr("Revoked?"), rev, tone);
         });
     for w in &s.warnings {
-        ui.add(egui::Label::new(Tone::Warn.text(ui, format!("⚠ {w}"))).wrap());
+        warning(ui, w);
     }
     egui::CollapsingHeader::new(tr("Technical details"))
         .id_salt(("details", s.index))

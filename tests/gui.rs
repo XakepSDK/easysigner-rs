@@ -117,7 +117,8 @@ fn sign_then_verify_in_the_window() {
 
     // the document can be read before signing (Art. 50)
     h.get_by_label("Open the document").click();
-    h.run_steps(2);
+    // which file to show is worked out off the UI thread
+    settle(&mut h);
     assert_eq!(*dialogs.1.lock().unwrap(), std::slice::from_ref(&doc));
 
     // sign and save
@@ -135,7 +136,7 @@ fn sign_then_verify_in_the_window() {
     );
 
     // check the new file
-    h.get_by_label("‹ Back").click();
+    h.get_by_label("Back").click();
     h.run();
     h.get_all_by_label("Check a signed file")
         .next()
@@ -271,7 +272,7 @@ fn pdf_signing_and_cards_in_the_window() {
     assert!(std::fs::read(&out).unwrap().starts_with(&doc));
 
     // check the signed PDF, then the card, and save the card's document
-    h.get_by_label("‹ Back").click();
+    h.get_by_label("Back").click();
     h.run();
     h.get_all_by_label("Check a signed file")
         .next()
