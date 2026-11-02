@@ -4,6 +4,7 @@
 pub mod android;
 pub mod cert;
 pub mod cms;
+pub mod crl;
 pub mod der;
 pub mod gost;
 #[cfg(feature = "gui")]

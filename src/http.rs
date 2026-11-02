@@ -1,5 +1,5 @@
-//! The one network call kzsigner makes: an HTTP POST to the NCA timestamp or OCSP server, with
-//! the ureq client. NCA's servers take requests over plain http only (https answers POST with
+//! kzsigner's network calls: an HTTP POST to the NCA timestamp or OCSP server, and a GET of a
+//! revocation list (CRL) when OCSP gives no answer, with the ureq client. NCA's servers take requests over plain http only (https answers POST with
 //! 405; what they return is signed and checked), so ureq is built without TLS. A proxy set in the environment (http_proxy, ALL_PROXY) is used.
 
 use std::time::Duration;
@@ -59,10 +59,44 @@ pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Ve
         .map_err(|e| fail(&e))
 }
 
+/// GETs `url` (a certificate revocation list); answers up to `limit` bytes.
+pub fn get(url: &str, limit: u64, what: &str) -> Result<Vec<u8>> {
+    let fail = |e: &dyn std::fmt::Display| {
+        Error::new(trf(
+            "Could not reach the {} at {}: {}",
+            &[&tr_what(what), &url, e],
+        ))
+    };
+    if !url.starts_with("http://") {
+        return Err(fail(&"only http:// addresses are supported"));
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(20)))
+        .timeout_global(Some(Duration::from_secs(300)))
+        .http_status_as_error(false)
+        .user_agent(NCALAYER_USER_AGENT)
+        .build()
+        .into();
+    let mut resp = agent.get(url).call().map_err(|e| fail(&e))?;
+    let code = resp.status().as_u16();
+    if code != 200 {
+        return Err(Error::new(trf(
+            "The {} answered HTTP {} ({})",
+            &[&tr_what(what), &code, &url],
+        )));
+    }
+    resp.body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(|e| fail(&e))
+}
+
 fn tr_what(what: &str) -> &str {
     match what {
         "timestamp server" => tr("timestamp server"),
         "OCSP server" => tr("OCSP server"),
+        "revocation list server" => tr("revocation list server"),
         other => other,
     }
 }
