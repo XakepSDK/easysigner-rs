@@ -326,6 +326,11 @@ impl Engine {
             return pdf::verify(cms, &self.trust, ocsp_url);
         }
         if xml::is_xml(cms) {
+            if detached_original.is_some() {
+                return Err(Error::new(i18n::tr(
+                    "An XML signature is inside the document it signs: check the signed XML file alone.",
+                )));
+            }
             return xml::verify(cms, &self.trust, ocsp_url);
         }
         verify::verify(cms, detached_original, &self.trust, ocsp_url)
@@ -384,6 +389,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Random bytes from the operating system.
 pub fn random(buf: &mut [u8]) -> Result<()> {
     getrandom::fill(buf).map_err(|e| Error::new(format!("no random numbers from the system: {e}")))
+}
+
+/// The name for a document signed inside it: document.pdf -> document-signed.pdf.
+pub fn signed_name(file: &std::path::Path, ext: &str) -> std::path::PathBuf {
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    file.with_file_name(format!("{stem}-signed.{ext}"))
 }
 
 pub fn hex(b: &[u8]) -> String {

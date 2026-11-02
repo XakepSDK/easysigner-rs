@@ -934,6 +934,8 @@ impl App {
                         &mut self.timestamp,
                         tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
                     );
+                    // (XAdES has no long-term level yet)
+                    if self.sign_as != SignAs::Xml {
                     ui.add_enabled(
                         self.timestamp && self.ocsp,
                         egui::Checkbox::new(
@@ -941,6 +943,7 @@ impl App {
                             tr("Keep it checkable for years: store NCA's revocation answers in the signature and add an archive timestamp (long-term signature)"),
                         ),
                     );
+                    }
                 }
                 if self.sign_as == SignAs::Pdf {
                     ui.checkbox(
@@ -1440,14 +1443,8 @@ impl App {
         } else {
             match sign_as {
                 SignAs::Cms => PathBuf::from(format!("{}.cms", doc.display())),
-                SignAs::Pdf | SignAs::Xml => {
-                    let stem = doc
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let ext = if sign_as == SignAs::Xml { "xml" } else { "pdf" };
-                    doc.with_file_name(format!("{stem}-signed.{ext}"))
-                }
+                SignAs::Pdf => crate::signed_name(doc, "pdf"),
+                SignAs::Xml => crate::signed_name(doc, "xml"),
                 SignAs::Card => PathBuf::from(format!("{}.card.pdf", doc.display())),
             }
         };

@@ -1449,6 +1449,29 @@ fn xml() {
     );
     let v = t.kz(&["verify", "--trust", &ca, "req.xml"]);
     t.check("xml: an unsigned document", v.contains("no signatures"));
+    // text that looks like the signer's own placeholders stays as it was
+    std::fs::write(t.path("odd.xml"), "<a>@@SP@@ @@SV@@ @@UP@@</a>").unwrap();
+    t.kz(&["sign", "--xml", "-k", &key, "odd.xml"]);
+    let v = t.kz(&["verify", "--trust", &ca, "odd-signed.xml"]);
+    t.check(
+        "xml: placeholder-like text is left alone",
+        v.contains("VALID - all 1")
+            && std::fs::read_to_string(t.path("odd-signed.xml"))
+                .unwrap_or_default()
+                .starts_with("<a>@@SP@@ @@SV@@ @@UP@@<ds:Signature"),
+    );
+    std::fs::write(
+        t.path("dtd.xml"),
+        "<!DOCTYPE a [<!ATTLIST a x CDATA \"1\">]><a/>",
+    )
+    .unwrap();
+    let v = t.kz(&["sign", "--xml", "-k", &key, "dtd.xml"]);
+    t.check("xml: DTD attribute defaults are refused", v.contains("DTD"));
+    let v = t.kz(&["verify", "--data", "req.xml", "req-signed.xml"]);
+    t.check(
+        "xml: --data is not for XML",
+        v.contains("check the signed XML file alone"),
+    );
 
     println!("\n{} passed, {} failed", t.pass, t.fail.len());
     let _ = std::fs::remove_dir_all(&dir);

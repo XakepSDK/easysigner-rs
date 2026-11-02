@@ -185,12 +185,6 @@ impl Canon<'_, '_> {
                 consider(p, &mut decls, &mut rendered);
             }
         }
-        // an empty default is declared only to undo one in effect above
-        if decls.get("").is_some_and(String::is_empty)
-            && parent.get("").is_none_or(String::is_empty)
-        {
-            decls.remove("");
-        }
 
         out.push('<');
         out.push_str(qname);

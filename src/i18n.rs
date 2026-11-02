@@ -545,6 +545,9 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("The signature uses a digest algorithm that is not supported: {}", "Қолтаңба қолдау көрсетілмейтін хэш алгоритмін пайдаланады: {}", "Подпись использует неподдерживаемый алгоритм хэширования: {}"),
     ("The signed part {} was changed after signing.", "Қол қойылған {} бөлігі қол қойылғаннан кейін өзгертілген.", "Подписанная часть {} была изменена после подписания."),
     ("The signature uses an algorithm that is not supported: {}", "Қолтаңба қолдау көрсетілмейтін алгоритмді пайдаланады: {}", "Подпись использует неподдерживаемый алгоритм: {}"),
+    ("XML documents whose DTD declares attributes are not supported.", "DTD-сы атрибуттарды жариялайтын XML құжаттарына қолдау көрсетілмейді.", "XML-документы, DTD которых объявляет атрибуты, не поддерживаются."),
+    ("The signature uses SHA-1, which is no longer safe: a document with the same hash can be made.", "Қолтаңба SHA-1 пайдаланады, ол енді қауіпсіз емес: хэші бірдей құжат жасауға болады.", "Подпись использует SHA-1, который больше не безопасен: можно создать документ с тем же хэшем."),
+    ("An XML signature is inside the document it signs: check the signed XML file alone.", "XML қолтаңбасы өзі қол қойған құжаттың ішінде: қол қойылған XML файлын жалғыз тексеріңіз.", "XML-подпись находится внутри подписанного документа: проверяйте подписанный XML-файл отдельно."),
 ];
 
 #[cfg(test)]

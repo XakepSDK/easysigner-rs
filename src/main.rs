@@ -458,9 +458,9 @@ fn sign(o: Opts) -> R<u8> {
         } else if o.card {
             PathBuf::from(format!("{}.card.pdf", file.display()))
         } else if o.pdf {
-            signed_name(&file, "pdf")
+            kzsigner::signed_name(&file, "pdf")
         } else if o.xml {
-            signed_name(&file, "xml")
+            kzsigner::signed_name(&file, "xml")
         } else {
             PathBuf::from(format!("{}.cms", file.display()))
         }
@@ -538,15 +538,6 @@ fn extend(o: Opts) -> R<u8> {
         println!("Previous version saved as {}", bak.display());
     }
     Ok(0)
-}
-
-/// document.pdf -> document-signed.pdf
-fn signed_name(file: &Path, ext: &str) -> PathBuf {
-    let stem = file
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    file.with_file_name(format!("{stem}-signed.{ext}"))
 }
 
 fn verify(o: Opts) -> R<u8> {

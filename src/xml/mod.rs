@@ -96,6 +96,16 @@ fn text_of(input: &[u8]) -> Result<(&str, &[u8])> {
 }
 
 fn parse(text: &str) -> Result<Document<'_>> {
+    // attribute defaults a DTD declares are part of what other tools sign, and roxmltree does
+    // not add them: such documents would canonicalize differently here
+    let prolog = &text[..text
+        .find("<!DOCTYPE")
+        .map_or(0, |i| text[i..].find("]>").map_or(text.len(), |j| i + j))];
+    if prolog.contains("<!ATTLIST") {
+        return Err(Error::new(tr(
+            "XML documents whose DTD declares attributes are not supported.",
+        )));
+    }
     Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {
@@ -122,11 +132,10 @@ fn child<'a, 'i>(n: Node<'a, 'i>, ns: &str, name: &str) -> Option<Node<'a, 'i>> 
 
 fn children<'a, 'i>(
     n: Node<'a, 'i>,
-    ns: &str,
+    ns: &'a str,
     name: &'a str,
 ) -> impl Iterator<Item = Node<'a, 'i>> {
-    let ns = ns.to_string();
-    n.children().filter(move |c| is(c, &ns, name))
+    n.children().filter(move |c| is(c, ns, name))
 }
 
 fn signatures<'a, 'i>(doc: &'a Document<'i>) -> Vec<Node<'a, 'i>> {
@@ -225,15 +234,15 @@ pub fn sign(
          <ds:DigestMethod Algorithm=\"{dig_uri}\"/><ds:DigestValue>{}</ds:DigestValue></ds:Reference>\
          <ds:Reference Type=\"{SIGNED_PROPERTIES}\" URI=\"#{id}-sp\"><ds:Transforms>\
          <ds:Transform Algorithm=\"{c14n_uri}\"/></ds:Transforms>\
-         <ds:DigestMethod Algorithm=\"{dig_uri}\"/><ds:DigestValue>@@SP@@</ds:DigestValue>\
+         <ds:DigestMethod Algorithm=\"{dig_uri}\"/><ds:DigestValue>@@{id}-sp@@</ds:DigestValue>\
          </ds:Reference></ds:SignedInfo>",
         crate::base64_encode(&doc_digest),
     );
     let signature = format!(
         "<ds:Signature xmlns:ds=\"{DS}\" Id=\"{id}\">{signed_info}\
-         <ds:SignatureValue>@@SV@@</ds:SignatureValue><ds:KeyInfo><ds:X509Data>\
+         <ds:SignatureValue>@@{id}-sv@@</ds:SignatureValue><ds:KeyInfo><ds:X509Data>\
          <ds:X509Certificate>{}</ds:X509Certificate></ds:X509Data></ds:KeyInfo><ds:Object>\
-         <xades:QualifyingProperties xmlns:xades=\"{XADES}\" Target=\"#{id}\">{signed_props}@@UP@@\
+         <xades:QualifyingProperties xmlns:xades=\"{XADES}\" Target=\"#{id}\">{signed_props}@@{id}-up@@\
          </xades:QualifyingProperties></ds:Object></ds:Signature>",
         crate::base64_encode(&c.der),
     );
@@ -270,7 +279,11 @@ pub fn sign(
             .ok_or_else(|| Error::new("signed properties not found"))?;
         gost::hash(digest, &c14n::canonicalize(&out, sp, &inc, None))?
     };
-    out = out.replacen("@@SP@@", &crate::base64_encode(&sp_digest), 1);
+    out = out.replacen(
+        &format!("@@{id}-sp@@"),
+        &crate::base64_encode(&sp_digest),
+        1,
+    );
     let value = {
         let d = parse(&out)?;
         let s = by_id(&d, &id).ok_or_else(|| Error::new("signature not found"))?;
@@ -278,7 +291,7 @@ pub fn sign(
         key.private_key
             .sign(&c14n::canonicalize(&out, si, &inc, None))?
     };
-    out = out.replacen("@@SV@@", &crate::base64_encode(&value), 1);
+    out = out.replacen(&format!("@@{id}-sv@@"), &crate::base64_encode(&value), 1);
     r.signature = value;
 
     let unsigned = match tsa_url {
@@ -301,7 +314,7 @@ pub fn sign(
         }
         None => String::new(),
     };
-    out = out.replacen("@@UP@@", &unsigned, 1);
+    out = out.replacen(&format!("@@{id}-up@@"), &unsigned, 1);
     let mut bytes = bom.to_vec();
     bytes.extend_from_slice(out.as_bytes());
     r.cms = bytes;
@@ -493,18 +506,19 @@ fn check_one(
         });
     let sp = qp.and_then(|q| child(q, XADES, "SignedProperties"));
     let ssp = sp.and_then(|s| child(s, XADES, "SignedSignatureProperties"));
-    sr.signing_time = ssp
-        .and_then(|s| child(s, XADES, "SigningTime"))
-        .and_then(|t| t.text())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
-        .map(|t| t.timestamp_millis());
-
     match check_signed_info(text, doc, sig, &c, &mut sr) {
         Ok(covered) => {
             let whole = covered
                 .iter()
                 .any(|n| *n == doc.root().id() || *n == doc.root_element().id());
+            // the properties count only when signed
             let props = sp.is_some_and(|s| covered.contains(&s.id()));
+            let ssp = ssp.filter(|_| props);
+            sr.signing_time = ssp
+                .and_then(|s| child(s, XADES, "SigningTime"))
+                .and_then(|t| t.text())
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
+                .map(|t| t.timestamp_millis());
             let cert_ref = ssp.map(|s| signing_certificate_matches(s, &c));
             if !whole {
                 sr.signature_error = Some(
@@ -605,8 +619,19 @@ fn check_signed_info(
         )));
     }
     let mut covered = Vec::new();
+    let mut sha1 = dig_oid == gost::H_SHA1;
     for r in children(si, DS, "Reference") {
         covered.push(check_reference(text, doc, sig, r)?.id());
+        sha1 |= child(r, DS, "DigestMethod")
+            .and_then(|d| d.attribute("Algorithm"))
+            .and_then(digest_oid)
+            == Some(gost::H_SHA1);
+    }
+    if sha1 {
+        sr.warnings.push(
+            tr("The signature uses SHA-1, which is no longer safe: a document with the same hash can be made.")
+                .into(),
+        );
     }
     Ok(covered)
 }
