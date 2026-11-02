@@ -119,6 +119,9 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         );
         line(&mut o, "Issuer", s.issuer_cn.as_deref().unwrap_or("null"));
         line(&mut o, "Trust", s.chain_status.as_deref().unwrap_or("-"));
+        if let Some(e) = &s.usage_error {
+            line(&mut o, "Usage", e);
+        }
         line(
             &mut o,
             "Revocation",
@@ -233,6 +236,7 @@ fn signer(x: &SignerReport) -> J {
         ("chainOk", J::Bool(x.chain_ok)),
         ("chainStatus", s(&x.chain_status)),
         ("chain", strs(&x.chain)),
+        ("usageError", s(&x.usage_error)),
         // at the trusted timestamp's time, or at checkedAt (the moment of checking) without one
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
         ("checkedAt", t(x.checked_at)),

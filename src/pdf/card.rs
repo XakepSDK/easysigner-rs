@@ -280,19 +280,9 @@ fn dn(name: &[u8]) -> String {
 }
 
 fn policies(c: &Cert) -> Vec<String> {
-    let Some(v) = c
-        .extensions
-        .iter()
-        .find(|(o, _)| o == "2.5.29.32")
-        .map(|(_, v)| v)
-    else {
-        return vec![];
-    };
-    let Ok(t) = der::parse(v).and_then(|t| t.items(der::SEQUENCE)) else {
-        return vec![];
-    };
-    t.iter()
-        .filter_map(|p| p.items(der::SEQUENCE).ok()?.first()?.oid().ok())
+    c.policies()
+        .unwrap_or_default()
+        .into_iter()
         .map(|o| match o.as_str() {
             "1.2.398.3.3.2.1" => format!("Политика применения регистрационных свидетельств электронной цифровой подписи юридических лиц Республики Казахстан ({o})"),
             _ => o,

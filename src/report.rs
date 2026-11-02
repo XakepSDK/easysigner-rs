@@ -26,6 +26,9 @@ pub struct SignerReport {
     pub chain_ok: bool,
     /// Certificate path, signer first, as common names.
     pub chain: Vec<String>,
+    /// Why the certificate may not sign documents under its CA's policy (key usage, purpose,
+    /// certificate policy; Order 500/НҚ p.16.4), when its CA was found.
+    pub usage_error: Option<String>,
     /// Whether the signer's certificate was valid at the reference time: the trusted timestamp's
     /// time, or the moment of checking when there is none (Order 500/НҚ p.13-14).
     pub cert_valid_at_signing: Option<bool>,

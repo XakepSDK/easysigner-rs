@@ -1706,6 +1706,9 @@ fn failure_reason(r: &VerifyReport) -> String {
             &[&s.chain_status.clone().unwrap_or_default()],
         );
     }
+    if let Some(e) = &s.usage_error {
+        return trf("The signer's key may not sign documents: {}", &[e]);
+    }
     if let Some(o) = &s.ocsp_status {
         return trf("The signer's key check failed: {}", &[o]);
     }
@@ -1720,6 +1723,7 @@ fn revocation_unchecked(r: &VerifyReport) -> bool {
         && failing.iter().all(|s| {
             s.signature_ok
                 && s.chain_ok
+                && s.usage_error.is_none()
                 && s.timestamp_ok != Some(false)
                 && s.cert_valid_at_signing != Some(false)
                 && s.ocsp_answer == Some("")
@@ -1819,10 +1823,10 @@ fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
                 (s.signature_error.clone().unwrap_or_default(), Tone::Bad)
             };
             row(tr("Document"), doc, tone);
-            let (key, tone) = if s.chain_ok {
-                (tr("Issued by NCA RK ✔").to_string(), Tone::Good)
-            } else {
-                (s.chain_status.clone().unwrap_or_default(), Tone::Bad)
+            let (key, tone) = match &s.usage_error {
+                _ if !s.chain_ok => (s.chain_status.clone().unwrap_or_default(), Tone::Bad),
+                Some(e) => (e.clone(), Tone::Bad),
+                None => (tr("Issued by NCA RK ✔").to_string(), Tone::Good),
             };
             row(tr("Key"), key, tone);
             let (rev, tone) = match (&s.ocsp_status, s.ocsp_answer) {

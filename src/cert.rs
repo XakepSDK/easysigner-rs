@@ -35,7 +35,9 @@ pub const EKU_CLIENT_AUTH: &str = "1.3.6.1.5.5.7.3.2";
 pub const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
 pub const EKU_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
 
+const KU_DIGITAL_SIGNATURE: usize = 0;
 const KU_NON_REPUDIATION: usize = 1;
+const ANY_POLICY: &str = "2.5.29.32.0";
 const KU_KEY_CERT_SIGN: usize = 5;
 
 impl Cert {
@@ -173,6 +175,16 @@ impl Cert {
             .and_then(|t| t.items(der::SEQUENCE))
             .map(|k| k.iter().filter_map(|o| o.oid().ok()).collect())
             .unwrap_or_default()
+    }
+
+    /// The policy OIDs in the certificate policies extension; None without the extension, or
+    /// when it can't be read.
+    pub fn policies(&self) -> Option<Vec<String>> {
+        let v = self.extension("2.5.29.32")?;
+        let t = der::parse(v).and_then(|t| t.items(der::SEQUENCE)).ok()?;
+        t.iter()
+            .map(|p| p.items(der::SEQUENCE).ok()?.first()?.oid().ok())
+            .collect()
     }
 
     pub fn has_eku(&self, oid: &str) -> bool {
@@ -361,6 +373,46 @@ pub fn types(c: &Cert) -> Vec<String> {
         }
     }
     t
+}
+
+/// Why `c` (issued by `issuer`) may not sign documents under its CA's rules (Order 500/НҚ
+/// p.16.4): key usage without digitalSignature and nonRepudiation, a timestamp or OCSP service
+/// key, or certificate policies outside the issuer's. A CA without a policies extension (or
+/// with anyPolicy) sets no rule on policies. None when it may.
+pub fn usage_problem(c: &Cert, issuer: &Cert) -> Option<String> {
+    if c.key_usage()
+        .is_some_and(|k| !k[KU_DIGITAL_SIGNATURE] && !k[KU_NON_REPUDIATION])
+    {
+        return Some(tr("The certificate's key usage does not allow signing.").into());
+    }
+    if c.has_eku(EKU_TIME_STAMPING) || c.has_eku(EKU_OCSP_SIGNING) {
+        return Some(
+            tr("The certificate belongs to a timestamp or OCSP service, not to a person or organization.")
+                .into(),
+        );
+    }
+    let allowed = issuer.policies()?;
+    if allowed.iter().any(|p| p == ANY_POLICY) {
+        return None;
+    }
+    let under = |p: &str| {
+        allowed.iter().any(|a| {
+            p == a
+                || p.strip_prefix(a.as_str())
+                    .is_some_and(|r| r.starts_with('.'))
+        })
+    };
+    match c.policies() {
+        Some(own) if own.iter().any(|p| under(p)) => None,
+        Some(own) if !own.is_empty() => Some(trf(
+            "The certificate's policy ({}) is not one of its CA's policies ({}).",
+            &[&own.join(", "), &allowed.join(", ")],
+        )),
+        _ => Some(trf(
+            "The certificate names no certificate policy, but its CA issues under {}.",
+            &[&allowed.join(", ")],
+        )),
+    }
 }
 
 /// Warnings about a key that is unsuitable for signing documents (e.g. an AUTH key).
