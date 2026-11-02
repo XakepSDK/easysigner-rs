@@ -177,14 +177,24 @@ impl Cert {
             .unwrap_or_default()
     }
 
-    /// The policy OIDs in the certificate policies extension; None without the extension, or
-    /// when it can't be read.
-    pub fn policies(&self) -> Option<Vec<String>> {
+    /// The policy OIDs in the certificate policies extension: None without the extension,
+    /// Some(Err) when it can't be read.
+    pub fn policies(&self) -> Option<Result<Vec<String>>> {
         let v = self.extension("2.5.29.32")?;
-        let t = der::parse(v).and_then(|t| t.items(der::SEQUENCE)).ok()?;
-        t.iter()
-            .map(|p| p.items(der::SEQUENCE).ok()?.first()?.oid().ok())
-            .collect()
+        Some(
+            der::parse(v)
+                .and_then(|t| t.items(der::SEQUENCE))
+                .and_then(|t| {
+                    t.iter()
+                        .map(|p| {
+                            p.items(der::SEQUENCE)?
+                                .first()
+                                .ok_or_else(|| Error::new("empty PolicyInformation"))?
+                                .oid()
+                        })
+                        .collect()
+                }),
+        )
     }
 
     pub fn has_eku(&self, oid: &str) -> bool {
@@ -375,11 +385,15 @@ pub fn types(c: &Cert) -> Vec<String> {
     t
 }
 
-/// Why `c` (issued by `issuer`) may not sign documents under its CA's rules (Order 500/НҚ
-/// p.16.4): key usage without digitalSignature and nonRepudiation, a timestamp or OCSP service
-/// key, or certificate policies outside the issuer's. A CA without a policies extension (or
-/// with anyPolicy) sets no rule on policies. None when it may.
-pub fn usage_problem(c: &Cert, issuer: &Cert) -> Option<String> {
+/// Why `c` may not sign documents under its CA's rules (Order 500/НҚ p.16.4): a CA key, key
+/// usage without digitalSignature and nonRepudiation, a timestamp or OCSP service key, or (when
+/// its CA `issuer` was found) certificate policies outside the CA's. Only the direct issuer's
+/// policies count: NCA's issuing CAs have policies outside their root's. A CA without a
+/// policies extension, or with anyPolicy, sets no rule on policies. None when it may.
+pub fn usage_problem(c: &Cert, issuer: Option<&Cert>) -> Option<String> {
+    if c.is_ca() {
+        return Some(tr("The certificate belongs to a certification authority, not to a person or organization.").into());
+    }
     if c.key_usage()
         .is_some_and(|k| !k[KU_DIGITAL_SIGNATURE] && !k[KU_NON_REPUDIATION])
     {
@@ -391,23 +405,28 @@ pub fn usage_problem(c: &Cert, issuer: &Cert) -> Option<String> {
                 .into(),
         );
     }
-    let allowed = issuer.policies()?;
+    let allowed = match issuer?.policies()? {
+        Ok(a) => a,
+        Err(_) => return Some(tr("The CA certificate's policies can't be read.").into()),
+    };
     if allowed.iter().any(|p| p == ANY_POLICY) {
         return None;
     }
-    let under = |p: &str| {
-        allowed.iter().any(|a| {
-            p == a
-                || p.strip_prefix(a.as_str())
-                    .is_some_and(|r| r.starts_with('.'))
-        })
+    let under = |p: &String| {
+        p == ANY_POLICY
+            || allowed.iter().any(|a| {
+                p == a
+                    || p.strip_prefix(a.as_str())
+                        .is_some_and(|r| r.starts_with('.'))
+            })
     };
     match c.policies() {
-        Some(own) if own.iter().any(|p| under(p)) => None,
-        Some(own) if !own.is_empty() => Some(trf(
+        Some(Ok(own)) if own.iter().any(under) => None,
+        Some(Ok(own)) if !own.is_empty() => Some(trf(
             "The certificate's policy ({}) is not one of its CA's policies ({}).",
             &[&own.join(", "), &allowed.join(", ")],
         )),
+        Some(Err(_)) => Some(tr("The certificate's policies can't be read.").into()),
         _ => Some(trf(
             "The certificate names no certificate policy, but its CA issues under {}.",
             &[&allowed.join(", ")],

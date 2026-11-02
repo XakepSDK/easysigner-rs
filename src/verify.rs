@@ -202,10 +202,7 @@ fn check_one(
     sr.chain_ok = chain.ok;
     sr.chain_status = Some(chain.status);
     sr.chain = chain.path;
-    sr.usage_error = chain
-        .issuer
-        .as_ref()
-        .and_then(|i| cert::usage_problem(&c, i));
+    sr.usage_error = cert::usage_problem(&c, chain.issuer.as_ref());
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
         let (mut good, mut status, mut answer) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);

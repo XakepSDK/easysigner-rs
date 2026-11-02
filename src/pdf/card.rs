@@ -281,6 +281,7 @@ fn dn(name: &[u8]) -> String {
 
 fn policies(c: &Cert) -> Vec<String> {
     c.policies()
+        .and_then(|p| p.ok())
         .unwrap_or_default()
         .into_iter()
         .map(|o| match o.as_str() {
@@ -448,6 +449,7 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
                 .and_then(|s| {
                     s.signature_error
                         .clone()
+                        .or_else(|| s.chain_ok.then(|| s.usage_error.clone()).flatten())
                         .or(Some(s.chain_status.clone().unwrap_or_default()))
                 })
                 .unwrap_or_default();

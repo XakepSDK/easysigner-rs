@@ -1073,6 +1073,9 @@ impl App {
                 Tone::Bad,
             ));
         }
+        if let Some(e) = &s.usage_error {
+            n.push((trf("This key may not sign documents: {}", &[e]), Tone::Bad));
+        }
         for w in self.engine.key_warnings(&k.cert) {
             n.push((format!("⚠ {w}"), Tone::Warn));
         }
@@ -1438,7 +1441,9 @@ impl App {
                         self.key_note = self.describe_key(&k);
                         let d = self.engine.describe(&k.cert);
                         self.key_holder = Some(d.name());
-                        self.key_ok = d.chain_ok && self.engine.key_warnings(&k.cert).is_empty();
+                        self.key_ok = d.chain_ok
+                            && d.usage_error.is_none()
+                            && self.engine.key_warnings(&k.cert).is_empty();
                         self.alias = Some(k.alias.clone());
                         self.opened_for = Some(key_request(&f, Some(&k.alias), &pw_hash));
                         self.key = Some(Arc::new(*k));
@@ -1823,10 +1828,12 @@ fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
                 (s.signature_error.clone().unwrap_or_default(), Tone::Bad)
             };
             row(tr("Document"), doc, tone);
-            let (key, tone) = match &s.usage_error {
-                _ if !s.chain_ok => (s.chain_status.clone().unwrap_or_default(), Tone::Bad),
-                Some(e) => (e.clone(), Tone::Bad),
-                None => (tr("Issued by NCA RK ✔").to_string(), Tone::Good),
+            let (key, tone) = if !s.chain_ok {
+                (s.chain_status.clone().unwrap_or_default(), Tone::Bad)
+            } else if let Some(e) = &s.usage_error {
+                (e.clone(), Tone::Bad)
+            } else {
+                (tr("Issued by NCA RK ✔").to_string(), Tone::Good)
             };
             row(tr("Key"), key, tone);
             let (rev, tone) = match (&s.ocsp_status, s.ocsp_answer) {

@@ -458,6 +458,9 @@ fn info(o: Opts) -> R<u8> {
         println!("NCA type:     {}", s.cert_types.join("/"));
     }
     println!("Trust:        {}", f(&s.chain_status));
+    if let Some(u) = &s.usage_error {
+        println!("Usage:        {u} (signatures made with this key fail verification)");
+    }
     for w in e.key_warnings(&k.cert) {
         println!("Warning:      {w}");
     }

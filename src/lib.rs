@@ -211,6 +211,7 @@ impl Engine {
         sr.chain_ok = chain.ok;
         sr.chain_status = Some(chain.status);
         sr.chain = chain.path;
+        sr.usage_error = cert::usage_problem(c, chain.issuer.as_ref());
         sr.algorithm = Some(cert::key_alg_name(c));
         sr
     }
