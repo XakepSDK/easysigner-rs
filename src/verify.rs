@@ -236,6 +236,10 @@ pub fn revocation(
     if !answer.is_empty() {
         return (good, status, answer, Some("ocsp"));
     }
+    if issuer.is_none() {
+        // the revocation list can't be checked without the CA either: say it once
+        return (good, status, answer, None);
+    }
     let (good, crl_status, answer) = crate::crl::check(c, issuer);
     let status = trf("{} (OCSP: {})", &[&crl_status, &status]);
     let source = (!answer.is_empty()).then_some("crl");
