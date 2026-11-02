@@ -4,7 +4,7 @@
 //! Rust talks to it through one method, `String call(String request)`.
 //!
 //! Requests: `pick` (the chooser), `save\n<name>\n<path>` (copy a written file to where the
-//! user chooses), `share\n<path>`, `keyboard\n1|0`, `info` (files dir, cache dir, language),
+//! user chooses), `share\n<path>`, `view\n<path>` (open in another app), `keyboard\n1|0`, `info` (files dir, cache dir, language),
 //! `poll` (the next event: `picked\n<path>`, `cancelled`, `open\n<path>`, `saved\n<name>`,
 //! `error\n<text>`, or null).
 
@@ -133,6 +133,14 @@ impl Dialogs for AndroidDialogs {
         ));
     }
 
+    fn view_dir(&self) -> PathBuf {
+        info().cache.join("view")
+    }
+
+    fn view(&mut self, path: &Path) {
+        java(&format!("view\n{}", one_line(&path.display().to_string())));
+    }
+
     fn reveal(&mut self, path: &Path) {
         java(&format!("share\n{}", one_line(&path.display().to_string())));
     }
@@ -167,6 +175,10 @@ impl Dialogs for AndroidDialogs {
                 false,
             )),
             "open" => Some(DialogEvent::Open(PathBuf::from(rest))),
+            "noviewer" => Some(DialogEvent::Message(
+                tr("No app on this phone can open this kind of file.").into(),
+                true,
+            )),
             "saved" => Some(DialogEvent::Message(trf("Saved: {}", &[&rest]), false)),
             "error" => Some(DialogEvent::Message(
                 trf("Could not save: {}", &[&rest]),

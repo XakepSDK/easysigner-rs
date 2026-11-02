@@ -15,7 +15,7 @@ use kzsigner::gui::{App, Dialogs, Screen};
 
 /// File dialogs that answer from a queue.
 #[derive(Clone, Default)]
-struct Scripted(Arc<Mutex<VecDeque<PathBuf>>>);
+struct Scripted(Arc<Mutex<VecDeque<PathBuf>>>, Arc<Mutex<Vec<PathBuf>>>);
 
 impl Scripted {
     fn next(&self, p: PathBuf) {
@@ -29,6 +29,10 @@ impl Dialogs for Scripted {
     }
     fn save(&mut self, _: &Path) -> Option<PathBuf> {
         self.0.lock().unwrap().pop_front()
+    }
+    /// Files opened for reading are noted, not shown.
+    fn view(&mut self, path: &Path) {
+        self.1.lock().unwrap().push(path.to_path_buf());
     }
 }
 
@@ -109,6 +113,11 @@ fn sign_then_verify_in_the_window() {
         h.query_by_label_contains("ИВАНОВ АЛИБЕК").is_some(),
         "key details are shown"
     );
+
+    // the document can be read before signing (Art. 50)
+    h.get_by_label("Open the document").click();
+    h.run_steps(2);
+    assert_eq!(*dialogs.1.lock().unwrap(), [doc.clone()]);
 
     // sign and save
     let out = dir.join("doc.txt.cms");

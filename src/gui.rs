@@ -56,6 +56,15 @@ pub trait Dialogs {
     fn reveal(&mut self, path: &Path) {
         show_in_folder(path);
     }
+    /// Opens `path` in the system's viewer for its type, to read before signing (Digital Code
+    /// Art. 50: the signer sees what they sign).
+    fn view(&mut self, path: &Path) {
+        open_with_system(path);
+    }
+    /// A folder for files made only to be viewed (a document taken out of a .cms).
+    fn view_dir(&self) -> PathBuf {
+        std::env::temp_dir().join("kzsigner-view")
+    }
     /// Shows or hides the on-screen keyboard.
     fn keyboard(&mut self, _show: bool) {}
     /// What happened since the last frame: chosen files, files opened from other apps.
@@ -183,6 +192,8 @@ enum Msg {
     Verified(u64, Result<VerifyReport, String>),
     /// (file, suggested name for the saved document, bytes)
     Extracted(PathBuf, Option<String>, Result<Vec<u8>, String>),
+    /// A document taken out of a .cms to be read before signing.
+    ToView(Result<PathBuf, String>),
 }
 
 /// What the chosen document is.
@@ -522,8 +533,23 @@ impl App {
         let ctx = ui.ctx().clone();
         card(ui, |ui| {
             step(ui, tr("1 · Document"));
-            if let Some(d) = &self.doc {
-                file_title(ui, d);
+            if let Some(d) = self.doc.clone() {
+                file_title(ui, &d);
+                if crate::icons::button(
+                    ui,
+                    crate::icons::Icon::Open,
+                    tr("Open the document"),
+                    14.0,
+                    egui::vec2(0.0, 32.0),
+                    false,
+                )
+                .on_hover_text(tr(
+                    "Read it before you sign: it opens in the program your computer uses for it.",
+                ))
+                .clicked()
+                {
+                    self.view_doc(&ctx, d);
+                }
             }
             let doc = self.doc.clone();
             if let Some(f) = self.file_field(ui, "doc", tr("Document to sign"), &doc) {
@@ -999,6 +1025,41 @@ impl App {
                     }
                 });
             Msg::DocChecked(request, r)
+        });
+    }
+
+    /// Opens the document to sign for reading: the file itself, or for a .cms with the
+    /// document inside, that document, taken out into a temporary folder.
+    pub fn view_doc(&mut self, ctx: &egui::Context, doc: PathBuf) {
+        if self.doc_is_detached_cms {
+            // the document is not inside: it is the original chosen beside it
+            match self.sign_original.clone() {
+                Some(o) => self.dialogs.view(&o),
+                None => self.message = Some((tr("Choose the signed document.").into(), false)),
+            }
+            return;
+        }
+        if self.doc_kind != DocKind::Cms {
+            self.dialogs.view(&doc);
+            return;
+        }
+        let dir = self.dialogs.view_dir();
+        self.background(ctx, move |e| {
+            let r = (|| -> Result<PathBuf, String> {
+                let data =
+                    std::fs::read(&doc).map_err(|err| format!("{}: {err}", doc.display()))?;
+                let content = e.extract(&data).map_err(|x| x.0)?;
+                let name = doc
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "document".into());
+                let dir = dir.join(crate::time::now_ms().to_string());
+                std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+                let out = dir.join(name);
+                std::fs::write(&out, content).map_err(|err| format!("{}: {err}", out.display()))?;
+                Ok(out)
+            })();
+            Msg::ToView(r)
         });
     }
 
@@ -1508,6 +1569,10 @@ impl App {
                 Ok(d) => self.save_extracted(&file, name, d),
                 Err(e) => self.message = Some((e, true)),
             },
+            Msg::ToView(r) => match r {
+                Ok(f) => self.dialogs.view(&f),
+                Err(e) => self.message = Some((e, true)),
+            },
         }
     }
 }
@@ -1674,6 +1739,17 @@ fn file_title(ui: &mut egui::Ui, f: &Path) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| f.display().to_string());
     ui.label(RichText::new(name).size(16.0).strong());
+}
+
+/// Opens `f` with the program the system uses for its type.
+fn open_with_system(f: &Path) {
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer").arg(f).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(f).spawn();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(f).spawn();
+    let _ = r;
 }
 
 /// Opens the folder with `f` in the system's file manager.

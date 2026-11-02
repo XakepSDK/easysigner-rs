@@ -1,6 +1,7 @@
 package kz.kzsigner;
 
 import android.app.NativeActivity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
@@ -95,6 +96,19 @@ public class MainActivity extends NativeActivity {
                     i.putExtra(Intent.EXTRA_STREAM, SharedFiles.uri(this, f));
                     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     startActivity(Intent.createChooser(i, null));
+                });
+                return null;
+            case "view":
+                runOnUiThread(() -> {
+                    File f = new File(r[1]);
+                    Intent i = new Intent(Intent.ACTION_VIEW);
+                    i.setDataAndType(SharedFiles.uri(this, f), mime(f.getName()));
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    try {
+                        startActivity(i);
+                    } catch (ActivityNotFoundException e) {
+                        event("noviewer");
+                    }
                 });
                 return null;
             case "keyboard":
