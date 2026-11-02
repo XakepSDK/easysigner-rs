@@ -228,7 +228,9 @@ impl Run {
     fn kz_env(&self, args: &[&str], password: &str) -> (String, String) {
         // the test keys' CAs, so that signing's own key check (Order 500 p.4) trusts them
         let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        if args[0] == "sign" && !args.iter().any(|a| a == "--trust" || a == "--no-test-ca") {
+        if args.first().is_some_and(|a| a == "sign")
+            && !args.iter().any(|a| a == "--trust" || a == "--no-test-ca")
+        {
             for dir in ["keys", "kalkan"] {
                 for a in ["rsa", "gost2004", "gost2015", "gost2015_256"] {
                     let f = fixtures().join(dir).join(format!("ca_{a}.cer"));

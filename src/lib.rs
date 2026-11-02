@@ -81,7 +81,7 @@ impl Engine {
         cosign_if_cms: bool,
         detached_original: Option<&[u8]>,
     ) -> Result<SignResult> {
-        let checked = self.check_key(&key.cert, ocsp_url)?;
+        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
         let mut r = sign::sign(
             input,
             key,
@@ -91,7 +91,8 @@ impl Engine {
             detached_original,
             &self.trust,
         )?;
-        r.warnings.extend(checked);
+        warnings.append(&mut r.warnings);
+        r.warnings = warnings;
         Ok(r)
     }
 
@@ -103,14 +104,15 @@ impl Engine {
         tsa_url: Option<&str>,
         ocsp_url: Option<&str>,
     ) -> Result<SignResult> {
-        let checked = self.check_key(&key.cert, ocsp_url)?;
+        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
         let mut r = pdf::sign(input, key, tsa_url, &self.trust)?;
-        r.warnings.extend(checked);
+        warnings.append(&mut r.warnings);
+        r.warnings = warnings;
         Ok(r)
     }
 
-    /// Signs `input` into a document card (ddcard), checking the key (online) and the
-    /// signature first; see
+    /// Signs `input` into a document card (ddcard), checking the key and the signature
+    /// first; see
     /// [`pdf::card`]. If `input` is already a card, the signature is added to it and the card
     /// is made again. A card needs a timestamp, and asks for an OCSP answer kept in the
     /// signature (a missing one only warns). `lang` and `qr`: None to keep what the card had
@@ -127,7 +129,8 @@ impl Engine {
         qr: Option<bool>,
     ) -> Result<SignResult> {
         let mut r = SignResult {
-            warnings: self.check_key(&key.cert, Some(ocsp_url))?,
+            // revocation is checked when the card's OCSP answer is fetched
+            warnings: self.check_key(&key.cert, None)?,
             ..Default::default()
         };
         let (name, doc, mut signatures, made_with) = match pdf::card::read(input) {

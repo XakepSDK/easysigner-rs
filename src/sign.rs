@@ -9,7 +9,7 @@ use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport};
 use crate::trust::TrustStore;
-use crate::{Error, Result, gost, ocsp, tsp};
+use crate::{Error, Result, gost, tsp};
 
 /// Checks the signer's own certificate before signing (Order 500/НҚ p.4): issued by a trusted
 /// CA, valid now, allowed to sign under its CA's policy, and, with `ocsp_url`, not revoked
@@ -33,7 +33,7 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result
     let chain = trust.check(c, now);
     if !chain.ok {
         return refuse(trf(
-            "{} (for a test CA, add its certificate with --trust)",
+            "{} (kzsigner trusts NCA RK; a test CA's certificate can be added with --trust)",
             &[&chain.status],
         ));
     }
@@ -42,15 +42,8 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result
     }
     let mut warnings = Vec::new();
     if let Some(url) = ocsp_url {
-        let (_, mut status, mut answer) = ocsp::check(c, chain.issuer.as_ref(), url, trust);
-        if answer.is_empty() {
-            let (_, s, a) = crate::crl::check(c, chain.issuer.as_ref());
-            if !a.is_empty() {
-                (status, answer) = (s, a);
-            } else {
-                status = trf("{} (OCSP: {})", &[&s, &status]);
-            }
-        }
+        let (_, status, answer, _) =
+            crate::verify::revocation(c, chain.issuer.as_ref(), url, trust);
         match answer {
             "good" => {}
             "" => warnings.push(trf(

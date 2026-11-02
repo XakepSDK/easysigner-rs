@@ -210,20 +210,42 @@ pub fn sign_for_card(
             sd.certs.push(c.der.clone());
         }
     }
-    match chain.issuer.as_ref().map(|i| ocsp::fetch(&key.cert, i, ocsp_url, trust)) {
-        Some(Ok(a)) if a.good => {
+    // the key was checked before signing, so its issuer is known
+    let issuer = chain
+        .issuer
+        .as_ref()
+        .ok_or_else(|| Error::new(chain.status.clone()))?;
+    match ocsp::fetch(&key.cert, issuer, ocsp_url, trust) {
+        Ok(a) if a.good => {
             let other = der::tlv(der::ctx(1), &der::cat(&[&der::oid(RI_OCSP), &a.raw]));
             sd.crls = Some(der::tlv(der::ctx(1), &other));
         }
-        Some(Ok(a)) => return Err(Error::new(trf("The certificate is not usable for signing: {}", &[&a.status]))),
-        Some(Err(e)) => r.warnings.push(trf(
-            "No OCSP answer could be embedded in the signature ({}); the card does not fully meet its specification.",
-            &[&e],
-        )),
-        None => r.warnings.push(
-            tr("No OCSP answer could be embedded in the signature (the certificate's issuer is not a trusted NCA RK certificate); the card does not fully meet its specification.")
-                .into(),
-        ),
+        Ok(a) => {
+            return Err(Error::new(trf(
+                "The certificate is not usable for signing: {}",
+                &[&a.status],
+            )));
+        }
+        Err(e) => {
+            // no OCSP answer: the CA's revocation list still decides whether to sign (p.4.3)
+            let (_, status, answer) = crate::crl::check(&key.cert, Some(issuer));
+            if !answer.is_empty() && answer != "good" {
+                return Err(Error::new(trf(
+                    "The certificate is not usable for signing: {}",
+                    &[&status],
+                )));
+            }
+            r.warnings.push(trf(
+                "No OCSP answer could be embedded in the signature ({}); the card does not fully meet its specification.",
+                &[&e],
+            ));
+            if answer.is_empty() {
+                r.warnings.push(trf(
+                    "Could not check that your key is not revoked: {}",
+                    &[&status],
+                ));
+            }
+        }
     }
     Ok(sd.encode())
 }
