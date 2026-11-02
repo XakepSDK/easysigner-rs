@@ -38,6 +38,7 @@ public class MainActivity extends NativeActivity {
         // copies of chosen files (keys too) and signed files from earlier runs
         delete(new File(getCacheDir(), "in"));
         delete(new File(getCacheDir(), "out"));
+        delete(new File(getCacheDir(), "view"));
         super.onCreate(state);
         received(getIntent());
     }

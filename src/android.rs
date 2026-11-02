@@ -137,8 +137,10 @@ impl Dialogs for AndroidDialogs {
         info().cache.join("view")
     }
 
-    fn view(&mut self, path: &Path) {
+    fn view(&mut self, path: &Path) -> Result<(), String> {
+        // an app that can't be found is reported later, through poll
         java(&format!("view\n{}", one_line(&path.display().to_string())));
+        Ok(())
     }
 
     fn reveal(&mut self, path: &Path) {

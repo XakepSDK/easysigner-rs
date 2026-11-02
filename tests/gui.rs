@@ -31,8 +31,9 @@ impl Dialogs for Scripted {
         self.0.lock().unwrap().pop_front()
     }
     /// Files opened for reading are noted, not shown.
-    fn view(&mut self, path: &Path) {
+    fn view(&mut self, path: &Path) -> Result<(), String> {
         self.1.lock().unwrap().push(path.to_path_buf());
+        Ok(())
     }
 }
 
@@ -117,7 +118,7 @@ fn sign_then_verify_in_the_window() {
     // the document can be read before signing (Art. 50)
     h.get_by_label("Open the document").click();
     h.run_steps(2);
-    assert_eq!(*dialogs.1.lock().unwrap(), [doc.clone()]);
+    assert_eq!(*dialogs.1.lock().unwrap(), std::slice::from_ref(&doc));
 
     // sign and save
     let out = dir.join("doc.txt.cms");

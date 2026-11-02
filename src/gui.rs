@@ -57,9 +57,9 @@ pub trait Dialogs {
         show_in_folder(path);
     }
     /// Opens `path` in the system's viewer for its type, to read before signing (Digital Code
-    /// Art. 50: the signer sees what they sign).
-    fn view(&mut self, path: &Path) {
-        open_with_system(path);
+    /// Art. 50: the signer sees what they sign). A failure to start the viewer is an error.
+    fn view(&mut self, path: &Path) -> Result<(), String> {
+        open_with_system(path).map_err(|e| e.to_string())
     }
     /// A folder for files made only to be viewed (a document taken out of a .cms).
     fn view_dir(&self) -> PathBuf {
@@ -190,10 +190,10 @@ enum Msg {
     KeyOpened(u64, PathBuf, String, Result<Box<Key>, String>),
     Signed(PathBuf, SignAs, Result<SignResult, String>),
     Verified(u64, Result<VerifyReport, String>),
-    /// (file, suggested name for the saved document, bytes)
-    Extracted(PathBuf, Option<String>, Result<Vec<u8>, String>),
-    /// A document taken out of a .cms to be read before signing.
-    ToView(Result<PathBuf, String>),
+    /// (file, (suggested name for the saved document, bytes))
+    Extracted(PathBuf, Result<(String, Vec<u8>), String>),
+    /// The document to read before signing (for the document request with this number).
+    ToView(u64, Result<PathBuf, String>),
 }
 
 /// What the chosen document is.
@@ -1028,38 +1028,33 @@ impl App {
         });
     }
 
-    /// Opens the document to sign for reading: the file itself, or for a .cms with the
-    /// document inside, that document, taken out into a temporary folder.
+    /// Opens the document to sign for reading: the file itself, or the document inside a
+    /// signed file (a .cms or a card), taken out into a private temporary folder. For a
+    /// detached .cms, the original chosen beside it.
     pub fn view_doc(&mut self, ctx: &egui::Context, doc: PathBuf) {
-        if self.doc_is_detached_cms {
-            // the document is not inside: it is the original chosen beside it
-            match self.sign_original.clone() {
-                Some(o) => self.dialogs.view(&o),
-                None => self.message = Some((tr("Choose the signed document.").into(), false)),
-            }
-            return;
-        }
-        if self.doc_kind != DocKind::Cms {
-            self.dialogs.view(&doc);
-            return;
-        }
+        let original = self.sign_original.clone();
         let dir = self.dialogs.view_dir();
+        let id = self.doc_request;
         self.background(ctx, move |e| {
             let r = (|| -> Result<PathBuf, String> {
                 let data =
                     std::fs::read(&doc).map_err(|err| format!("{}: {err}", doc.display()))?;
-                let content = e.extract(&data).map_err(|x| x.0)?;
-                let name = doc
-                    .file_stem()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "document".into());
-                let dir = dir.join(crate::time::now_ms().to_string());
-                std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
-                let out = dir.join(name);
-                std::fs::write(&out, content).map_err(|err| format!("{}: {err}", out.display()))?;
-                Ok(out)
+                // what the file is, from its content (the background check may still be running)
+                let signed = e.is_signed_cms(&data) || e.card_original(&data).is_some();
+                if !signed {
+                    return Ok(doc);
+                }
+                let (name, content) = match taken_out(e, &doc, &data) {
+                    Ok(x) => x,
+                    // detached: the document is the original chosen beside it
+                    Err(_) if e.is_signed_cms(&data) => {
+                        return original.ok_or_else(|| tr("Choose the signed document.").into());
+                    }
+                    Err(err) => return Err(err),
+                };
+                write_for_viewing(&dir, &viewable_name(&name, &content), &content)
             })();
-            Msg::ToView(r)
+            Msg::ToView(id, r)
         });
     }
 
@@ -1385,34 +1380,14 @@ impl App {
     pub fn extract(&mut self, ctx: &egui::Context) {
         let Some(file) = self.cms.clone() else { return };
         self.background(ctx, move |e| {
-            let (name, r) = match std::fs::read(&file) {
-                Err(err) => (None, Err(format!("{}: {err}", file.display()))),
-                Ok(d) => match e.card_original(&d) {
-                    Some((name, data)) => (Some(name), Ok(data)),
-                    None => (None, e.extract(&d).map_err(|x| x.0)),
-                },
-            };
-            Msg::Extracted(file, name, r)
+            let r = std::fs::read(&file)
+                .map_err(|err| format!("{}: {err}", file.display()))
+                .and_then(|d| taken_out(e, &file, &d));
+            Msg::Extracted(file, r)
         });
     }
 
-    fn save_extracted(&mut self, file: &Path, name: Option<String>, data: Vec<u8>) {
-        let n = file
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        // a card's document keeps its own name (only the name, never a path inside the card)
-        let card_name = name
-            .as_deref()
-            .and_then(|n| n.rsplit(['/', '\\']).next())
-            .filter(|n| !n.is_empty() && *n != "." && *n != "..");
-        let base = if let Some(c) = card_name {
-            c.to_string()
-        } else if n.to_lowercase().ends_with(".cms") {
-            n[..n.len() - 4].to_string()
-        } else {
-            format!("{n}.original")
-        };
+    fn save_extracted(&mut self, file: &Path, base: String, data: Vec<u8>) {
         let Some(out) = self.dialogs.save(&file.with_file_name(base)) else {
             return;
         };
@@ -1565,14 +1540,17 @@ impl App {
                 }
                 self.result = Some(r);
             }
-            Msg::Extracted(file, name, r) => match r {
-                Ok(d) => self.save_extracted(&file, name, d),
+            Msg::Extracted(file, r) => match r {
+                Ok((name, d)) => self.save_extracted(&file, name, d),
                 Err(e) => self.message = Some((e, true)),
             },
-            Msg::ToView(r) => match r {
-                Ok(f) => self.dialogs.view(&f),
-                Err(e) => self.message = Some((e, true)),
-            },
+            // another document has been chosen since: don't show the old one
+            Msg::ToView(id, _) if id != self.doc_request => {}
+            Msg::ToView(_, r) => {
+                if let Err(e) = r.and_then(|f| self.dialogs.view(&f)) {
+                    self.message = Some((trf("Could not open the document: {}", &[&e]), true));
+                }
+            }
         }
     }
 }
@@ -1741,15 +1719,99 @@ fn file_title(ui: &mut egui::Ui, f: &Path) {
     ui.label(RichText::new(name).size(16.0).strong());
 }
 
+/// The name for the document taken out of signed `file`: a card's document keeps its own name
+/// (only the name, never a path inside the card), "x.pdf.cms" gives "x.pdf", anything else
+/// "<name>.original".
+fn original_name(file: &Path, card_name: Option<&str>) -> String {
+    let n = file
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let card_name = card_name
+        .and_then(|n| n.rsplit(['/', '\\']).next())
+        .filter(|n| !n.is_empty() && *n != "." && *n != "..");
+    if let Some(c) = card_name {
+        c.to_string()
+    } else if n.to_lowercase().ends_with(".cms") {
+        n[..n.len() - 4].to_string()
+    } else {
+        format!("{n}.original")
+    }
+}
+
+/// The document inside a signed file (a card's original, or a .cms's content), with its name.
+fn taken_out(e: &Engine, file: &Path, data: &[u8]) -> Result<(String, Vec<u8>), String> {
+    match e.card_original(data) {
+        Some((name, d)) => Ok((original_name(file, Some(&name)), d)),
+        None => Ok((original_name(file, None), e.extract(data).map_err(|x| x.0)?)),
+    }
+}
+
+/// `name` with an extension a viewer understands, guessed from the content when it has none
+/// that helps ("contract" from contract.cms holding a PDF gives "contract.pdf").
+fn viewable_name(name: &str, data: &[u8]) -> String {
+    let ext = Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase());
+    if ext.is_some_and(|e| e != "original") {
+        return name.to_string();
+    }
+    let guess = if data.starts_with(b"%PDF") {
+        "pdf"
+    } else if data.starts_with(b"\x89PNG") {
+        "png"
+    } else if data.starts_with(b"\xff\xd8\xff") {
+        "jpg"
+    } else if data.starts_with(b"PK\x03\x04") {
+        "zip"
+    } else if std::str::from_utf8(data).is_ok() {
+        "txt"
+    } else {
+        return name.to_string();
+    };
+    format!("{name}.{guess}")
+}
+
+/// Writes `data` as `name` in a fresh folder under `dir`, readable only by this user; copies
+/// made for earlier viewing are removed first.
+fn write_for_viewing(dir: &Path, name: &str, data: &[u8]) -> Result<PathBuf, String> {
+    let fail = |p: &Path, err: std::io::Error| format!("{}: {err}", p.display());
+    // a viewer may still hold an old copy open (Windows): then it stays until next time
+    let _ = std::fs::remove_dir_all(dir);
+    let sub = dir.join(time::now_ms().to_string());
+    std::fs::create_dir_all(&sub).map_err(|err| fail(&sub, err))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for d in [dir, sub.as_path()] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))
+                .map_err(|err| fail(d, err))?;
+        }
+    }
+    let out = sub.join(name);
+    std::fs::write(&out, data).map_err(|err| fail(&out, err))?;
+    Ok(out)
+}
+
 /// Opens `f` with the program the system uses for its type.
-fn open_with_system(f: &Path) {
+fn open_with_system(f: &Path) -> std::io::Result<()> {
+    // the shell's own file handler: no command line parsing of the path (explorer splits
+    // at commas)
     #[cfg(windows)]
-    let r = std::process::Command::new("explorer").arg(f).spawn();
+    let child = std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(f)
+        .spawn()?;
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg(f).spawn();
+    let child = std::process::Command::new("open").arg(f).spawn()?;
     #[cfg(not(any(windows, target_os = "macos")))]
-    let r = std::process::Command::new("xdg-open").arg(f).spawn();
-    let _ = r;
+    let child = std::process::Command::new("xdg-open").arg(f).spawn()?;
+    // reap it when it ends
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Opens the folder with `f` in the system's file manager.
@@ -2030,4 +2092,41 @@ fn signed_at(s: &SignerReport) -> String {
             &state,
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_for_taken_out_documents() {
+        let f = Path::new("/x/contract.pdf.cms");
+        assert_eq!(original_name(f, None), "contract.pdf");
+        assert_eq!(original_name(Path::new("/x/a.p7s"), None), "a.p7s.original");
+        assert_eq!(original_name(f, Some("../../etc/passwd")), "passwd");
+        assert_eq!(original_name(f, Some("dir\\note.txt")), "note.txt");
+        assert_eq!(viewable_name("contract.pdf", b"%PDF-1.7"), "contract.pdf");
+        assert_eq!(viewable_name("contract", b"%PDF-1.7"), "contract.pdf");
+        assert_eq!(
+            viewable_name("a.p7s.original", "текст".as_bytes()),
+            "a.p7s.original.txt"
+        );
+        assert_eq!(viewable_name("blob", &[0xff, 0x00, 0xfe]), "blob");
+    }
+
+    #[test]
+    fn viewing_copies_are_private_and_replaced() {
+        let dir = std::env::temp_dir().join(format!("kzsigner-view-test-{}", std::process::id()));
+        let a = write_for_viewing(&dir, "a.txt", b"one").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let b = write_for_viewing(&dir, "b.txt", b"two").unwrap();
+        assert!(!a.exists() && std::fs::read(&b).unwrap() == b"two");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
