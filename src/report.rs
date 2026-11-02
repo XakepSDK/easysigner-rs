@@ -26,7 +26,11 @@ pub struct SignerReport {
     pub chain_ok: bool,
     /// Certificate path, signer first, as common names.
     pub chain: Vec<String>,
+    /// Whether the signer's certificate was valid at the reference time: the trusted timestamp's
+    /// time, or the moment of checking when there is none (Order 500/НҚ p.13-14).
     pub cert_valid_at_signing: Option<bool>,
+    /// That reference time (ms), and whether it came from a trusted timestamp.
+    pub checked_at: Option<i64>,
     /// None when not checked.
     pub ocsp_status: Option<String>,
     /// The OCSP answer when checked: "good", "revoked", "unknown", or "" when none came (no
@@ -41,6 +45,13 @@ pub struct SignerReport {
 }
 
 impl SignerReport {
+    /// The time a valid timestamp from a trusted TSA proves; None when there is none.
+    pub fn trusted_time(&self) -> Option<i64> {
+        (self.timestamp_ok == Some(true) && self.timestamp_trusted == Some(true))
+            .then_some(self.timestamp_time)
+            .flatten()
+    }
+
     pub fn get(&self, k: &str) -> Option<&str> {
         crate::cert::get(&self.subject, k)
     }

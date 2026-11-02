@@ -468,7 +468,7 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
         }
         let v = view(cms, trust)?;
         let at = rep.signers[0]
-            .timestamp_time
+            .trusted_time()
             .or(rep.signers[0].signing_time)
             .unwrap_or(0);
         sigs.push((at, name.clone(), cms.clone(), v));
@@ -1233,7 +1233,7 @@ pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> Verify
             match embedded_ocsp(&sd) {
                 Some(raw) if ocsp_url.is_none() => {
                     let c = sd.signers.first().and_then(|si| sd.signer_cert(si));
-                    let at = s.timestamp_time.unwrap_or_else(time::now_ms);
+                    let at = s.trusted_time().unwrap_or_else(time::now_ms);
                     let issuer = c.as_ref().and_then(|c| trust.check(c, at).issuer);
                     if let (Some(c), Some(i)) = (c, issuer) {
                         match ocsp::read_embedded(&raw, &c, &i, trust) {

@@ -137,7 +137,7 @@ pub fn verify_with(
     }
     // by time: trusted timestamp if any, else the signer's clock; unknown times last
     rep.signers
-        .sort_by_key(|s| match s.timestamp_time.or(s.signing_time) {
+        .sort_by_key(|s| match s.trusted_time().or(s.signing_time) {
             Some(t) => (0, t),
             None => (1, 0),
         });
@@ -183,28 +183,16 @@ fn check_one(
     tsp::check(&mut sr, si, trust);
     // only a valid timestamp from a trusted TSA may move the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine
-    let trusted_time = sr.timestamp_ok == Some(true) && sr.timestamp_trusted == Some(true);
-    // Order 500/НҚ p.13-14: with a valid timestamp the certificates are checked at its time,
-    // without one at the moment of checking (the signing time the signer's computer wrote in
-    // is only a claim)
-    let at = if trusted_time {
-        sr.timestamp_time
-    } else {
-        None
-    }
-    .unwrap_or_else(time::now_ms);
+    // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
+    // self-made "timestamp" could make an expired or revoked certificate look fine.
+    // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
+    // the moment of checking (the signing time the signer's computer wrote in is only a claim)
+    let (at, trusted_time) = reference_time(&sr, time::now_ms());
     let valid_at = c.valid_on(at);
     sr.cert_valid_at_signing = Some(valid_at);
-    if !valid_at && trusted_time {
-        sr.warnings.push(trf(
-            "The certificate was not valid at the signing time ({}).",
-            &[&time::fmt(Some(at))],
-        ));
-    } else if !valid_at {
-        sr.warnings.push(trf(
-            "The certificate is not valid now ({}), and no trusted timestamp shows that it was valid when the document was signed.",
-            &[&time::fmt(Some(at))],
-        ));
+    sr.checked_at = Some(at);
+    if !valid_at {
+        sr.warnings.push(validity_warning(trusted_time, at));
     }
     if !trusted_time && sr.signing_time.is_some() {
         sr.warnings.push(
@@ -288,5 +276,72 @@ fn check_signature(
             )
         }
         Err(e) => sr.signature_error = Some(trf("Signature check failed: {}", &[&e])),
+    }
+}
+
+/// The time to check certificates at, and whether a trusted timestamp gave it.
+fn reference_time(sr: &SignerReport, now: i64) -> (i64, bool) {
+    match sr.trusted_time() {
+        Some(t) => (t, true),
+        None => (now, false),
+    }
+}
+
+fn validity_warning(trusted_time: bool, at: i64) -> String {
+    if trusted_time {
+        trf(
+            "The certificate was not valid at the signing time ({}).",
+            &[&time::fmt(Some(at))],
+        )
+    } else {
+        trf(
+            "The certificate is not valid now ({}), and no trusted timestamp shows that it was valid when the document was signed.",
+            &[&time::fmt(Some(at))],
+        )
+    }
+}
+
+#[cfg(test)]
+mod reference_time_tests {
+    use super::*;
+
+    fn report(ok: Option<bool>, trusted: Option<bool>, ts: Option<i64>) -> SignerReport {
+        SignerReport {
+            timestamp_ok: ok,
+            timestamp_trusted: trusted,
+            timestamp_time: ts,
+            // the signer's own clock never counts
+            signing_time: Some(1_000),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_a_trusted_timestamp_sets_the_time() {
+        let now = 9_000;
+        assert_eq!(
+            reference_time(&report(Some(true), Some(true), Some(5_000)), now),
+            (5_000, true)
+        );
+        assert_eq!(
+            reference_time(&report(Some(true), Some(false), Some(5_000)), now),
+            (now, false)
+        );
+        assert_eq!(
+            reference_time(&report(Some(false), Some(true), Some(5_000)), now),
+            (now, false)
+        );
+        assert_eq!(reference_time(&report(None, None, None), now), (now, false));
+        // trusted but no time read: the moment of checking, and said so
+        assert_eq!(
+            reference_time(&report(Some(true), Some(true), None), now),
+            (now, false)
+        );
+    }
+
+    #[test]
+    fn the_warning_names_the_right_time() {
+        assert!(validity_warning(true, 0).contains("signing time"));
+        assert!(validity_warning(false, 0).contains("no trusted timestamp"));
     }
 }

@@ -233,7 +233,9 @@ fn signer(x: &SignerReport) -> J {
         ("chainOk", J::Bool(x.chain_ok)),
         ("chainStatus", s(&x.chain_status)),
         ("chain", strs(&x.chain)),
+        // at the trusted timestamp's time, or at checkedAt (the moment of checking) without one
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
+        ("checkedAt", t(x.checked_at)),
         ("ocspStatus", s(&x.ocsp_status)),
         ("warnings", strs(&x.warnings)),
         ("kind", s(&x.kind)),
