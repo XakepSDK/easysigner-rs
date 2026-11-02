@@ -29,13 +29,16 @@ pub struct SignerReport {
     /// Whether the signer's certificate was valid at the reference time: the trusted timestamp's
     /// time, or the moment of checking when there is none (Order 500/НҚ p.13-14).
     pub cert_valid_at_signing: Option<bool>,
-    /// That reference time (ms), and whether it came from a trusted timestamp.
+    /// That reference time (ms).
     pub checked_at: Option<i64>,
     /// None when not checked.
     pub ocsp_status: Option<String>,
     /// The OCSP answer when checked: "good", "revoked", "unknown", or "" when none came (no
     /// network, a broken or untrusted response).
     pub ocsp_answer: Option<&'static str>,
+    /// Where the revocation answer came from: "ocsp", "crl" (OCSP gave none and a current
+    /// revocation list decided), or None when there is no answer.
+    pub revocation_source: Option<&'static str>,
     pub warnings: Vec<String>,
     pub cert_der: Option<Vec<u8>>,
     /// What kind of signature this is, when not a plain .cms signer (e.g. a PDF signature).

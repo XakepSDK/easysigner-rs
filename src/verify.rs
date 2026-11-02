@@ -207,15 +207,16 @@ fn check_one(
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
         let (mut good, mut status, mut answer) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);
+        let mut source = (!answer.is_empty()).then_some("ocsp");
         if answer.is_empty() {
             // no OCSP answer: a current revocation list from the CA counts too (p.18)
             let (g, s, a) = crate::crl::check(&c, chain.issuer.as_ref());
+            status = trf("{} (OCSP: {})", &[&s, &status]);
             if !a.is_empty() {
-                (good, status, answer) = (g, s, a);
-            } else {
-                status = format!("{status}; {s}");
+                (good, answer, source) = (g, a, Some("crl"));
             }
         }
+        sr.revocation_source = source;
         ocsp_good = good;
         sr.ocsp_status = Some(status);
         sr.ocsp_answer = Some(answer);

@@ -15,52 +15,21 @@ const MAX_ANSWER: u64 = 4 << 20;
 
 /// POSTs `body`; `what` names the server in error messages.
 pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Vec<u8>> {
-    let fail = |e: &dyn std::fmt::Display| {
-        Error::new(trf(
-            "Could not reach the {} at {}: {}",
-            &[&tr_what(what), &url, e],
-        ))
-    };
-    if url.starts_with("https://") {
-        return Err(fail(
-            &"https is not supported (NCA's timestamp and OCSP servers use http)",
-        ));
-    }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_global(Some(Duration::from_secs(120)))
-        .http_status_as_error(false)
-        // what NCALayer sends: its Kalkan modules set no User-Agent, so Java's default for the
-        // JRE bundled with it goes out
-        .user_agent(NCALAYER_USER_AGENT)
-        .build()
-        .into();
-    let mut resp = agent
-        .post(url)
-        .header("Content-Type", content_type)
-        // Java's HttpURLConnection default, as NCALayer sends it
-        .header(
-            "Accept",
-            "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2",
-        )
-        .send(body)
-        .map_err(|e| fail(&e))?;
-    let code = resp.status().as_u16();
-    if code != 200 {
-        return Err(Error::new(trf(
-            "The {} answered HTTP {} ({})",
-            &[&tr_what(what), &code, &url],
-        )));
-    }
-    resp.body_mut()
-        .with_config()
-        .limit(MAX_ANSWER)
-        .read_to_vec()
-        .map_err(|e| fail(&e))
+    request(url, what, Some((content_type, body)), MAX_ANSWER, 120)
 }
 
 /// GETs `url` (a certificate revocation list); answers up to `limit` bytes.
 pub fn get(url: &str, limit: u64, what: &str) -> Result<Vec<u8>> {
+    request(url, what, None, limit, 300)
+}
+
+fn request(
+    url: &str,
+    what: &str,
+    post: Option<(&str, &[u8])>,
+    limit: u64,
+    seconds: u64,
+) -> Result<Vec<u8>> {
     let fail = |e: &dyn std::fmt::Display| {
         Error::new(trf(
             "Could not reach the {} at {}: {}",
@@ -68,16 +37,32 @@ pub fn get(url: &str, limit: u64, what: &str) -> Result<Vec<u8>> {
         ))
     };
     if !url.starts_with("http://") {
-        return Err(fail(&"only http:// addresses are supported"));
+        return Err(fail(
+            &"only http:// is supported (NCA's timestamp, OCSP and CRL servers use http)",
+        ));
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_global(Some(Duration::from_secs(300)))
+        .timeout_global(Some(Duration::from_secs(seconds)))
         .http_status_as_error(false)
+        // what NCALayer sends: its Kalkan modules set no User-Agent, so Java's default for the
+        // JRE bundled with it goes out
         .user_agent(NCALAYER_USER_AGENT)
         .build()
         .into();
-    let mut resp = agent.get(url).call().map_err(|e| fail(&e))?;
+    let resp = match post {
+        Some((content_type, body)) => agent
+            .post(url)
+            .header("Content-Type", content_type)
+            // Java's HttpURLConnection default, as NCALayer sends it
+            .header(
+                "Accept",
+                "text/html, image/gif, image/jpeg, *; q=.2, */*; q=.2",
+            )
+            .send(body),
+        None => agent.get(url).call(),
+    };
+    let mut resp = resp.map_err(|e| fail(&e))?;
     let code = resp.status().as_u16();
     if code != 200 {
         return Err(Error::new(trf(

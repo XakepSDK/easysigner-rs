@@ -237,6 +237,13 @@ fn signer(x: &SignerReport) -> J {
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
         ("checkedAt", t(x.checked_at)),
         ("ocspStatus", s(&x.ocsp_status)),
+        // "ocsp", "crl", or null when there is no revocation answer
+        (
+            "revocationSource",
+            x.revocation_source
+                .map(|v| J::Str(v.into()))
+                .unwrap_or(J::Null),
+        ),
         ("warnings", strs(&x.warnings)),
         ("kind", s(&x.kind)),
         ("notes", strs(&x.notes)),
