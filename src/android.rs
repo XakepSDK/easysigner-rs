@@ -21,15 +21,23 @@ use crate::i18n::{self, trf};
 
 pub use winit::platform::android::activity::AndroidApp;
 
+/// The activity (a global reference owned by android-activity, valid while the app runs).
+/// ndk_context only has the Application, which is not where `call` is.
+static ACTIVITY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// One request to the Java side; its answer, None for null or when the call failed.
 fn java(request: &str) -> Option<String> {
     let ctx = ndk_context::android_context();
+    let activity = ACTIVITY.load(std::sync::atomic::Ordering::Acquire);
+    if activity == 0 {
+        return None;
+    }
     // Safety: android-activity filled in the context with the process's VM and the activity,
     // a global reference that stays valid while the app runs
     let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
     let r = vm.attach_current_thread(|env| -> jni::errors::Result<Option<String>> {
         // a global reference owned by android-activity; JObject never deletes what it wraps
-        let activity = unsafe { JObject::from_raw(env, ctx.context().cast()) };
+        let activity = unsafe { JObject::from_raw(env, activity as jni::sys::jobject) };
         let arg = env.new_string(request)?;
         let out = env
             .call_method(
@@ -166,6 +174,10 @@ impl Dialogs for AndroidDialogs {
 
 /// Starts the app; called from `android_main` in the `kzsigner-android` library.
 pub fn main(app: AndroidApp) {
+    ACTIVITY.store(
+        app.activity_as_ptr() as usize,
+        std::sync::atomic::Ordering::Release,
+    );
     let options = eframe::NativeOptions {
         android_app: Some(app),
         ..Default::default()
