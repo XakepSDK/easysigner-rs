@@ -200,17 +200,17 @@ impl Engine {
 
     /// [`Engine::extend`] after signing: in a .cms, only the new signature (`r.signature`);
     /// in a PDF, every signature (they share its validation data). The result keeps `r`'s
-    /// warnings first.
+    /// warnings first. When that fails, the signature made stands as it is, with a warning.
     pub fn extend_new(
         &self,
-        r: SignResult,
+        mut r: SignResult,
         original: Option<&[u8]>,
         level: ltv::Level,
         tsa_url: &str,
         ocsp_url: &str,
-    ) -> Result<SignResult> {
-        let mut x = if pdf::is_pdf(&r.cms) {
-            self.extend(&r.cms, original, level, tsa_url, ocsp_url)?
+    ) -> SignResult {
+        let x = if pdf::is_pdf(&r.cms) {
+            self.extend(&r.cms, original, level, tsa_url, ocsp_url)
         } else {
             sign::extend(
                 &r.cms,
@@ -220,18 +220,28 @@ impl Engine {
                 ocsp_url,
                 &self.trust,
                 Some(&r.signature),
-            )?
+            )
+        };
+        let mut x = match x {
+            Ok(x) => x,
+            Err(e) => {
+                r.warnings.push(i18n::trf(
+                    "The signature was made, but not as a long-term one: {}",
+                    &[&e],
+                ));
+                return r;
+            }
         };
         let mut warnings = r.warnings;
         warnings.append(&mut x.warnings);
-        Ok(SignResult {
+        SignResult {
             warnings,
             timestamped: r.timestamped,
             cosigned: r.cosigned,
             signer_count: r.signer_count,
             signature: r.signature,
             cms: x.cms,
-        })
+        }
     }
 
     /// The original document inside a document card: (file name, bytes). None if `data` is

@@ -138,7 +138,7 @@ impl Crl {
         Some(tr(why).into())
     }
 
-    fn revocation_of(&self, c: &Cert) -> Option<i64> {
+    pub fn revocation_of(&self, c: &Cert) -> Option<i64> {
         self.revoked
             .iter()
             .find(|(s, _)| *s == c.serial)

@@ -85,7 +85,7 @@ pub fn sign(
         ("Filter", "Adobe.PPKLite".into()),
         ("SubFilter", "ETSI.CAdES.detached".into()),
         ("M", Object::string_literal(pdf_date(time::now_ms()))),
-        ("Name", text_string(&signer_name(&key.cert))),
+        ("Name", text_string(&cert::holder_name(&key.cert))),
     ]);
     let data = add_field(input, doc, "Signature", sig, room, |signed| {
         let mut sd = cms::sign_once_with(
@@ -319,7 +319,7 @@ pub fn extend(
             if tsas.is_empty() {
                 r.warnings.push(trf(
                     "The signature of {} has no timestamp: a long-term signature needs one, so it stays checkable only while the certificate is valid.",
-                    &[&signer_name(&c)],
+                    &[&cert::holder_name(&c)],
                 ));
             }
             targets.push((c, true));
@@ -329,8 +329,9 @@ pub fn extend(
     if r.signer_count == 0 {
         return Err(Error::new(tr("This PDF has no signatures.")));
     }
-    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms())?;
+    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms());
     r.warnings.extend(g.warnings);
+    r.warnings.extend(g.refused);
     let mut out = add_dss(input, &g.kept)?;
     if archive {
         let doc = open(&out)?;
@@ -499,12 +500,6 @@ fn docmdp_level(doc: &Document) -> Option<i64> {
         }
     }
     Some(2)
-}
-
-fn signer_name(c: &cert::Cert) -> String {
-    let mut sr = SignerReport::default();
-    cert::describe(&mut sr, c);
-    sr.name()
 }
 
 /// A PDF text string: as is when ASCII, else UTF-16BE with a byte order mark.

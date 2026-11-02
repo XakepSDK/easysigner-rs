@@ -360,19 +360,15 @@ fn sign(o: Opts) -> R<u8> {
     };
     let r = match (o.level, &tsa) {
         (Some(level), Some(tsa)) => {
-            // a detached .cms's document is the input itself, or the original it co-signs
-            let doc = if o.detached {
-                Some(&input)
-            } else {
-                original.as_ref()
-            };
+            // a detached .cms's document: the original it co-signs, or the input itself
+            let doc = original.as_ref().or(o.detached.then_some(&input));
             e.extend_new(
                 r,
                 doc.map(Vec::as_slice),
                 level,
                 tsa,
                 o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
-            )?
+            )
         }
         _ => r,
     };

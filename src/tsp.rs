@@ -101,11 +101,7 @@ impl Request {
 
 /// The hash and NCA TSA policy NCALayer uses for each key type.
 fn hash_and_policy(scheme: Option<Scheme>) -> (&'static str, &'static str) {
-    match scheme {
-        None => (gost::H_SHA256, "1.2.398.3.3.2.6.2"),
-        Some(s) if s.key_oid == gost::KEY_GOST2004 => (gost::H_GOST34311, "1.2.398.3.3.2.6.1"),
-        Some(_) => (gost::H_GOST2015_512, "1.2.398.3.3.2.6.4"),
-    }
+    hash_and_policy_for(scheme.map_or("", |s| s.key_oid))
 }
 
 /// The hash and NCA TSA policy for timestamps over the work of a key of type `key_alg` (a

@@ -242,11 +242,7 @@ impl SignedData {
             }
         }
         out.digest_algs = algs;
-        for c in &other.certs {
-            if !out.certs.contains(c) {
-                out.certs.push(c.clone());
-            }
-        }
+        out.add_certs(&other.certs);
         out
     }
 }

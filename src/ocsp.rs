@@ -42,6 +42,8 @@ pub struct Answer {
     /// "good", "revoked" or "unknown" (empty on an error).
     pub cert_status: &'static str,
     pub this_update: Option<i64>,
+    /// When the certificate was revoked, for a "revoked" answer.
+    pub revoked_at: Option<i64>,
     /// The certificate that signed the response.
     pub responder: Option<Cert>,
     /// The OCSPResponse, as received.
@@ -57,6 +59,7 @@ impl Answer {
             status,
             cert_status: "",
             this_update: None,
+            revoked_at: None,
             responder: None,
             raw: raw.to_vec(),
             basic: vec![],
@@ -129,20 +132,13 @@ pub fn fetch(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<A
     ]);
     let req = der::seq(&[&tbs]);
     let body = http::post(url, "application/ocsp-request", &req, "OCSP server")?;
-    evaluate(&body, c, issuer, Some(&nonce), trust, time::now_ms())
+    evaluate(&body, c, issuer, Some(&nonce), trust)
 }
 
 /// Checks an OCSP response kept inside a signature (no nonce, and its age is judged by whoever
-/// reads it). A delegated responder's certificate is checked at `at`, the time the signature
-/// is checked at.
-pub fn read_embedded(
-    raw: &[u8],
-    c: &Cert,
-    issuer: &Cert,
-    trust: &TrustStore,
-    at: i64,
-) -> Result<Answer> {
-    evaluate(raw, c, issuer, None, trust, at)
+/// reads it). A delegated responder's certificate is checked at the time the answer was made.
+pub fn read_embedded(raw: &[u8], c: &Cert, issuer: &Cert, trust: &TrustStore) -> Result<Answer> {
+    evaluate(raw, c, issuer, None, trust)
 }
 
 /// Element `n` of a DER sequence, or an error for a short one.
@@ -160,7 +156,6 @@ fn evaluate(
     issuer: &Cert,
     nonce: Option<&[u8]>,
     trust: &TrustStore,
-    responder_at: i64,
 ) -> Result<Answer> {
     let resp = der::parse(body)?.items(der::SEQUENCE)?;
     let status = resp
@@ -196,6 +191,16 @@ fn evaluate(
             .collect(),
         _ => vec![],
     };
+    let rd = tbs_t.items(der::SEQUENCE)?;
+    let mut i = 0;
+    if at(&rd, 0)?.tag == der::ctx(0) {
+        i = 1; // version
+    }
+    // a fresh answer's responder must be valid now; a kept one's when it answered (producedAt)
+    let responder_at = match nonce {
+        Some(_) => time::now_ms(),
+        None => at(&rd, i + 1)?.time()?,
+    };
     let responder = match check_responder(
         tbs_t.raw,
         &sig_alg,
@@ -209,11 +214,6 @@ fn evaluate(
         Err(problem) => return Ok(Answer::error(trf("ERROR: {}", &[&problem]), body)),
     };
 
-    let rd = tbs_t.items(der::SEQUENCE)?;
-    let mut i = 0;
-    if at(&rd, 0)?.tag == der::ctx(0) {
-        i = 1; // version
-    }
     let responses = at(&rd, i + 2)?.items(der::SEQUENCE)?;
     let mut nonce_ok = false;
     if let Some(nonce) = nonce
@@ -275,6 +275,7 @@ fn evaluate(
         } else {
             this_update
         };
+        let mut revoked_at = None;
         let (good, cert_status, status) = match at(&k, 1)?.tag {
             0x80 => (
                 true,
@@ -287,6 +288,7 @@ fn evaluate(
                     .first()
                     .map(|t| t.time())
                     .transpose()?;
+                revoked_at = when;
                 (false, "revoked", trf("REVOKED on {}", &[&time::fmt(when)]))
             }
             _ => (
@@ -300,6 +302,7 @@ fn evaluate(
             status,
             cert_status,
             this_update,
+            revoked_at,
             responder: Some(responder),
             raw: body.to_vec(),
             basic: basic_der,
@@ -377,15 +380,14 @@ mod tests {
         let empty = der::seq(&[]);
         let short = der::seq(&[&der::seq(&[]), &der::seq(&[])]);
         for basic in [&empty, &short] {
-            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust, 0).is_err());
+            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust).is_err());
         }
         assert!(
             read_embedded(
                 &der::seq(&[&der::tlv(der::ENUMERATED, &[0])]),
                 &ca,
                 &ca,
-                &trust,
-                0
+                &trust
             )
             .is_err()
         );

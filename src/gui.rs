@@ -914,7 +914,7 @@ impl App {
                         tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
                     );
                     ui.add_enabled(
-                        self.timestamp,
+                        self.timestamp && self.ocsp,
                         egui::Checkbox::new(
                             &mut self.long_term,
                             tr("Keep it checkable for years: store NCA's revocation answers in the signature and add an archive timestamp (long-term signature)"),
@@ -1312,7 +1312,9 @@ impl App {
         };
         let det = self.detached && !self.doc_is_cms;
         let tsa = self.timestamp.then(|| DEFAULT_TSA_URL.to_string());
-        let long_term = self.timestamp && self.long_term && self.sign_as != SignAs::Card;
+        // the long-term data comes from NCA's OCSP server: not when online checks are off
+        let long_term =
+            self.timestamp && self.ocsp && self.long_term && self.sign_as != SignAs::Card;
         // online anyway for the timestamp: check that the key is not revoked too (p.4),
         // unless online checks are turned off
         let ocsp = (self.timestamp && self.ocsp).then(|| DEFAULT_OCSP_URL.to_string());
@@ -1371,14 +1373,13 @@ impl App {
                 }
                 // the document a detached .cms signs
                 let doc = if det { Some(&input) } else { o.as_ref() };
-                e.extend_new(
+                Ok(e.extend_new(
                     r,
                     doc.map(Vec::as_slice),
                     crate::ltv::Level::Lta,
                     DEFAULT_TSA_URL,
                     DEFAULT_OCSP_URL,
-                )
-                .map_err(|x| x.0)
+                ))
             })();
             Msg::Signed(doc, sign_as, r)
         });

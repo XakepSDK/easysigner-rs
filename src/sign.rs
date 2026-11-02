@@ -188,7 +188,7 @@ pub fn extend(
             );
             continue;
         };
-        let name = signer_name(&c);
+        let name = cert::holder_name(&c);
         let tsas = ltv::tsa_certs(si);
         if tsas.is_empty() {
             r.warnings.push(trf(
@@ -197,22 +197,26 @@ pub fn extend(
             ));
             continue;
         }
-        let mut targets = vec![(c, true)];
+        let archived = si
+            .unsigned()
+            .iter()
+            .any(|(o, _)| o == ltv::ATTR_ARCHIVE_TIMESTAMP_V3);
+        // renewing an archived signature needs data only for its timestamps' TSAs: what shows
+        // the signer's certificate good at the signing time is kept already, and a later
+        // revocation must not stop the renewal
+        let mut targets = if archived { vec![] } else { vec![(c, true)] };
         targets.extend(tsas.into_iter().map(|t| (t, false)));
-        match ltv::gather(&targets, ocsp_url, trust, now) {
-            Ok(g) => {
-                r.warnings.extend(g.warnings);
-                let archived = si
-                    .unsigned()
-                    .iter()
-                    .any(|(o, _)| o == ltv::ATTR_ARCHIVE_TIMESTAMP_V3);
-                todo.push((idx, archived, g.kept));
-            }
-            Err(e) => r.warnings.push(trf(
+        let g = ltv::gather(&targets, ocsp_url, trust, now);
+        r.warnings.extend(g.warnings);
+        if !archived && !g.refused.is_empty() {
+            r.warnings.push(trf(
                 "The signature of {} was not extended: {}",
-                &[&name, &e],
-            )),
+                &[&name, &g.refused.join("; ")],
+            ));
+            continue;
         }
+        r.warnings.extend(g.refused);
+        todo.push((idx, archived, g.kept));
     }
     if todo.is_empty() {
         return Err(Error::new(trf(
@@ -240,12 +244,6 @@ pub fn extend(
     }
     r.cms = sd.encode();
     Ok(r)
-}
-
-fn signer_name(c: &Cert) -> String {
-    let mut sr = SignerReport::default();
-    cert::describe(&mut sr, c);
-    sr.name()
 }
 
 /// Refuses to co-sign a detached .cms over a different document than the one its signers

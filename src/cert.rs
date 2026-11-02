@@ -339,6 +339,13 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
 
 // ------------------------------------------------------------------ for people
 
+/// The holder's name for people: CN plus given name.
+pub fn holder_name(c: &Cert) -> String {
+    let mut sr = SignerReport::default();
+    describe(&mut sr, c);
+    sr.name()
+}
+
 /// Fills the certificate part of a report: who, issuer, serial, validity, purposes.
 pub fn describe(sr: &mut SignerReport, c: &Cert) {
     sr.cert_der = Some(c.der.clone());

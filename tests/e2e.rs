@@ -920,6 +920,29 @@ fn long_term() {
         v.contains("VALID - all 1") && v.matches("Archived:").count() == 2,
     );
 
+    // a later revocation does not stop a renewal: the kept answer covers the signing time
+    let v = kz(
+        &t,
+        &[
+            "extend",
+            "doc.txt.cms",
+            "-o",
+            "renewed.cms",
+            "--tsa",
+            &tsa,
+            "--ocsp",
+            &fake_ocsp(true),
+        ],
+    );
+    t.check(
+        "extend: renewing does not ask about the signer again",
+        v.contains("Extended to B-LTA") && !v.contains("Error"),
+    );
+    t.check(
+        "extend: the renewed file verifies",
+        kz(&t, &["verify", "renewed.cms"]).contains("VALID - all 1"),
+    );
+
     // taking out kept data an archive timestamp covers is caught
     let mut sd = cms::SignedData::parse(&std::fs::read(t.path("doc.txt.cms")).unwrap()).unwrap();
     sd.certs.retain(|c| *c != tsa_key.cert.der);
@@ -978,6 +1001,29 @@ fn long_term() {
     );
     let v = kz(&t, &["verify", "det.cms", "--data", "plain.pdf"]);
     t.check("LTA: another document fails", v.contains("NOT VALID"));
+
+    // a revoked signer is not made long-term
+    kz(
+        &t,
+        &[
+            "sign", "-k", &carol, "--tsa", &tsa, "-o", "rev.cms", "doc.txt",
+        ],
+    );
+    let v = kz(
+        &t,
+        &[
+            "extend",
+            "rev.cms",
+            "--tsa",
+            &tsa,
+            "--ocsp",
+            &fake_ocsp(true),
+        ],
+    );
+    t.check(
+        "extend: a revoked signer is refused",
+        v.contains("REVOKED") && v.contains("Error"),
+    );
 
     // without a timestamp there is nothing to make long-term
     kz(&t, &["sign", "-k", &carol, "-o", "bare.cms", "doc.txt"]);

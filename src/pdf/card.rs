@@ -218,7 +218,10 @@ pub fn sign_for_card(
             .into_iter()
             .map(|c| (c, false)),
     );
-    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms())?;
+    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms());
+    if let Some(why) = g.refused.first() {
+        return Err(Error::new(why.clone()));
+    }
     r.warnings.extend(g.warnings);
     let issuer = chain
         .issuer

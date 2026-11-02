@@ -179,16 +179,23 @@ impl Kept {
     ) -> Option<KeptStatus> {
         let mut stale = None;
         for raw in &self.ocsps {
-            let Ok(a) = ocsp::read_embedded(raw, c, issuer, trust, at) else {
+            let Ok(a) = ocsp::read_embedded(raw, c, issuer, trust) else {
                 continue;
             };
             if a.cert_status.is_empty() {
                 continue;
             }
             let fresh = a.this_update.is_some_and(|u| u + 5 * MINUTE >= at);
+            // revoked only after the time the signature is checked at: good then
+            let (answer, status) = match a.revoked_at {
+                Some(when) if a.cert_status == "revoked" && when > at => {
+                    ("good", revoked_later(when))
+                }
+                _ => (a.cert_status, a.status),
+            };
             let s = KeptStatus {
-                answer: a.cert_status,
-                status: a.status,
+                answer,
+                status,
                 source: "ocsp",
                 fresh,
                 this_update: a.this_update,
@@ -210,7 +217,15 @@ impl Kept {
                 .iter()
                 .filter(|l| l.is_delta && l.unusable(c, issuer, at).is_none())
                 .max_by_key(|l| l.this_update);
-            let (_, status, answer) = crl::evaluate(base, delta, false, c, issuer, at);
+            let (_, mut status, mut answer) = crl::evaluate(base, delta, false, c, issuer, at);
+            if answer == "revoked"
+                && let Some(when) = delta
+                    .and_then(|d| d.revocation_of(c))
+                    .or_else(|| base.revocation_of(c))
+                && when > at
+            {
+                (answer, status) = ("good", revoked_later(when));
+            }
             if !answer.is_empty() {
                 return Some(KeptStatus {
                     answer,
@@ -224,6 +239,13 @@ impl Kept {
         }
         stale
     }
+}
+
+fn revoked_later(when: i64) -> String {
+    trf(
+        "GOOD at the signing time (revoked later, on {})",
+        &[&crate::time::fmt(Some(when))],
+    )
 }
 
 /// A revocation answer found in kept validation data.
@@ -247,20 +269,17 @@ pub struct KeptStatus {
 pub struct Gathered {
     pub kept: Kept,
     pub warnings: Vec<String>,
+    /// Certificates found revoked, or unknown to their CA's OCSP server: why, for people.
+    pub refused: Vec<String>,
 }
 
 /// Fetches the validation data for `targets` (signers' certificates and their TSAs'; with
 /// `true` for those whose untrusted path is worth a warning, since a TSA's is reported with
 /// its timestamp):
 /// their CA paths up to the root, an OCSP answer for each target (or else its CA's CRL), and
-/// each CA certificate's CRL from the CA above it. A revoked certificate is an error; data
-/// that cannot be fetched is a warning.
-pub fn gather(
-    targets: &[(Cert, bool)],
-    ocsp_url: &str,
-    trust: &TrustStore,
-    now: i64,
-) -> Result<Gathered> {
+/// each CA certificate's CRL from the CA above it. A revoked or unknown certificate goes in
+/// `refused`; data that cannot be fetched is a warning.
+pub fn gather(targets: &[(Cert, bool)], ocsp_url: &str, trust: &TrustStore, now: i64) -> Gathered {
     let mut g = Gathered::default();
     let mut done: Vec<Cert> = Vec::new();
     // (certificate, an end certificate (asked about by OCSP), warn when untrusted)
@@ -291,10 +310,10 @@ pub fn gather(
         for i in &chain.issuers {
             add(&mut g.kept.certs, &i.der);
         }
-        revocation(&mut g, &c, &issuer, leaf.then_some(ocsp_url), trust, now)?;
+        revocation(&mut g, &c, &issuer, leaf.then_some(ocsp_url), trust, now);
         queue.push_back((issuer, false, false));
     }
-    Ok(g)
+    g
 }
 
 fn revocation(
@@ -304,10 +323,10 @@ fn revocation(
     ocsp_url: Option<&str>,
     trust: &TrustStore,
     now: i64,
-) -> Result<()> {
-    let revoked = |status: &str| {
-        Error::new(trf(
-            "The certificate '{}' is revoked: {}",
+) {
+    let refuse = |g: &mut Gathered, status: &str| {
+        g.refused.push(trf(
+            "The certificate '{}' is not usable: {}",
             &[&c.cn(), &status],
         ))
     };
@@ -319,9 +338,10 @@ fn revocation(
                 if let Some(r) = &a.responder {
                     add(&mut g.kept.certs, &r.der);
                 }
-                return Ok(());
+                return;
             }
-            Ok(a) if a.cert_status == "revoked" => return Err(revoked(&a.status)),
+            // revoked, or unknown to its CA: negative either way (Order 500/НҚ p.19)
+            Ok(a) if !a.cert_status.is_empty() => return refuse(g, &a.status),
             Ok(a) => why.push(a.status),
             Err(e) => why.push(trf("ERROR: could not check OCSP ({})", &[&e])),
         }
@@ -335,9 +355,9 @@ fn revocation(
                     if let Some(d) = &delta {
                         add(&mut g.kept.crls, &d.raw);
                     }
-                    return Ok(());
+                    return;
                 }
-                "revoked" => return Err(revoked(&status)),
+                "revoked" => return refuse(g, &status),
                 _ => why.push(status),
             }
         }
@@ -350,7 +370,6 @@ fn revocation(
         "No revocation data could be kept for '{}': {}",
         &[&c.cn(), &why.join("; ")],
     ));
-    Ok(())
 }
 
 /// An OCSP answer as an item of SignedData's `crls` (RFC 5940 other revocation info).
