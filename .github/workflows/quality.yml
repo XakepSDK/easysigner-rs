@@ -1,0 +1,130 @@
+# Test quality, apart from the build so that it never holds up a build or a release.
+#
+# coverage: on every push to main and pull request touching code, runs all the tests under
+# cargo-llvm-cov and keeps the report (HTML and lcov) as the "coverage" artifact; the
+# summary is in the job's summary page.
+#
+# mutants: cargo-mutants changes the code in small ways (a condition flipped, a function
+# returning a default) and checks that some test fails. A mutant that survives is code no
+# test really checks. A full run is long (over 4000 mutants), so it runs weekly and by hand,
+# split over shards; a pull request runs it only on the lines it changes. Survivors are
+# reported, not failed on, while the existing ones are worked down: see mutants.out in the
+# artifact (missed.txt).
+name: quality
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE*']
+  pull_request:
+    paths-ignore: ['docs/**', '**/*.md', 'LICENSE*']
+  schedule:
+    - cron: '17 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      files:
+        description: 'Only these source files (space-separated, e.g. src/xml/mod.rs); empty: all'
+        required: false
+        default: ''
+concurrency:
+  group: quality-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  coverage:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (pinned) with llvm-tools
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.6.21
+      - name: Linux libraries (file dialogs, the window tests)
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-x11-0 libgl1-mesa-dri libegl1
+      - name: Tests under coverage
+        run: cargo llvm-cov --release --locked --no-report
+      - name: Report
+        run: |
+          cargo llvm-cov report --release --lcov --output-path lcov.info
+          cargo llvm-cov report --release --html --output-dir coverage
+          cargo llvm-cov report --release --summary-only | tee summary.txt
+          {
+            echo '## Coverage'; echo; echo '```'
+            awk 'NR<=2 || /^TOTAL/' summary.txt
+            echo '```'; echo
+            echo 'Lowest line coverage:'; echo; echo '```'
+            awk 'NR>3 && $1!~/^-/ && $1!="TOTAL" {print $10, $1}' summary.txt | sort -n | head -15
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            summary.txt
+            coverage/
+
+  mutants:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ github.event_name == 'pull_request' && fromJSON('[0]') || fromJSON('[0,1,2,3,4,5,6,7]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rust (pinned)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mutants
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+      - name: Linux libraries (file dialogs, the window tests)
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-x11-0 libgl1-mesa-dri libegl1
+      - name: Mutants
+        env:
+          FILES: ${{ github.event.inputs.files }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set +e
+          args="--no-shuffle -j 2 --timeout 600 --output ."
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git diff "$BASE...HEAD" -- src > pr.diff
+            args="$args --in-diff pr.diff"
+          else
+            args="$args --shard ${{ matrix.shard }}/8"
+            for f in $FILES; do args="$args -f $f"; done
+          fi
+          cargo mutants $args
+          r=$?
+          # 0: all caught; 2: some missed; 3: some timed out; 4: the tests fail without mutations
+          {
+            echo "## Mutants (shard ${{ matrix.shard }})"; echo
+            for k in caught missed timeout unviable; do
+              echo "- $k: $(wc -l < mutants.out/$k.txt 2>/dev/null || echo 0)"
+            done
+            echo; echo 'Missed (no test noticed the change):'; echo; echo '```'
+            head -100 mutants.out/missed.txt 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case $r in 0|2|3) exit 0;; *) exit $r;; esac
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: |
+            mutants.out/*.txt
+            mutants.out/outcomes.json
+          if-no-files-found: ignore

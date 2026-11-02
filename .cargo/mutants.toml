@@ -1,0 +1,3 @@
+# cargo-mutants (see .github/workflows/quality.yml). Left out: the drawn icons' geometry, the
+# window's layout code and the Android glue, which tests can only look at, not check.
+exclude_globs = ["src/icons.rs", "src/gui/**", "src/android.rs"]

@@ -287,3 +287,18 @@ Checked by hand (not in `cargo test`, they need other tools): RSA-signed PDFs pa
 `pdfsig` and pyHanko (neither knows KZ GOST); cards made by kzsigner open with ddc's
 `ExtractAttachments` (Go, pdfcpu), and a card ddc builds from kzsigner's signatures verifies,
 co-signs and extracts with kzsigner.
+
+### Coverage and mutation testing
+
+The `quality` workflow (`.github/workflows/quality.yml`) measures how much the tests cover and
+how well they check it, apart from the build:
+
+* **Coverage** (cargo-llvm-cov), on every push and pull request: the "coverage" artifact has an
+  HTML report and `lcov.info`; the job summary lists the least covered files. Locally:
+  `cargo llvm-cov --release --html`.
+* **Mutation testing** (cargo-mutants): small changes are made to the code, one at a time, and
+  some test must fail for each. A full run (about 3500 mutants; the icons' geometry, the
+  window's layout and the Android glue are left out, see `.cargo/mutants.toml`) runs weekly
+  and by hand (Actions > quality > Run workflow, optionally for some files), split over 8
+  shards; a pull request runs only the mutants in lines it changes. Missed mutants are listed
+  in the job summary and the `mutants-N` artifacts. Locally: `cargo mutants -f src/xml/mod.rs`.

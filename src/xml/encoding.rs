@@ -161,12 +161,16 @@ mod tests {
         let (text, ..) = decode(doc).unwrap();
         assert!(text.contains("Ша"));
         assert!(decode(b"<?xml version=\"1.0\" encoding=\"koi8-r\"?><a/>").is_err());
-        assert!(decode(b"\xff\xfe<\x00").is_err());
+        for bom in [&b"\xff\xfe<\x00"[..], b"\xfe\xff\x00<"] {
+            assert!(decode(bom).is_err_and(|e| e.0.contains("UTF-16")));
+        }
         // a character the encoding lacks is written as a reference
         assert_eq!(
             encode("<a>Ұ</a>", enc_of("windows-1251")).unwrap(),
             b"<a>&#x4B0;</a>"
         );
+        // (U+0080 is not windows-1251's 0x80, which is Ђ)
+        assert_eq!(encode("\u{80}", enc_of("windows-1251")).unwrap(), b"&#x80;");
         // invalid UTF-8 is refused
         assert!(decode(b"<a>\xc4</a>").is_err());
     }
