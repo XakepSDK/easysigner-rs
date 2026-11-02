@@ -105,8 +105,20 @@ impl Engine {
         tsa_url: Option<&str>,
         ocsp_url: Option<&str>,
     ) -> Result<SignResult> {
+        self.sign_pdf_with(input, key, tsa_url, ocsp_url, None)
+    }
+
+    /// [`Engine::sign_pdf`], with a visible stamp on a page when `stamp` is given.
+    pub fn sign_pdf_with(
+        &self,
+        input: &[u8],
+        key: &Key,
+        tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
+        stamp: Option<&pdf::stamp::Stamp>,
+    ) -> Result<SignResult> {
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = pdf::sign(input, key, tsa_url, &self.trust)?;
+        let mut r = pdf::sign(input, key, tsa_url, &self.trust, stamp)?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)

@@ -35,7 +35,9 @@ Run 'kzsigner COMMAND --help' for a command's options.
 const HELP_SIGN: &str = "\
 Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
-                     [--level=LT|LTA] [--data=ORIGINAL] [--trust=CA.cer]... FILE
+                     [--level=LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
+                     [--stamp-lang=LANG] [--stamp-logo=IMAGE]] [--data=ORIGINAL]
+                     [--trust=CA.cer]... FILE
 Sign FILE into FILE.cms.
 If FILE is already a .cms, your signature is ADDED to it (co-signing).
       FILE                 Document, or .cms to co-sign.
@@ -46,6 +48,12 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --detached           Do not embed the document in the .cms.
       --pdf                Sign a PDF inside the PDF (PAdES), into FILE-signed.pdf; it
                            still opens in any PDF viewer. A signed PDF gets one more.
+      --stamp              With --pdf: a visible signature, a stamp on a page saying who
+                           signed and when (it is part of what is signed).
+      --stamp-page=N       The stamp's page (default: the last page).
+      --stamp-at=CORNER    br (bottom right, default), bl, tr or tl.
+      --stamp-lang=LANG    ru (default), kk or en.
+      --stamp-logo=IMAGE   A logo on the stamp: JPEG, or PNG (8-bit, not interlaced).
       --card               Make a document card (карточка электронного документа, the
                            ddcard format SIGEX uses), FILE.card.pdf: a PDF anyone can
                            open, with the document's pages, a page per signature, and the
@@ -173,6 +181,8 @@ struct Opts {
     tsa: Option<String>,
     ocsp: Option<String>,
     level: Option<kzsigner::ltv::Level>,
+    stamp: Option<kzsigner::pdf::stamp::Stamp>,
+    stamp_logo: Option<PathBuf>,
 }
 
 /// Parses a command's options; prints help or version and returns None when asked to.
@@ -205,6 +215,37 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             }
             Long("data") if allowed(&["sign", "verify", "extend"]) => {
                 o.data = Some(p.value()?.into())
+            }
+            Long("stamp") if allowed(&["sign"]) => {
+                o.stamp.get_or_insert_with(Default::default);
+            }
+            Long("stamp-page") if allowed(&["sign"]) => {
+                let v = p.value()?.string()?;
+                let n = v.parse::<usize>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                    Fail::Usage(format!("--stamp-page needs a page number, not {v}"), help)
+                })?;
+                o.stamp.get_or_insert_with(Default::default).page = Some(n);
+            }
+            Long("stamp-at") if allowed(&["sign"]) => {
+                let v = p.value()?.string()?;
+                o.stamp.get_or_insert_with(Default::default).corner =
+                    kzsigner::pdf::stamp::Corner::parse(&v).ok_or_else(|| {
+                        Fail::Usage(
+                            format!("unknown --stamp-at {v} (use br, bl, tr or tl)"),
+                            help,
+                        )
+                    })?;
+            }
+            Long("stamp-lang") if allowed(&["sign"]) => {
+                let v = p.value()?.string()?;
+                o.stamp.get_or_insert_with(Default::default).lang =
+                    Some(kzsigner::i18n::Lang::parse(&v).ok_or_else(|| {
+                        Fail::Usage(format!("unknown --stamp-lang {v} (use ru, kk or en)"), help)
+                    })?);
+            }
+            Long("stamp-logo") if allowed(&["sign"]) => {
+                o.stamp.get_or_insert_with(Default::default);
+                o.stamp_logo = Some(p.value()?.into());
             }
             Long("level") if allowed(&["sign", "extend"]) => {
                 let v = p.value()?.string()?;
@@ -315,6 +356,16 @@ fn sign(o: Opts) -> R<u8> {
             )
         })?),
     };
+    if o.stamp.is_some() && !o.pdf {
+        return Err(Fail::Usage(
+            "--stamp and its options need --pdf".into(),
+            HELP_SIGN,
+        ));
+    }
+    let mut stamp = o.stamp.clone();
+    if let (Some(st), Some(logo)) = (&mut stamp, &o.stamp_logo) {
+        st.logo = Some(read(logo)?);
+    }
     if o.level.is_some() && o.card {
         return Err(Fail::Usage(
             "--level is not for --card (a card keeps its revocation answers already)".into(),
@@ -346,7 +397,13 @@ fn sign(o: Opts) -> R<u8> {
             o.qr.then_some(true),
         )?
     } else if o.pdf {
-        e.sign_pdf(&input, &k, tsa.as_deref(), o.ocsp.as_deref())?
+        e.sign_pdf_with(
+            &input,
+            &k,
+            tsa.as_deref(),
+            o.ocsp.as_deref(),
+            stamp.as_ref(),
+        )?
     } else {
         e.sign(
             &input,

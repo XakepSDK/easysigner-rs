@@ -302,6 +302,8 @@ pub struct App {
     /// With the timestamp: a long-term signature (B-LTA), checkable after the certificate
     /// expires.
     pub long_term: bool,
+    /// Signing inside a PDF: a visible stamp on its last page.
+    pub stamp: bool,
     pub sign_as: SignAs,
     pub card_qr: bool,
     pub card_lang: CardLang,
@@ -357,6 +359,7 @@ impl App {
             detached: false,
             timestamp: true,
             long_term: true,
+            stamp: false,
             sign_as: SignAs::Cms,
             card_qr: false,
             card_lang: CardLang::Ru,
@@ -921,6 +924,12 @@ impl App {
                         ),
                     );
                 }
+                if self.sign_as == SignAs::Pdf {
+                    ui.checkbox(
+                        &mut self.stamp,
+                        tr("Show a stamp with your name and the signing time on the last page"),
+                    );
+                }
                 if self.sign_as == SignAs::Cms {
                     ui.add_enabled(
                         !self.doc_is_cms,
@@ -1315,6 +1324,10 @@ impl App {
         // the long-term data comes from NCA's OCSP server: not when online checks are off
         let long_term =
             self.timestamp && self.ocsp && self.long_term && self.sign_as != SignAs::Card;
+        let stamp = self.stamp.then(|| crate::pdf::stamp::Stamp {
+            lang: Some(crate::i18n::lang()),
+            ..Default::default()
+        });
         // online anyway for the timestamp: check that the key is not revoked too (p.4),
         // unless online checks are turned off
         let ocsp = (self.timestamp && self.ocsp).then(|| DEFAULT_OCSP_URL.to_string());
@@ -1344,7 +1357,13 @@ impl App {
                         true,
                         o.as_deref(),
                     ),
-                    SignAs::Pdf => e.sign_pdf(&input, &key, tsa.as_deref(), ocsp.as_deref()),
+                    SignAs::Pdf => e.sign_pdf_with(
+                        &input,
+                        &key,
+                        tsa.as_deref(),
+                        ocsp.as_deref(),
+                        stamp.as_ref(),
+                    ),
                     SignAs::Card => {
                         let name = doc
                             .file_name()

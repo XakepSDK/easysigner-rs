@@ -16,6 +16,9 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
 
 * **Inside a PDF** (PAdES, `--pdf`): the signature goes into the PDF itself, which still opens in
   any PDF viewer; more signatures are added the same way, each keeping the earlier ones valid.
+  `--stamp` also draws a visible stamp on the page (the signer, ИИН/БИН, the certificate and
+  the signing time; `--stamp-page N`, `--stamp-at br|bl|tr|tl`, `--stamp-lang kk|ru|en`,
+  `--stamp-logo logo.png|.jpg`); the window has it under More options.
 * **Document card** (`--card`, карточка электронного документа, the
   [ddcard](https://github.com/kaarkz/ddcard) format SIGEX uses): a PDF that shows the document's
   pages, a page per signature with the signer, certificate, timestamp and revocation answer
@@ -98,6 +101,7 @@ kzsigner info -k key.p12
 
 kzsigner sign contract.pdf -k key.p12 --pdf             # -> contract-signed.pdf, signed inside
 kzsigner sign contract-signed.pdf -k key2.p12 --pdf     # a second signature inside the PDF
+kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # with a visible stamp
 kzsigner sign contract.docx -k key.p12 --card --qr      # -> contract.docx.card.pdf
 kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to the card
 kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
@@ -181,7 +185,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   passes if every later update just added signatures (new signature fields and widgets, the
   AcroForm entries for them, the DSS); an update that changes a page, the page tree or the
   catalog fails every earlier signature, since the PDF no longer shows what was signed. A PDF
-  certified with no changes allowed (DocMDP P=1) is not signed. `pdf/card.rs` builds and reads document cards after ddc's layout and texts
+  certified with no changes allowed (DocMDP P=1) is not signed. `pdf/stamp.rs` draws the visible stamp (a widget appearance with the bundled font, an optional JPEG or PNG logo, upright on rotated pages). `pdf/card.rs` builds and reads document cards after ddc's layout and texts
   (MIT licence; its Kazakh texts are reused): the card's signatures are detached CAdES with a
   mime-type attribute, an NCA timestamp, the certificate chain and the OCSP answer kept in
   `crls` (RFC 5940), as the ddcard specification asks. `pdf/qr.rs` turns a signature into QR

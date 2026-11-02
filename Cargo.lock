@@ -1481,6 +1481,7 @@ dependencies = [
  "digest",
  "eframe",
  "egui_kittest",
+ "flate2",
  "getrandom 0.4.3",
  "gost94",
  "hmac",

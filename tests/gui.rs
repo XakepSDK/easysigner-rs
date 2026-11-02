@@ -264,12 +264,26 @@ fn pdf_signing_and_cards_in_the_window() {
         .click();
     h.run();
     assert_eq!(h.state().sign_as, kzsigner::gui::SignAs::Pdf);
+    // with a visible stamp (More options)
+    h.get_by_label("More options").click();
+    h.run();
+    h.get_by_label("Show a stamp with your name and the signing time on the last page")
+        .click();
+    h.run();
+    assert!(h.state().stamp);
+    h.get_by_label("More options").click();
+    h.run();
     let out = dir.join("plain-signed.pdf");
     dialogs.next(out.clone());
     h.get_by_label("Sign").click();
     settle(&mut h);
     assert_eq!(h.state().screen, Screen::Signed, "{:?}", h.state().message);
-    assert!(std::fs::read(&out).unwrap().starts_with(&doc));
+    let signed = std::fs::read(&out).unwrap();
+    assert!(signed.starts_with(&doc));
+    assert!(
+        signed[doc.len()..].windows(3).any(|w| w == b"/AP"),
+        "the stamp is drawn"
+    );
 
     // check the signed PDF, then the card, and save the card's document
     h.get_by_label("Back").click();

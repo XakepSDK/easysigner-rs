@@ -1113,6 +1113,80 @@ fn long_term() {
         json_ok(&json) && json.matches("\"authority\"").count() >= 2,
     );
 
+    // a visible signature: a stamp with a logo, on the first page's top left
+    // (only the JPEG's frame header is read; the viewer decodes the rest)
+    let jpeg = [
+        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x20, 0x03, 1, 0x11, 0, 2,
+        0x11, 0, 3, 0x11, 0, 0xff, 0xd9,
+    ];
+    std::fs::write(t.path("logo.jpg"), jpeg).unwrap();
+    std::fs::copy(fixtures().join("pdf/plain.pdf"), t.path("stamped.pdf")).unwrap();
+    let v = kz(
+        &t,
+        &[
+            "sign",
+            "--pdf",
+            "--stamp-page",
+            "1",
+            "--stamp-at",
+            "tl",
+            "--stamp-lang",
+            "kk",
+            "--stamp-logo",
+            "logo.jpg",
+            "-k",
+            &carol,
+            "--tsa",
+            &tsa,
+            "--ocsp",
+            &ocsp,
+            "--level",
+            "LTA",
+            "stamped.pdf",
+        ],
+    );
+    t.check("stamp: signed", v.contains("Signed by"));
+    let data = std::fs::read(t.path("stamped-signed.pdf")).unwrap();
+    let doc = lopdf::Document::load_mem(&data).unwrap();
+    let page1 = *doc.get_pages().get(&1).unwrap();
+    let annots = doc
+        .get_dictionary(page1)
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    // the signature's widget (the document timestamp's is invisible)
+    let widget = annots
+        .iter()
+        .map(|a| doc.get_dictionary(a.as_reference().unwrap()).unwrap())
+        .find(|w| w.has(b"AP"))
+        .unwrap();
+    let rect: Vec<f32> = widget
+        .get(b"Rect")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_float().unwrap())
+        .collect();
+    t.check(
+        "stamp: a widget with an appearance near the top left of page 1",
+        widget.has(b"AP") && rect[0] < 40.0 && rect[3] > 750.0 && rect[2] - rect[0] > 200.0,
+    );
+    t.check(
+        "stamp: the logo is in the PDF",
+        data.windows(9).any(|w| w == b"DCTDecode"),
+    );
+    let v = kz(&t, &["verify", "stamped-signed.pdf"]);
+    t.check(
+        "stamp: verifies, long-term",
+        v.contains("VALID - all 1") && v.contains("B-LTA"),
+    );
+    let v = kz(&t, &["sign", "--stamp", "-k", &carol, "doc.txt"]);
+    t.check("stamp: only with --pdf", v.contains("need --pdf"));
+
     println!("\n{} passed, {} failed", t.pass, t.fail.len());
     let _ = std::fs::remove_dir_all(&dir);
     assert!(t.fail.is_empty(), "failed: {:?}", t.fail);

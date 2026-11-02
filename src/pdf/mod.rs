@@ -7,6 +7,7 @@ pub mod font;
 pub mod import;
 pub mod layout;
 pub mod qr;
+pub mod stamp;
 
 use std::collections::HashSet;
 
@@ -62,6 +63,7 @@ pub fn sign(
     key: &Key,
     tsa_url: Option<&str>,
     trust: &TrustStore,
+    stamp: Option<&stamp::Stamp>,
 ) -> Result<SignResult> {
     let doc = open(input)?;
     if docmdp_level(&doc) == Some(1) {
@@ -87,7 +89,8 @@ pub fn sign(
         ("M", Object::string_literal(pdf_date(time::now_ms()))),
         ("Name", text_string(&cert::holder_name(&key.cert))),
     ]);
-    let data = add_field(input, doc, "Signature", sig, room, |signed| {
+    let visible = stamp.map(|s| (s, &key.cert));
+    let data = add_field(input, doc, "Signature", sig, room, visible, |signed| {
         let mut sd = cms::sign_once_with(
             signed,
             cms::ID_DATA,
@@ -117,6 +120,7 @@ fn add_field(
     prefix: &str,
     mut sig: Dictionary,
     room: usize,
+    visible: Option<(&stamp::Stamp, &Cert)>,
     fill: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
     let existing = signature_fields(&doc);
@@ -141,7 +145,16 @@ fn add_field(
         .values()
         .next()
         .ok_or_else(|| Error::new(tr("This PDF has no pages.")))?;
-    let widget = Dictionary::from_iter([
+    // an invisible signature's widget sits on the first page; a visible one where its stamp is
+    let (first_page, rect, appearance) = match visible {
+        Some((st, c)) => {
+            let d = stamp::draw(&doc, st, c, &mut alloc)?;
+            out.extend(d.objects);
+            (d.page, d.rect, Some(d.appearance))
+        }
+        None => (first_page, [0.0; 4], None),
+    };
+    let mut widget = Dictionary::from_iter([
         ("Type", Object::from("Annot")),
         ("Subtype", "Widget".into()),
         ("FT", "Sig".into()),
@@ -149,14 +162,17 @@ fn add_field(
         ("F", 132.into()),
         (
             "Rect",
-            Object::Array(vec![0.into(), 0.into(), 0.into(), 0.into()]),
+            Object::Array(rect.iter().map(|&v| Object::Real(v as f32)).collect()),
         ),
         ("V", sig_id.into()),
         ("P", first_page.into()),
     ]);
+    if let Some(ap) = appearance {
+        widget.set("AP", Dictionary::from_iter([("N", Object::Reference(ap))]));
+    }
     out.push((widget_id, widget.into()));
 
-    // the widget joins the first page's annotations
+    // the widget joins its page's annotations
     let mut page = doc.get_dictionary(first_page).map_err(bad)?.clone();
     match page.get(b"Annots") {
         Ok(Object::Reference(id)) => {
@@ -341,9 +357,15 @@ pub fn extend(
             ("SubFilter", "ETSI.RFC3161".into()),
         ]);
         let (alg, policy) = tsp::hash_and_policy_for(key_alg.as_deref().unwrap_or_default());
-        out = add_field(&out, doc, "Timestamp", sig, ROOM_DOC_TIMESTAMP, |signed| {
-            tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy)
-        })?;
+        out = add_field(
+            &out,
+            doc,
+            "Timestamp",
+            sig,
+            ROOM_DOC_TIMESTAMP,
+            None,
+            |signed| tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy),
+        )?;
         r.timestamped = true;
     }
     r.cms = out;
