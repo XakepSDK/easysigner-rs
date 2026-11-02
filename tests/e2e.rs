@@ -226,8 +226,22 @@ impl Run {
     }
 
     fn kz_env(&self, args: &[&str], password: &str) -> (String, String) {
+        // the test keys' CAs, so that signing's own key check (Order 500 p.4) trusts them
+        let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        if args[0] == "sign" && !args.iter().any(|a| a == "--trust" || a == "--no-test-ca") {
+            for dir in ["keys", "kalkan"] {
+                for a in ["rsa", "gost2004", "gost2015", "gost2015_256"] {
+                    let f = fixtures().join(dir).join(format!("ca_{a}.cer"));
+                    if f.exists() {
+                        args.push("--trust".into());
+                        args.push(f.display().to_string());
+                    }
+                }
+            }
+        }
+        args.retain(|a| a != "--no-test-ca");
         let o = Command::new(env!("CARGO_BIN_EXE_kzsigner"))
-            .args(args)
+            .args(&args)
             .current_dir(&self.dir)
             .env("KZSIGNER_PASSWORD", password)
             .output()
@@ -283,6 +297,19 @@ fn end_to_end() {
             &key(&format!("bob_{a}.p12")),
             &format!("{d}.cms"),
         ]);
+        let v = t.kz(&[
+            "sign",
+            "--no-test-ca",
+            "-k",
+            &key(&format!("alice_{a}.p12")),
+            &d,
+            "-o",
+            "x.cms",
+        ]);
+        t.check(
+            &format!("{a}: a key from an untrusted CA is refused before signing"),
+            v.contains("Your key cannot sign") && !t.path("x.cms").exists(),
+        );
         let v = t.kz(&["verify", &format!("{d}.cms"), "--trust", &ca]);
         t.check(
             &format!("{a}: sign + co-sign verifies (2 signers)"),

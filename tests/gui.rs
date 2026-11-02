@@ -203,7 +203,7 @@ fn pdf_signing_and_cards_in_the_window() {
     let engine = kzsigner::Engine::new(vec![ca.clone()]);
     let doc = std::fs::read(&pdf).unwrap();
     let cms = engine
-        .sign(&doc, &key, true, None, false, None)
+        .sign(&doc, &key, true, None, None, false, None)
         .unwrap()
         .cms;
     let card = kzsigner::pdf::card::build(

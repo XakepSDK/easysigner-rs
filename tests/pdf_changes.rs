@@ -36,17 +36,25 @@ fn redraw_first_page(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The test keys' CAs trusted, as signing checks the key first.
+fn engine() -> Engine {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kalkan");
+    let ca =
+        |n: &str| kzsigner::cert::Cert::parse_any(&std::fs::read(fx.join(n)).unwrap()).unwrap();
+    Engine::new(vec![ca("ca_rsa.cer"), ca("ca_gost2015.cer")])
+}
+
 #[test]
 fn changes_after_signing_are_caught() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
-    let e = Engine::new(vec![]);
+    let e = engine();
     let (rsa, gost) = (key(&e, "alice_rsa.p12"), key(&e, "alice_gost2015.p12"));
     for f in ["plain.pdf", "objstm.pdf", "land.pdf"] {
         let one = e
-            .sign_pdf(&std::fs::read(fx.join(f)).unwrap(), &rsa, None)
+            .sign_pdf(&std::fs::read(fx.join(f)).unwrap(), &rsa, None, None)
             .unwrap()
             .cms;
-        let two = e.sign_pdf(&one, &gost, None).unwrap().cms;
+        let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
         let r = e.verify(&two, None, None).unwrap();
         assert_eq!(r.signers.len(), 2);
         for s in &r.signers {
@@ -75,7 +83,7 @@ fn changes_after_signing_are_caught() {
             );
         }
         // and signing on top of the change does not make it pass
-        let three = e.sign_pdf(&evil, &rsa, None).unwrap().cms;
+        let three = e.sign_pdf(&evil, &rsa, None, None).unwrap().cms;
         let r = e.verify(&three, None, None).unwrap();
         assert!(!r.signers[0].signature_ok && !r.signers[1].signature_ok);
         assert!(r.signers[2].signature_ok);
@@ -85,7 +93,7 @@ fn changes_after_signing_are_caught() {
 #[test]
 fn certified_pdfs_that_allow_no_changes_are_not_signed() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
-    let e = Engine::new(vec![]);
+    let e = engine();
     let rsa = key(&e, "alice_rsa.p12");
     let mut doc = Document::load(fx.join("plain.pdf")).unwrap();
     let params = Dictionary::from_iter([("P", Object::Integer(1))]);
@@ -103,7 +111,7 @@ fn certified_pdfs_that_allow_no_changes_are_not_signed() {
         .set("Perms", Object::Dictionary(perms));
     let mut data = Vec::new();
     doc.save_to(&mut data).unwrap();
-    let Err(err) = e.sign_pdf(&data, &rsa, None) else {
+    let Err(err) = e.sign_pdf(&data, &rsa, None, None) else {
         panic!("signed a no-changes PDF");
     };
     assert!(err.0.contains("DocMDP"), "{}", err.0);
@@ -112,10 +120,13 @@ fn certified_pdfs_that_allow_no_changes_are_not_signed() {
 #[test]
 fn a_cms_holding_a_pdf_is_checked_as_a_cms() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
-    let e = Engine::new(vec![]);
+    let e = engine();
     let rsa = key(&e, "alice_rsa.p12");
     let pdf = std::fs::read(fx.join("plain.pdf")).unwrap();
-    let cms = e.sign(&pdf, &rsa, false, None, false, None).unwrap().cms;
+    let cms = e
+        .sign(&pdf, &rsa, false, None, None, false, None)
+        .unwrap()
+        .cms;
     assert!(!e.is_pdf(&cms));
     let r = e.verify(&cms, None, None).unwrap();
     assert!(!r.is_pdf);

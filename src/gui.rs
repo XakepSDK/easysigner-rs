@@ -1088,6 +1088,8 @@ impl App {
         };
         let det = self.detached && !self.doc_is_cms;
         let tsa = self.timestamp.then(|| DEFAULT_TSA_URL.to_string());
+        // online anyway for the timestamp: check that the key is not revoked too (p.4)
+        let ocsp = self.timestamp.then(|| DEFAULT_OCSP_URL.to_string());
         let sign_as = self.sign_as;
         let (qr, lang) = (self.card_qr, self.card_lang);
         let card_cosign = self.doc_kind == DocKind::Card;
@@ -1105,8 +1107,16 @@ impl App {
                     .map(|p| std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display())))
                     .transpose()?;
                 match sign_as {
-                    SignAs::Cms => e.sign(&input, &key, det, tsa.as_deref(), true, o.as_deref()),
-                    SignAs::Pdf => e.sign_pdf(&input, &key, tsa.as_deref()),
+                    SignAs::Cms => e.sign(
+                        &input,
+                        &key,
+                        det,
+                        tsa.as_deref(),
+                        ocsp.as_deref(),
+                        true,
+                        o.as_deref(),
+                    ),
+                    SignAs::Pdf => e.sign_pdf(&input, &key, tsa.as_deref(), ocsp.as_deref()),
                     SignAs::Card => {
                         let name = doc
                             .file_name()

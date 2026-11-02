@@ -63,17 +63,26 @@ impl Engine {
         cert::key_warnings(c)
     }
 
-    /// See [`sign::sign`].
+    /// Checks the signer's own key before signing; see [`sign::check_key`].
+    pub fn check_key(&self, c: &Cert, ocsp_url: Option<&str>) -> Result<Vec<String>> {
+        sign::check_key(c, ocsp_url, &self.trust)
+    }
+
+    /// See [`sign::sign`]. The key is checked first ([`Engine::check_key`]; revocation with
+    /// `ocsp_url`).
+    #[allow(clippy::too_many_arguments)]
     pub fn sign(
         &self,
         input: &[u8],
         key: &Key,
         detached: bool,
         tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
         cosign_if_cms: bool,
         detached_original: Option<&[u8]>,
     ) -> Result<SignResult> {
-        sign::sign(
+        let checked = self.check_key(&key.cert, ocsp_url)?;
+        let mut r = sign::sign(
             input,
             key,
             detached,
@@ -81,15 +90,27 @@ impl Engine {
             cosign_if_cms,
             detached_original,
             &self.trust,
-        )
+        )?;
+        r.warnings.extend(checked);
+        Ok(r)
     }
 
-    /// Signs a PDF inside the PDF (PAdES); see [`pdf::sign`].
-    pub fn sign_pdf(&self, input: &[u8], key: &Key, tsa_url: Option<&str>) -> Result<SignResult> {
-        pdf::sign(input, key, tsa_url, &self.trust)
+    /// Signs a PDF inside the PDF (PAdES); see [`pdf::sign`]. The key is checked first.
+    pub fn sign_pdf(
+        &self,
+        input: &[u8],
+        key: &Key,
+        tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
+    ) -> Result<SignResult> {
+        let checked = self.check_key(&key.cert, ocsp_url)?;
+        let mut r = pdf::sign(input, key, tsa_url, &self.trust)?;
+        r.warnings.extend(checked);
+        Ok(r)
     }
 
-    /// Signs `input` into a document card (ddcard), checking the signature first; see
+    /// Signs `input` into a document card (ddcard), checking the key (online) and the
+    /// signature first; see
     /// [`pdf::card`]. If `input` is already a card, the signature is added to it and the card
     /// is made again. A card needs a timestamp, and asks for an OCSP answer kept in the
     /// signature (a missing one only warns). `lang` and `qr`: None to keep what the card had
@@ -105,7 +126,10 @@ impl Engine {
         lang: Option<pdf::card::CardLang>,
         qr: Option<bool>,
     ) -> Result<SignResult> {
-        let mut r = SignResult::default();
+        let mut r = SignResult {
+            warnings: self.check_key(&key.cert, Some(ocsp_url))?,
+            ..Default::default()
+        };
         let (name, doc, mut signatures, made_with) = match pdf::card::read(input) {
             Some(c) => {
                 r.cosigned = true;

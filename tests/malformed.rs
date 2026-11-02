@@ -121,7 +121,9 @@ fn deep_nesting_and_bad_oids_are_errors() {
 #[test]
 fn damaged_pdfs_give_errors_not_crashes() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let e = Engine::new(vec![]);
+    // the key's CA trusted, as signing checks the key first
+    let ca = std::fs::read(fx.join("kalkan/ca_rsa.cer")).unwrap();
+    let e = Engine::new(vec![kzsigner::cert::Cert::parse_any(&ca).unwrap()]);
     let key = e
         .open_key(
             &std::fs::read(fx.join("kalkan/alice_rsa.p12")).unwrap(),
@@ -133,9 +135,9 @@ fn damaged_pdfs_give_errors_not_crashes() {
         .iter()
         .map(|f| std::fs::read(fx.join(f)).unwrap())
         .collect();
-    let signed = e.sign_pdf(&pdfs[0], &key, None).unwrap().cms;
-    let twice = e.sign_pdf(&signed, &key, None).unwrap().cms;
-    pdfs.push(e.sign_pdf(&pdfs[1], &key, None).unwrap().cms);
+    let signed = e.sign_pdf(&pdfs[0], &key, None, None).unwrap().cms;
+    let twice = e.sign_pdf(&signed, &key, None, None).unwrap().cms;
+    pdfs.push(e.sign_pdf(&pdfs[1], &key, None, None).unwrap().cms);
     pdfs.push(twice);
     let mut rng = Rng(7);
     for round in 0..1200 {
@@ -144,7 +146,7 @@ fn damaged_pdfs_give_errors_not_crashes() {
             let _ = e.verify(&p, None, None);
             let _ = e.card_original(&p);
             if round % 4 == 0 {
-                let _ = e.sign_pdf(&p, &key, None);
+                let _ = e.sign_pdf(&p, &key, None, None);
             }
         });
     }

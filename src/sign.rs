@@ -2,13 +2,66 @@
 //! (co-signing).
 
 use crate::cert;
+use crate::cert::Cert;
 use crate::cms::{self, SignedData};
 use crate::der;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport};
 use crate::trust::TrustStore;
-use crate::{Error, Result, gost, tsp};
+use crate::{Error, Result, gost, ocsp, tsp};
+
+/// Checks the signer's own certificate before signing (Order 500/НҚ p.4): issued by a trusted
+/// CA, valid now, allowed to sign under its CA's policy, and, with `ocsp_url`, not revoked
+/// (OCSP, or the CA's revocation list when OCSP gives no answer). Any failure refuses signing;
+/// a revocation check that got no answer is a warning, returned.
+pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result<Vec<String>> {
+    let refuse = |why: String| Err(Error::new(trf("Your key cannot sign: {}", &[&why])));
+    let now = crate::time::now_ms();
+    if now > c.not_after {
+        return refuse(trf(
+            "the certificate expired on {}.",
+            &[&crate::time::fmt(Some(c.not_after))],
+        ));
+    }
+    if now < c.not_before {
+        return refuse(trf(
+            "the certificate is not valid until {}.",
+            &[&crate::time::fmt(Some(c.not_before))],
+        ));
+    }
+    let chain = trust.check(c, now);
+    if !chain.ok {
+        return refuse(trf(
+            "{} (for a test CA, add its certificate with --trust)",
+            &[&chain.status],
+        ));
+    }
+    if let Some(why) = cert::usage_problem(c, chain.issuer.as_ref()) {
+        return refuse(why);
+    }
+    let mut warnings = Vec::new();
+    if let Some(url) = ocsp_url {
+        let (_, mut status, mut answer) = ocsp::check(c, chain.issuer.as_ref(), url, trust);
+        if answer.is_empty() {
+            let (_, s, a) = crate::crl::check(c, chain.issuer.as_ref());
+            if !a.is_empty() {
+                (status, answer) = (s, a);
+            } else {
+                status = trf("{} (OCSP: {})", &[&s, &status]);
+            }
+        }
+        match answer {
+            "good" => {}
+            "" => warnings.push(trf(
+                "Could not check that your key is not revoked: {}",
+                &[&status],
+            )),
+            _ => return refuse(status),
+        }
+    }
+    Ok(warnings)
+}
 
 /// Signs `input`. If `input` is a signed CMS and `cosign_if_cms` is set, the new signature is
 /// added to it; a detached CMS then needs `detached_original`.

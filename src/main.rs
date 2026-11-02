@@ -32,7 +32,7 @@ Run 'kzsigner COMMAND --help' for a command's options.
 ";
 
 const HELP_SIGN: &str = "\
-Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG] [--ocsp[=URL]]]
+Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
                      [--data=ORIGINAL] [--trust=CA.cer]... FILE
 Sign FILE into FILE.cms.
@@ -53,8 +53,10 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --qr                 With --card: also print each signature as QR codes.
       --lang=LANG          With --card: ru (default), kk, or kk/ru.
                            Adding a signature to a card keeps its language and QR codes.
-      --ocsp[=URL]         With --card: OCSP service for the answer kept in the signature
-                           (default http://ocsp.pki.gov.kz).
+      --ocsp[=URL]         Check online that your key is not revoked before signing
+                           (default http://ocsp.pki.gov.kz; the CA's revocation list
+                           when OCSP gives no answer). A card always does, and keeps
+                           the OCSP answer in the signature.
       --tsa[=URL]          Add a timestamp (default http://tsp.pki.gov.kz:80).
       --data=ORIGINAL      Original document, to co-sign a detached .cms.
       --trust=CA.cer       Extra trusted CA certificate (repeatable), on top of NCA RK's.
@@ -298,13 +300,14 @@ fn sign(o: Opts) -> R<u8> {
             o.qr.then_some(true),
         )?
     } else if o.pdf {
-        e.sign_pdf(&input, &k, o.tsa.as_deref())?
+        e.sign_pdf(&input, &k, o.tsa.as_deref(), o.ocsp.as_deref())?
     } else {
         e.sign(
             &input,
             &k,
             o.detached,
             o.tsa.as_deref(),
+            o.ocsp.as_deref(),
             true,
             original.as_deref(),
         )?
