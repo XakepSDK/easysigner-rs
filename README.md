@@ -276,6 +276,13 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   a duplicated signed part, broken XML, encodings, several signatures in one document.
 * `tests/xml_room.rs`: when another XML signature can go inside a signed document.
 * `tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
+* `tests/long_term_file.rs`: a B-LTA .cms made by an earlier build (`tests/fixtures/ltv`) still
+  verifies, and without its kept data the archive timestamps catch it.
+* `tests/certs.rs`: certificates with a forged CA signature or a broken root are not trusted;
+  validity dates, CA rights, names, key algorithms, which key goes with which certificate, and
+  key warnings.
+* `tests/cli.rs`: each command-line option only where it means something, `sign --hash` without
+  file options, `info`, and the names `extract` gives.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges

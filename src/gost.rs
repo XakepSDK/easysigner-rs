@@ -433,6 +433,70 @@ mod tests {
     }
 
     #[test]
+    fn bad_keys_and_signatures_are_refused() {
+        let c = curve("1.2.398.3.10.1.1.2.1.1").unwrap();
+        let d = random_below(&c.q).unwrap();
+        let (x, y) = c.public(&d).unwrap();
+        let hash = vec![9u8; 32];
+        let sig = c.sign(&d, &hash, 32).unwrap();
+        assert!(c.verify(&x, &y, &hash, &sig));
+        // a point off the curve, or outside the field
+        let y1 = &y + 1u32;
+        assert!(!c.on_curve(&x, &y1) && !c.verify(&x, &y1, &hash, &sig));
+        assert!(!c.on_curve(&(&x + &c.p), &y));
+        assert!(!c.on_curve(&x, &(&y + &c.p)));
+        // r and s must be in 1..q-1, and the signature two equal halves
+        let q = to_le(&c.q, 32);
+        let zero = [0u8; 32];
+        for (r, s) in [
+            (&zero[..], &sig[32..]),
+            (&sig[..32], &zero[..]),
+            (&q[..], &sig[32..]),
+            (&sig[..32], &q[..]),
+        ] {
+            let mut bad = r.to_vec();
+            bad.extend(s);
+            assert!(!c.verify(&x, &y, &hash, &bad));
+        }
+        assert!(!c.verify(&x, &y, &hash, &[]));
+        assert!(!c.verify(&x, &y, &hash, &sig[..63]));
+        // another hash
+        assert!(!c.verify(&x, &y, &[8u8; 32], &sig));
+    }
+
+    #[test]
+    fn random_below_stays_in_range() {
+        let n = BigUint::from(3u32);
+        let mut seen = [false; 3];
+        for _ in 0..200 {
+            let k = random_below(&n).unwrap();
+            assert!(!k.is_zero() && k < n);
+            seen[k.to_u32_digits().first().copied().unwrap_or(0) as usize] = true;
+        }
+        assert!(seen[1] && seen[2]);
+    }
+
+    #[test]
+    fn digests() {
+        for (oid, len, abc) in [
+            (H_SHA1, 20, "a9993e36"),
+            (H_SHA224, 28, "23097d22"),
+            (H_SHA256, 32, "ba7816bf"),
+            (H_SHA384, 48, "cb00753f"),
+            (H_SHA512, 64, "ddaf35a1"),
+        ] {
+            let h = hash(oid, b"abc").unwrap();
+            assert_eq!(h.len(), len);
+            assert_eq!(digest_len(oid).unwrap(), len);
+            let hex: String = h[..4].iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(hex, abc, "{oid}");
+        }
+        assert!(hash("1.2.3", b"").is_err() && digest_len("1.2.3").is_err());
+        assert!(is_gost(KEY_GOST2015_512) && is_gost(SIG_GOST2004));
+        assert!(!is_gost(RSA_ENCRYPTION) && !is_gost(H_SHA256));
+    }
+
+    #[test]
     fn streebog_known_answer() {
         // GOST R 34.11-2012 example M1 ("012345...") from the standard
         let m1 = b"012345678901234567890123456789012345678901234567890123456789012";

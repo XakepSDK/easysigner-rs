@@ -939,6 +939,10 @@ fn long_term() {
         v.contains("Extended to B-LTA") && !v.contains("Error"),
     );
     t.check(
+        "extend: a new file keeps no previous version",
+        !v.contains("Previous version"),
+    );
+    t.check(
         "extend: the renewed file verifies",
         kz(&t, &["verify", "renewed.cms"]).contains("VALID - all 1"),
     );

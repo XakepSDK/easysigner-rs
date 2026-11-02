@@ -497,4 +497,82 @@ mod tests {
         assert_eq!(uint(&[0, 0, 5]), vec![2, 1, 5]);
         assert_eq!(parse(&small_int(1024)).unwrap().small_int().unwrap(), 1024);
     }
+
+    #[test]
+    fn lengths_and_tags() {
+        assert_eq!(
+            (ctx(0), ctx(3), ctx_prim(0), ctx_prim(2)),
+            (0xa0, 0xa3, 0x80, 0x82)
+        );
+        for n in [0, 1, 127, 128, 255, 256, 70_000] {
+            let d = octets(&vec![7u8; n]);
+            let (t, rest) = read(&d).unwrap();
+            assert!(
+                rest.is_empty() && t.content.len() == n && t.raw == d.as_slice(),
+                "{n}"
+            );
+            assert!(read(&d[..d.len() - 1]).is_err(), "{n}: truncated");
+        }
+        assert!(
+            read(&[0x04, 0x85, 1, 0, 0, 0, 0]).is_err(),
+            "5 length bytes"
+        );
+        assert!(read(&[0x04, 0x82, 1]).is_err(), "length bytes missing");
+        assert!(read(&[0x04]).is_err());
+        assert!(read(&[0x1f, 0x01, 0x00]).is_err(), "high tag number");
+        assert!(read(&[0x04, 0x80, 0, 0]).is_err(), "indefinite primitive");
+        // an indefinite element's raw bytes run to its end mark, and the rest follows
+        let data = [0x30, 0x80, 0x05, 0x00, 0, 0, 0x05, 0x00];
+        let (t, rest) = read(&data).unwrap();
+        assert_eq!(t.raw, &data[..6]);
+        assert_eq!(t.content, &data[2..4]);
+        assert_eq!(rest, &data[6..]);
+        // the elements of a sequence, by reference
+        let s = seq(&[&null(), &null(), &boolean(false)]);
+        let t = parse(&s).unwrap();
+        let k = t.children().unwrap();
+        assert_eq!((&k).into_iter().count(), 3);
+        assert!(!k[2].boolean().unwrap() && parse(&boolean(true)).unwrap().boolean().unwrap());
+        assert_eq!(k[2].retagged(0x81), vec![0x81, 1, 0]);
+    }
+
+    #[test]
+    fn integer_values() {
+        let int = |c: &[u8]| tlv(INTEGER, c);
+        assert_eq!(parse(&int(&[0, 0])).unwrap().uint().unwrap(), &[0]);
+        assert_eq!(parse(&int(&[0])).unwrap().uint().unwrap(), &[0]);
+        assert_eq!(parse(&int(&[0, 0x80])).unwrap().uint().unwrap(), &[0x80]);
+        assert!(parse(&int(&[])).unwrap().uint().is_err());
+        let small = |c: &[u8]| parse(&int(c)).unwrap().small_int();
+        assert_eq!(small(&[0xff]).unwrap(), -1);
+        assert_eq!(small(&[0x80]).unwrap(), -128);
+        assert_eq!(small(&[0x01, 0x00]).unwrap(), 256);
+        assert_eq!(small(&[0x7f; 8]).unwrap(), 0x7f7f_7f7f_7f7f_7f7f);
+        assert!(small(&[1; 9]).is_err() && small(&[]).is_err());
+        assert_eq!(
+            parse(&tlv(ENUMERATED, &[2])).unwrap().small_int().unwrap(),
+            2
+        );
+        assert!(parse(&octets(&[2])).unwrap().small_int().is_err());
+    }
+
+    #[test]
+    fn string_types() {
+        let text = |tag: u8, c: &[u8]| parse(&tlv(tag, c)).unwrap().text();
+        assert_eq!(text(0x0c, "Әл".as_bytes()).unwrap(), "Әл");
+        assert_eq!(text(0x14, &[b'a', 0xe9]).unwrap(), "aé");
+        assert_eq!(text(BMP_STRING, &[0x04, 0xd8, 0, b'a']).unwrap(), "Әa");
+        assert_eq!(
+            text(UNIVERSAL_STRING, &[0, 0, 0x04, 0xd8, 0, 0, 0, b'b']).unwrap(),
+            "Әb"
+        );
+        assert!(text(OCTET_STRING, b"x").is_none());
+    }
+
+    #[test]
+    fn oid_first_arcs() {
+        for s in ["0.39", "1.0", "1.39", "2.0", "2.999.1"] {
+            assert_eq!(oid_to_string(&oid_content(s)).unwrap(), s);
+        }
+    }
 }
