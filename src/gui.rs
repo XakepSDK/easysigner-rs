@@ -208,8 +208,16 @@ enum Msg {
     Verified(u64, Result<VerifyReport, String>),
     /// (file, (suggested name for the saved document, bytes))
     Extracted(PathBuf, Result<(String, Vec<u8>), String>),
-    /// A document to read (for the document request with this number, if any).
-    ToView(Option<u64>, Result<PathBuf, String>),
+    /// A document to read, for the request it answers.
+    ToView(ViewFor, Result<PathBuf, String>),
+}
+
+/// Which choice a document to read was asked for: the document to sign or the signed file
+/// to check, by request number. An answer for an older choice is dropped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ViewFor {
+    Sign(u64),
+    Check(u64),
 }
 
 /// What the chosen document is.
@@ -609,9 +617,9 @@ impl App {
             step(ui, tr("1 · Document"));
             if let Some(d) = self.doc.clone() {
                 file_title(ui, &d);
-                if crate::icons::button(
+                if icons::button(
                     ui,
-                    crate::icons::Icon::Open,
+                    Icon::Open,
                     tr("Open the document"),
                     14.0,
                     egui::vec2(0.0, 32.0),
@@ -662,7 +670,9 @@ impl App {
                         egui::TextEdit::singleline(&mut self.password)
                             .password(!self.show_password)
                             .desired_width(if self.narrow {
-                                ui.available_width() - 56.0
+                                // room for the eye button beside it
+                                let eye = ui.spacing().interact_size.y.max(22.0) + 8.0;
+                                (ui.available_width() - eye - ui.spacing().item_spacing.x).max(80.0)
                             } else {
                                 240.0
                             }),
@@ -991,16 +1001,13 @@ impl App {
         }
         ui.add_space(14.0);
         let android = cfg!(target_os = "android");
-        let narrow = self.narrow;
-        let mut buttons = |ui: &mut egui::Ui| {
-            let w = if narrow { ui.available_width() } else { 0.0 };
-            let (h, size) = if narrow { (52.0, 17.0) } else { (38.0, 15.0) };
+        action_row(ui, self.narrow, |ui, size, min| {
             let (icon, reveal) = if android {
                 (Icon::Share, tr("Share"))
             } else {
                 (Icon::Folder, tr("Show in folder"))
             };
-            if icons::button(ui, icon, reveal, size, egui::vec2(w, h), true).clicked() {
+            if icons::button(ui, icon, reveal, size, min, true).clicked() {
                 self.dialogs.reveal(&d.saved);
             }
             if android
@@ -1009,22 +1016,14 @@ impl App {
                     Icon::Download,
                     tr("Save to the phone…"),
                     size,
-                    egui::vec2(w, h),
+                    min,
                     false,
                 )
                 .clicked()
             {
                 self.dialogs.saved(&d.saved);
             }
-            if icons::button(
-                ui,
-                Icon::Pen,
-                tr("Sign another document"),
-                size,
-                egui::vec2(w, h),
-                false,
-            )
-            .clicked()
+            if icons::button(ui, Icon::Pen, tr("Sign another document"), size, min, false).clicked()
             {
                 self.doc = None;
                 self.doc_note = Note::default();
@@ -1034,15 +1033,7 @@ impl App {
                 self.sign_original = None;
                 self.screen = Screen::Sign;
             }
-        };
-        if narrow {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
-                buttons(ui)
-            });
-        } else {
-            ui.horizontal(buttons);
-        }
+        });
     }
 
     // ------------------------------------------------------------------ fields
@@ -1082,10 +1073,18 @@ impl App {
             } else {
                 tr("Choose a file…")
             };
-            if icons::button(ui, Icon::File, text, 15.0, egui::vec2(w, 44.0), false).clicked() {
+            // the document fields show their file in a title above; the others show it here
+            if let Some(c) = current
+                && !matches!(id, "doc" | "cms")
+            {
+                file_title(ui, c);
+            }
+            if icons::button(ui, Icon::File, text, 15.0, egui::vec2(w, 44.0), false)
+                .labelled_by(l.id)
+                .clicked()
+            {
                 chosen = dialogs.open(id, current.as_deref());
             }
-            let _ = l;
             return chosen;
         }
         ui.horizontal(|ui| {
@@ -1180,20 +1179,19 @@ impl App {
     /// detached .cms, the original chosen beside it.
     pub fn view_doc(&mut self, ctx: &egui::Context, doc: PathBuf) {
         let original = self.sign_original.clone();
-        self.view_file(ctx, doc, original, Some(self.doc_request));
+        self.view_file(ctx, doc, original, ViewFor::Sign(self.doc_request));
     }
 
     /// Opens `doc` for reading, or the document inside it when it is signed (`original` for a
-    /// detached .cms). `request`: the document request it is for, if any.
+    /// detached .cms). `id`: the choice it is for.
     fn view_file(
         &mut self,
         ctx: &egui::Context,
         doc: PathBuf,
         original: Option<PathBuf>,
-        request: Option<u64>,
+        id: ViewFor,
     ) {
         let dir = self.dialogs.view_dir();
-        let id = request;
         self.background(ctx, move |e| {
             let r = (|| -> Result<PathBuf, String> {
                 let data =
@@ -1480,24 +1478,25 @@ impl App {
                 let r = r.clone();
                 report(ui, &r);
                 let can_extract = r.has_content && !r.is_pdf;
+                // a detached signature has nothing to show until its original is chosen
+                let can_view = r.has_content || r.is_pdf || self.verify_original.is_some();
                 ui.add_space(10.0);
-                let narrow = self.narrow;
-                let mut buttons = |ui: &mut egui::Ui| {
-                    let w = if narrow { ui.available_width() } else { 0.0 };
-                    let (h, size) = if narrow { (52.0, 17.0) } else { (38.0, 15.0) };
-                    if icons::button(
-                        ui,
-                        Icon::Open,
-                        tr("Open the document"),
-                        size,
-                        egui::vec2(w, h),
-                        true,
-                    )
-                    .clicked()
+                action_row(ui, self.narrow, |ui, size, min| {
+                    // the main action only when the document can be trusted
+                    if can_view
+                        && icons::button(
+                            ui,
+                            Icon::Open,
+                            tr("Open the document"),
+                            size,
+                            min,
+                            r.valid,
+                        )
+                        .clicked()
                         && let Some(c) = self.cms.clone()
                     {
                         let o = self.verify_original.clone();
-                        self.view_file(&ctx, c, o, None);
+                        self.view_file(&ctx, c, o, ViewFor::Check(self.verify_request));
                     }
                     if can_extract
                         && icons::button(
@@ -1505,22 +1504,14 @@ impl App {
                             Icon::Download,
                             tr("Save the document…"),
                             size,
-                            egui::vec2(w, h),
+                            min,
                             false,
                         )
                         .clicked()
                     {
                         self.extract(&ctx);
                     }
-                };
-                if narrow {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
-                        buttons(ui)
-                    });
-                } else {
-                    ui.horizontal(buttons);
-                }
+                });
             }
             Some(Err(e)) => {
                 let e = e.clone();
@@ -1737,7 +1728,8 @@ impl App {
                 Err(e) => self.message = Some((e, true)),
             },
             // another document has been chosen since: don't show the old one
-            Msg::ToView(Some(id), _) if id != self.doc_request => {}
+            Msg::ToView(ViewFor::Sign(id), _) if id != self.doc_request => {}
+            Msg::ToView(ViewFor::Check(id), _) if id != self.verify_request => {}
             Msg::ToView(_, r) => {
                 if let Err(e) = r.and_then(|f| self.dialogs.view(&f)) {
                     self.message = Some((trf("Could not open the document: {}", &[&e]), true));
@@ -1831,6 +1823,20 @@ fn banner<R>(ui: &mut egui::Ui, tone: Tone, add: impl FnOnce(&mut egui::Ui) -> R
             add(ui)
         })
         .inner
+}
+
+/// A row of a screen's actions: side by side, or on a phone one under another at full width.
+/// `add` gets the text size and the least size for each button.
+fn action_row(ui: &mut egui::Ui, narrow: bool, add: impl FnOnce(&mut egui::Ui, f32, egui::Vec2)) {
+    if narrow {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            let w = ui.available_width();
+            add(ui, 17.0, egui::vec2(w, 52.0))
+        });
+    } else {
+        ui.horizontal(|ui| add(ui, 15.0, egui::vec2(0.0, 38.0)));
+    }
 }
 
 /// A warning line, with the warning sign.
@@ -2089,9 +2095,9 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     if r.valid {
         banner(ui, Tone::Good, |ui| {
             let title = if n == 1 {
-                tr("✔ The signature is valid").to_string()
+                tr("The signature is valid").to_string()
             } else {
-                trf("✔ All {} signatures are valid", &[&n])
+                trf("All {} signatures are valid", &[&n])
             };
             verdict(ui, Icon::ShieldCheck, Tone::Good, &title);
             let text = if r.card_document.is_some() {
@@ -2111,7 +2117,7 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                 ui,
                 Icon::Warning,
                 Tone::Warn,
-                tr("⚠ Valid, but not checked for revocation"),
+                tr("Valid, but not checked for revocation"),
             );
             ui.add(
                 egui::Label::new(tr(
@@ -2126,7 +2132,7 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
                 ui,
                 Icon::XCircle,
                 Tone::Bad,
-                tr("✖ Do not trust this document"),
+                tr("Do not trust this document"),
             );
             ui.add(egui::Label::new(failure_reason(r)).wrap());
         });
@@ -2140,9 +2146,8 @@ pub fn report(ui: &mut egui::Ui, r: &VerifyReport) {
     }
 }
 
-/// A verdict's title with its icon; a leading ✔ ✖ ⚠ in the text gives way to the icon.
+/// A verdict's title with its icon.
 fn verdict(ui: &mut egui::Ui, icon: Icon, tone: Tone, title: &str) {
-    let title = title.trim_start_matches(['✔', '✖', '⚠', ' ']);
     ui.horizontal(|ui| {
         icons::show(ui, icon, 30.0, tone.color(ui));
         ui.add(egui::Label::new(tone.text(ui, title).size(20.0).strong()).wrap());
