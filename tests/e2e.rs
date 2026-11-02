@@ -620,6 +620,22 @@ fn pdf_and_card() {
             && v.contains("answer kept in the signature")
             && v.contains("inside the document card"),
     );
+    // the kept answer is also in the revocationValues attribute (Order 500 p.8)
+    let card =
+        kzsigner::pdf::card::read(&std::fs::read(t.path("plain.pdf.card.pdf")).unwrap()).unwrap();
+    let mut sd = kzsigner::cms::SignedData::parse(&card.signatures[0].1).unwrap();
+    let in_crls = kzsigner::pdf::card::embedded_ocsp(&sd).unwrap();
+    let has_attr = sd.signers[0]
+        .unsigned()
+        .iter()
+        .any(|(o, _)| o == kzsigner::pdf::card::ATTR_REVOCATION_VALUES);
+    sd.crls = None;
+    t.check(
+        "card: revocationValues holds the same OCSP answer",
+        has_attr
+            && kzsigner::ocsp::basic_response(&kzsigner::pdf::card::embedded_ocsp(&sd).unwrap())
+                == kzsigner::ocsp::basic_response(&in_crls),
+    );
     let v = t.kz(&[
         "sign",
         "--card",

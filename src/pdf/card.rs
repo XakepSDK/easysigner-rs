@@ -219,6 +219,12 @@ pub fn sign_for_card(
         Ok(a) if a.good => {
             let other = der::tlv(der::ctx(1), &der::cat(&[&der::oid(RI_OCSP), &a.raw]));
             sd.crls = Some(der::tlv(der::ctx(1), &other));
+            // the same answer where Order 500/НҚ p.8 names it: the CAdES revocationValues
+            // attribute, ocspVals [1] SEQUENCE OF BasicOCSPResponse (RFC 5126 §6.3.4)
+            if let Some(basic) = ocsp::basic_response(&a.raw) {
+                let values = der::seq(&[&der::tlv(der::ctx(1), &der::seq(&[&basic]))]);
+                sd.signers[0].add_unsigned(ATTR_REVOCATION_VALUES, &values);
+            }
         }
         Ok(a) => {
             return Err(Error::new(trf(
@@ -250,8 +256,33 @@ pub fn sign_for_card(
     Ok(sd.encode())
 }
 
-/// The OCSP response embedded in a SignedData's `crls` (RFC 5940), if any.
+/// id-aa-ets-revocationValues (CAdES, RFC 5126).
+pub const ATTR_REVOCATION_VALUES: &str = "1.2.840.113549.1.9.16.2.24";
+
+/// The OCSP response embedded in a SignedData's `crls` (RFC 5940), or else in the first
+/// signer's revocationValues attribute, if any.
 pub fn embedded_ocsp(sd: &SignedData) -> Option<Vec<u8>> {
+    in_crls(sd).or_else(|| in_revocation_values(sd))
+}
+
+fn in_revocation_values(sd: &SignedData) -> Option<Vec<u8>> {
+    let (_, values) = sd
+        .signers
+        .first()?
+        .unsigned()
+        .into_iter()
+        .find(|(o, _)| o == ATTR_REVOCATION_VALUES)?;
+    let rv = der::parse(values.first()?).ok()?;
+    for v in rv.children().ok()? {
+        if v.tag == der::ctx(1) {
+            let basic = v.inner().ok()?.children().ok()?;
+            return Some(ocsp::wrap_basic(basic.first()?.raw));
+        }
+    }
+    None
+}
+
+fn in_crls(sd: &SignedData) -> Option<Vec<u8>> {
     let crls = sd.crls.as_ref()?;
     let t = der::parse(crls).ok()?;
     for c in t.children().ok()? {

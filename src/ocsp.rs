@@ -61,6 +61,25 @@ impl Answer {
     }
 }
 
+/// The BasicOCSPResponse inside an OCSPResponse, as CAdES revocationValues holds it.
+pub fn basic_response(raw: &[u8]) -> Option<Vec<u8>> {
+    let resp = der::parse(raw).ok()?.items(der::SEQUENCE).ok()?;
+    let rb = resp.get(1)?.inner().ok()?.items(der::SEQUENCE).ok()?;
+    if rb.first()?.oid().ok()? != BASIC {
+        return None;
+    }
+    rb.get(1)?.octets().ok()
+}
+
+/// An OCSPResponse (successful) around a BasicOCSPResponse.
+pub fn wrap_basic(basic: &[u8]) -> Vec<u8> {
+    let bytes = der::seq(&[&der::oid(BASIC), &der::octets(basic)]);
+    der::seq(&[
+        &der::tlv(der::ENUMERATED, &[0]),
+        &der::tlv(der::ctx(0), &bytes),
+    ])
+}
+
 /// The hash NCALayer uses in OCSP certificate IDs for this issuer's key type.
 fn cert_id_hash(issuer: &Cert) -> &'static str {
     let k = issuer.key_alg();
