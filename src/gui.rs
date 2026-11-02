@@ -299,6 +299,9 @@ pub struct App {
     key_ok: bool,
     pub detached: bool,
     pub timestamp: bool,
+    /// With the timestamp: a long-term signature (B-LTA), checkable after the certificate
+    /// expires.
+    pub long_term: bool,
     pub sign_as: SignAs,
     pub card_qr: bool,
     pub card_lang: CardLang,
@@ -353,6 +356,7 @@ impl App {
             key_ok: false,
             detached: false,
             timestamp: true,
+            long_term: true,
             sign_as: SignAs::Cms,
             card_qr: false,
             card_lang: CardLang::Ru,
@@ -909,6 +913,13 @@ impl App {
                         &mut self.timestamp,
                         tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
                     );
+                    ui.add_enabled(
+                        self.timestamp,
+                        egui::Checkbox::new(
+                            &mut self.long_term,
+                            tr("Keep it checkable for years: store NCA's revocation answers in the signature and add an archive timestamp (long-term signature)"),
+                        ),
+                    );
                 }
                 if self.sign_as == SignAs::Cms {
                     ui.add_enabled(
@@ -1301,6 +1312,7 @@ impl App {
         };
         let det = self.detached && !self.doc_is_cms;
         let tsa = self.timestamp.then(|| DEFAULT_TSA_URL.to_string());
+        let long_term = self.timestamp && self.long_term && self.sign_as != SignAs::Card;
         // online anyway for the timestamp: check that the key is not revoked too (p.4),
         // unless online checks are turned off
         let ocsp = (self.timestamp && self.ocsp).then(|| DEFAULT_OCSP_URL.to_string());
@@ -1320,7 +1332,7 @@ impl App {
                 let o = orig
                     .map(|p| std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display())))
                     .transpose()?;
-                match sign_as {
+                let r = match sign_as {
                     SignAs::Cms => e.sign(
                         &input,
                         &key,
@@ -1353,6 +1365,19 @@ impl App {
                         )
                     }
                 }
+                .map_err(|x| x.0)?;
+                if !long_term {
+                    return Ok(r);
+                }
+                // the document a detached .cms signs
+                let doc = if det { Some(&input) } else { o.as_ref() };
+                e.extend_new(
+                    r,
+                    doc.map(Vec::as_slice),
+                    crate::ltv::Level::Lta,
+                    DEFAULT_TSA_URL,
+                    DEFAULT_OCSP_URL,
+                )
                 .map_err(|x| x.0)
             })();
             Msg::Signed(doc, sign_as, r)
@@ -2244,6 +2269,12 @@ fn signer(ui: &mut egui::Ui, r: &VerifyReport, s: &SignerReport) {
                         row(tr("Email"), v.into());
                     }
                     row(tr("Time"), signed_at(s));
+                    if let Some(l) = s.level {
+                        row(tr("Long-term"), level_text(l).into());
+                    }
+                    for a in &s.archive_timestamps {
+                        row(tr("Archive timestamp"), archive_text(a));
+                    }
                     row(tr("Algorithm"), s.algorithm.clone().unwrap_or_default());
                     row(
                         tr("Certificate"),
@@ -2284,6 +2315,35 @@ fn signed_on(s: &SignerReport) -> String {
             &[&time::fmt(s.signing_time)],
         ),
     }
+}
+
+/// What a signature's ETSI level means, in plain words.
+fn level_text(l: &str) -> &'static str {
+    match l {
+        "B-B" => tr("B-B: no timestamp, checkable only while the key is valid"),
+        "B-T" => tr("B-T: with a timestamp"),
+        "B-LT" => tr("B-LT: NCA's revocation answers are kept in it"),
+        "B-LTA" => tr("B-LTA: revocation answers kept, and an archive timestamp"),
+        _ => "",
+    }
+}
+
+fn archive_text(a: &crate::report::ArchiveStamp) -> String {
+    let state = if !a.checked || !a.valid {
+        format!(" ({})", a.error.clone().unwrap_or_default())
+    } else if a.trusted {
+        " ✔".into()
+    } else {
+        tr(" (TSA not trusted)").into()
+    };
+    trf(
+        "{} · timestamp by {}{}",
+        &[
+            &time::fmt(a.time),
+            &a.tsa.clone().unwrap_or_default(),
+            &state,
+        ],
+    )
 }
 
 fn signed_at(s: &SignerReport) -> String {

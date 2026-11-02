@@ -14,6 +14,7 @@ pub mod i18n;
 #[cfg(feature = "gui")]
 pub mod icons;
 pub mod keys;
+pub mod ltv;
 pub mod ocsp;
 pub mod output;
 pub mod p12;
@@ -164,6 +165,73 @@ impl Engine {
         r.cms = pdf::card::build(&input, &self.trust)?;
         r.signer_count = input.signatures.len();
         Ok(r)
+    }
+
+    /// Makes the signatures in a .cms or a PDF long-term (B-LT, or B-LTA with an archive
+    /// timestamp); see [`sign::extend`] and [`pdf::extend`]. `original`: a detached .cms's
+    /// document.
+    pub fn extend(
+        &self,
+        input: &[u8],
+        original: Option<&[u8]>,
+        level: ltv::Level,
+        tsa_url: &str,
+        ocsp_url: &str,
+    ) -> Result<SignResult> {
+        let archive = level == ltv::Level::Lta;
+        if pdf::card::read(input).is_some() {
+            return Err(Error::new(i18n::tr(
+                "A document card's signatures already keep their revocation answers; a card cannot be extended.",
+            )));
+        }
+        if pdf::is_pdf(input) {
+            return pdf::extend(input, archive, tsa_url, ocsp_url, &self.trust);
+        }
+        sign::extend(
+            input,
+            original,
+            archive,
+            tsa_url,
+            ocsp_url,
+            &self.trust,
+            None,
+        )
+    }
+
+    /// [`Engine::extend`] after signing: in a .cms, only the new signature (`r.signature`);
+    /// in a PDF, every signature (they share its validation data). The result keeps `r`'s
+    /// warnings first.
+    pub fn extend_new(
+        &self,
+        r: SignResult,
+        original: Option<&[u8]>,
+        level: ltv::Level,
+        tsa_url: &str,
+        ocsp_url: &str,
+    ) -> Result<SignResult> {
+        let mut x = if pdf::is_pdf(&r.cms) {
+            self.extend(&r.cms, original, level, tsa_url, ocsp_url)?
+        } else {
+            sign::extend(
+                &r.cms,
+                original,
+                level == ltv::Level::Lta,
+                tsa_url,
+                ocsp_url,
+                &self.trust,
+                Some(&r.signature),
+            )?
+        };
+        let mut warnings = r.warnings;
+        warnings.append(&mut x.warnings);
+        Ok(SignResult {
+            warnings,
+            timestamped: r.timestamped,
+            cosigned: r.cosigned,
+            signer_count: r.signer_count,
+            signature: r.signature,
+            cms: x.cms,
+        })
     }
 
     /// The original document inside a document card: (file name, bytes). None if `data` is

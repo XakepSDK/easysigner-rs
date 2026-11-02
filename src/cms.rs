@@ -192,6 +192,40 @@ impl SignedData {
         ])
     }
 
+    /// The items of the `crls` field (CertificateList, or `[1]` other revocation info such as
+    /// an OCSP answer), each as encoded.
+    pub fn crl_items(&self) -> Vec<Vec<u8>> {
+        self.crls
+            .as_deref()
+            .and_then(|c| der::parse(c).ok())
+            .and_then(|t| t.children().ok())
+            .map(|k| k.iter().map(|i| i.raw.to_vec()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Adds `items` to the `crls` field, each once.
+    pub fn add_crl_items(&mut self, items: &[Vec<u8>]) {
+        let mut all = self.crl_items();
+        let before = all.len();
+        for i in items {
+            if !all.contains(i) {
+                all.push(i.clone());
+            }
+        }
+        if all.len() != before {
+            self.crls = Some(der::sorted_set(der::ctx(1), &mut all));
+        }
+    }
+
+    /// Adds certificates, each once.
+    pub fn add_certs(&mut self, certs: &[Vec<u8>]) {
+        for c in certs {
+            if !self.certs.contains(c) {
+                self.certs.push(c.clone());
+            }
+        }
+    }
+
     /// The certificate a signer names, from this file's certificates.
     pub fn signer_cert(&self, si: &SignerInfo) -> Option<Cert> {
         self.certificates().into_iter().find(|c| si.identifies(c))
@@ -320,6 +354,38 @@ impl SignerInfo {
             }
             None => std::borrow::Cow::Borrowed(content),
         }
+    }
+
+    /// The fields an archive-time-stamp-v3 covers (ETSI EN 319 122-1 5.5.3): version, sid,
+    /// digestAlgorithm, signedAttrs, signatureAlgorithm and signature, as encoded.
+    pub fn archive_fields(&self) -> Vec<u8> {
+        let mut b = der::cat(&[&self.version, &self.sid, &self.digest_alg_raw]);
+        if let Some(a) = &self.signed_attrs {
+            b.extend(a);
+        }
+        b.extend(&self.sig_alg_raw);
+        b.extend(der::octets(&self.signature));
+        b
+    }
+
+    /// Each unsigned attribute value with its attribute's type: (type as encoded, value as
+    /// encoded).
+    pub fn unsigned_values(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut out = Vec::new();
+        for a in &self.unsigned_attrs {
+            let Ok(k) = der::parse(a).and_then(|t| t.items(der::SEQUENCE)) else {
+                continue;
+            };
+            if k.len() < 2 {
+                continue;
+            }
+            if let Ok(vals) = k[1].children() {
+                for v in vals.iter() {
+                    out.push((k[0].raw.to_vec(), v.raw.to_vec()));
+                }
+            }
+        }
+        out
     }
 
     /// Adds an unsigned attribute (e.g. a signature timestamp).

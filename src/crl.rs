@@ -44,6 +44,8 @@ pub struct Crl {
     /// A critical extension kzsigner doesn't understand (e.g. a partial list's
     /// issuingDistributionPoint): the list can't be used.
     pub unknown_critical: Option<String>,
+    /// The list as read, to keep in a signature (long-term validation data).
+    pub raw: Vec<u8>,
     tbs: Vec<u8>,
     sig_alg: String,
     signature: Vec<u8>,
@@ -103,6 +105,7 @@ impl Crl {
             is_delta,
             freshest,
             unknown_critical,
+            raw: data.to_vec(),
             tbs: top[0].raw.to_vec(),
             sig_alg: crate::keys::alg_id(&top[1])?.0,
             signature: top[2].bits()?.to_vec(),
@@ -118,7 +121,7 @@ impl Crl {
     }
 
     /// Why this list can't be used for `c` (issued by `issuer`) at `now`; None when it can.
-    fn unusable(&self, c: &Cert, issuer: &Cert, now: i64) -> Option<String> {
+    pub fn unusable(&self, c: &Cert, issuer: &Cert, now: i64) -> Option<String> {
         let why = if !cert::names_equal(&self.issuer, &c.issuer)
             || !cert::names_equal(&self.issuer, &issuer.subject)
         {
@@ -280,6 +283,17 @@ fn first(urls: &[String], now: i64) -> Result<Arc<Crl>> {
     Err(last)
 }
 
+/// The current lists for `c`: the full list its distribution points name, a delta list when one
+/// could be read, and whether a delta list is due (named by the certificate or the full list).
+pub fn lists(c: &Cert, now: i64) -> Result<(Arc<Crl>, Option<Arc<Crl>>, bool)> {
+    let base = first(&urls(c), now)?;
+    let mut delta_urls = ext_uris(c, FRESHEST_CRL);
+    delta_urls.extend(base.freshest.iter().cloned());
+    let delta_due = !delta_urls.is_empty();
+    let delta = first(&delta_urls, now).ok();
+    Ok((base, delta, delta_due))
+}
+
 /// Checks `c` against the CRLs its distribution points name (and their delta lists).
 pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
     let Some(issuer) = issuer else {
@@ -290,19 +304,12 @@ pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
         );
     };
     let now = time::now_ms();
-    let base = match first(&urls(c), now) {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                false,
-                trf("ERROR: could not check the revocation list ({})", &[&e]),
-                "",
-            );
-        }
-    };
-    let mut delta_urls = ext_uris(c, FRESHEST_CRL);
-    delta_urls.extend(base.freshest.iter().cloned());
-    let delta_due = !delta_urls.is_empty();
-    let delta = first(&delta_urls, now).ok();
-    evaluate(&base, delta.as_deref(), delta_due, c, issuer, now)
+    match lists(c, now) {
+        Ok((base, delta, due)) => evaluate(&base, delta.as_deref(), due, c, issuer, now),
+        Err(e) => (
+            false,
+            trf("ERROR: could not check the revocation list ({})", &[&e]),
+            "",
+        ),
+    }
 }

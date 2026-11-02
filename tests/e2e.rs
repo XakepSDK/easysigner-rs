@@ -814,6 +814,264 @@ fn pdf_and_card() {
     assert!(t.fail.is_empty(), "failed: {:?}", t.fail);
 }
 
+#[test]
+fn long_term() {
+    let dir = std::env::temp_dir().join(format!("kzsigner-lt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = Run {
+        dir: dir.clone(),
+        pass: 0,
+        fail: vec![],
+    };
+    let carol = s(&fixtures().join("ocsp/carol.p12"));
+    let ocsp_ca = s(&fixtures().join("ocsp/ca.cer"));
+    // the fake TSA's own (self-signed) certificate, trusted for these checks
+    let tsa_key = kzsigner::p12::open(
+        &std::fs::read(fixtures().join("keys/tsa.p12")).unwrap(),
+        PASSWORD,
+        None,
+    )
+    .unwrap();
+    std::fs::write(t.path("tsa.cer"), &tsa_key.cert.der).unwrap();
+    let tsa = fake_tsa();
+    let ocsp = fake_ocsp(false);
+    let trusted = ["--trust", &ocsp_ca, "--trust", "tsa.cer"];
+    let with = |args: &[&str]| -> Vec<String> {
+        args.iter()
+            .chain(trusted.iter())
+            .map(|a| a.to_string())
+            .collect()
+    };
+    let kz = |t: &Run, args: &[&str]| -> String {
+        let a = with(args);
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        t.kz(&a)
+    };
+    std::fs::write(t.path("doc.txt"), "Договор №7\n").unwrap();
+    std::fs::copy(fixtures().join("pdf/plain.pdf"), t.path("plain.pdf")).unwrap();
+
+    // CAdES B-LTA in one go
+    let v = kz(
+        &t,
+        &[
+            "sign", "-k", &carol, "--tsa", &tsa, "--ocsp", &ocsp, "--level", "LTA", "doc.txt",
+        ],
+    );
+    t.check(
+        "LTA: signed",
+        v.contains("long-term with archive timestamp (B-LTA)"),
+    );
+    let v = kz(&t, &["verify", "doc.txt.cms"]);
+    t.check(
+        "LTA: verifies offline with the kept answer and an archive timestamp",
+        v.contains("VALID - all 1")
+            && v.contains("B-LTA")
+            && v.contains("answer kept in the signature")
+            && v.contains("Archived:")
+            && v.contains("verified, trusted TSA"),
+    );
+    let (_, json) = t.kz_env(
+        &[
+            "verify",
+            "doc.txt.cms",
+            "--json",
+            "--trust",
+            &ocsp_ca,
+            "--trust",
+            "tsa.cer",
+        ],
+        PASSWORD,
+    );
+    t.check(
+        "LTA: JSON level, archive timestamps, kept-ocsp",
+        json_ok(&json)
+            && json.contains("\"level\": \"B-LTA\"")
+            && json.contains("\"revocationSource\": \"kept-ocsp\"")
+            && json.contains("\"archiveTimestamps\": ["),
+    );
+    // the Order 500 attributes are there too
+    let sd = cms::SignedData::parse(&std::fs::read(t.path("doc.txt.cms")).unwrap()).unwrap();
+    let attrs: Vec<String> = sd.signers[0]
+        .unsigned()
+        .into_iter()
+        .map(|(o, _)| o)
+        .collect();
+    t.check(
+        "LTA: revocationValues, certValues, archive-time-stamp-v3",
+        [
+            kzsigner::ltv::ATTR_REVOCATION_VALUES,
+            kzsigner::ltv::ATTR_CERT_VALUES,
+            kzsigner::ltv::ATTR_ARCHIVE_TIMESTAMP_V3,
+        ]
+        .iter()
+        .all(|a| attrs.iter().any(|x| x == a)),
+    );
+
+    // renewing adds a second archive timestamp; both hold
+    let v = kz(
+        &t,
+        &["extend", "doc.txt.cms", "--tsa", &tsa, "--ocsp", &ocsp],
+    );
+    t.check("extend: renewed", v.contains("Extended to B-LTA"));
+    let v = kz(&t, &["verify", "doc.txt.cms"]);
+    t.check(
+        "extend: two archive timestamps, valid",
+        v.contains("VALID - all 1") && v.matches("Archived:").count() == 2,
+    );
+
+    // taking out kept data an archive timestamp covers is caught
+    let mut sd = cms::SignedData::parse(&std::fs::read(t.path("doc.txt.cms")).unwrap()).unwrap();
+    sd.certs.retain(|c| *c != tsa_key.cert.der);
+    std::fs::write(t.path("cut.cms"), sd.encode()).unwrap();
+    let v = kz(&t, &["verify", "cut.cms"]);
+    t.check(
+        "LTA: removed data is caught",
+        v.contains("NOT VALID") && v.contains("no longer in the signature"),
+    );
+    // and so is a changed signed attribute (the signature itself breaks too)
+    let v = kz(&t, &["verify", "doc.txt.cms.bak"]);
+    t.check(
+        "extend: the previous version is kept",
+        v.contains("VALID - all 1"),
+    );
+
+    // B-T to B-LT, and a detached signature's archive timestamp needs the document
+    kz(
+        &t,
+        &[
+            "sign",
+            "--detached",
+            "-k",
+            &carol,
+            "--tsa",
+            &tsa,
+            "-o",
+            "det.cms",
+            "doc.txt",
+        ],
+    );
+    let v = kz(&t, &["verify", "det.cms", "--data", "doc.txt"]);
+    t.check("B-T: reported", v.contains("B-T (timestamped)"));
+    let v = kz(&t, &["extend", "det.cms", "--level", "LT", "--ocsp", &ocsp]);
+    t.check("extend: B-T to B-LT", v.contains("Extended to B-LT"));
+    let v = kz(&t, &["extend", "det.cms", "--tsa", &tsa, "--ocsp", &ocsp]);
+    t.check(
+        "extend: a detached .cms needs its document for LTA",
+        v.contains("Provide the original file"),
+    );
+    kz(
+        &t,
+        &[
+            "extend", "det.cms", "--data", "doc.txt", "--tsa", &tsa, "--ocsp", &ocsp,
+        ],
+    );
+    let v = kz(&t, &["verify", "det.cms", "--data", "doc.txt"]);
+    t.check(
+        "extend: detached B-LTA",
+        v.contains("VALID - all 1") && v.contains("B-LTA"),
+    );
+    let v = kz(&t, &["verify", "det.cms"]);
+    t.check(
+        "LTA: without the document, the archive timestamp is not checked",
+        v.contains("the signed document is needed"),
+    );
+    let v = kz(&t, &["verify", "det.cms", "--data", "plain.pdf"]);
+    t.check("LTA: another document fails", v.contains("NOT VALID"));
+
+    // without a timestamp there is nothing to make long-term
+    kz(&t, &["sign", "-k", &carol, "-o", "bare.cms", "doc.txt"]);
+    let v = kz(&t, &["extend", "bare.cms", "--tsa", &tsa, "--ocsp", &ocsp]);
+    t.check(
+        "extend: needs a timestamp",
+        v.contains("has no timestamp") && v.contains("Error"),
+    );
+
+    // PAdES B-LTA: DSS and a document timestamp
+    let v = kz(
+        &t,
+        &[
+            "sign",
+            "--pdf",
+            "-k",
+            &carol,
+            "--tsa",
+            &tsa,
+            "--ocsp",
+            &ocsp,
+            "--level",
+            "LTA",
+            "plain.pdf",
+        ],
+    );
+    t.check("PAdES LTA: signed", v.contains("B-LTA"));
+    let v = kz(&t, &["verify", "plain-signed.pdf"]);
+    t.check(
+        "PAdES LTA: verifies with the DSS and the document timestamp",
+        v.contains("VALID - all 1")
+            && v.contains("Document timestamp:")
+            && v.contains("B-LTA")
+            && v.contains("answer kept in the signature"),
+    );
+    let doc =
+        lopdf::Document::load_mem(&std::fs::read(t.path("plain-signed.pdf")).unwrap()).unwrap();
+    let kept = kzsigner::pdf::dss(&doc);
+    t.check(
+        "PAdES LTA: the DSS holds certificates and the OCSP answer",
+        !kept.certs.is_empty() && !kept.ocsps.is_empty(),
+    );
+    let mut more = std::fs::read(t.path("plain-signed.pdf")).unwrap();
+    let i = more.windows(9).rposition(|w| w == b"Helvetica").unwrap();
+    more[i] = b'h';
+    std::fs::write(t.path("bad.pdf"), &more).unwrap();
+    t.check(
+        "PAdES LTA: a changed PDF fails",
+        kz(&t, &["verify", "bad.pdf"]).contains("NOT VALID"),
+    );
+    // a second signer, then renew: the earlier document timestamp stays valid
+    kz(
+        &t,
+        &[
+            "sign",
+            "--pdf",
+            "-k",
+            &carol,
+            "--tsa",
+            &tsa,
+            "plain-signed.pdf",
+        ],
+    );
+    kz(
+        &t,
+        &["extend", "plain-signed.pdf", "--tsa", &tsa, "--ocsp", &ocsp],
+    );
+    let v = kz(&t, &["verify", "plain-signed.pdf"]);
+    t.check(
+        "PAdES: co-signed and renewed, everything valid",
+        v.contains("VALID - all 2") && v.matches("Document timestamp:").count() == 2,
+    );
+    let (_, json) = t.kz_env(
+        &[
+            "verify",
+            "plain-signed.pdf",
+            "--json",
+            "--trust",
+            &ocsp_ca,
+            "--trust",
+            "tsa.cer",
+        ],
+        PASSWORD,
+    );
+    t.check(
+        "PAdES: JSON document timestamps",
+        json_ok(&json) && json.matches("\"authority\"").count() >= 2,
+    );
+
+    println!("\n{} passed, {} failed", t.pass, t.fail.len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(t.fail.is_empty(), "failed: {:?}", t.fail);
+}
+
 /// A small JSON syntax check (enough to know the output parses).
 fn json_ok(s: &str) -> bool {
     fn ws(b: &[u8], i: &mut usize) {

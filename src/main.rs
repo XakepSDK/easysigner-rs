@@ -26,6 +26,7 @@ Commands:
   sign     Sign FILE into FILE.cms (or inside a PDF, or into a document card).
   verify   Check every signature in a .cms, signed PDF or document card.
            Exit code 0 only if all are valid.
+  extend   Make the signatures in a .cms or signed PDF long-term (B-LT/B-LTA).
   extract  Write out the document embedded in a .cms or document card.
   info     Show the certificate inside a key file.
 Run 'kzsigner COMMAND --help' for a command's options.
@@ -34,7 +35,7 @@ Run 'kzsigner COMMAND --help' for a command's options.
 const HELP_SIGN: &str = "\
 Usage: kzsigner sign [-hV] [--detached | --pdf | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
-                     [--data=ORIGINAL] [--trust=CA.cer]... FILE
+                     [--level=LT|LTA] [--data=ORIGINAL] [--trust=CA.cer]... FILE
 Sign FILE into FILE.cms.
 If FILE is already a .cms, your signature is ADDED to it (co-signing).
       FILE                 Document, or .cms to co-sign.
@@ -58,6 +59,11 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
                            when OCSP gives no answer). A card always does, and keeps
                            the OCSP answer in the signature.
       --tsa[=URL]          Add a timestamp (default http://tsp.pki.gov.kz:80).
+      --level=LT|LTA       A long-term signature (ETSI B-LT): with a timestamp, and the
+                           CA certificates and revocation answers (OCSP, or the CAs'
+                           lists) needed to check it after the certificate expires,
+                           kept in it. LTA (B-LTA) adds an archive timestamp over all
+                           of it, which 'kzsigner extend' renews later. Not for --card.
       --data=ORIGINAL      Original document, to co-sign a detached .cms.
       --trust=CA.cer       Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
@@ -73,6 +79,24 @@ are valid. A card's signatures are checked against the document inside it, and w
                         pages, one code per line, in any order; needs --data.
       --ocsp[=URL]      Check revocation online (default http://ocsp.pki.gov.kz).
       --json            Machine-readable output.
+      --trust=CA.cer    Extra trusted CA certificate (repeatable), on top of NCA RK's.
+";
+
+const HELP_EXTEND: &str = "\
+Usage: kzsigner extend [-hV] [--level=LT|LTA] [--data=ORIGINAL] [-o=OUT] [--tsa[=URL]]
+                       [--ocsp[=URL]] [--trust=CA.cer]... FILE
+Make the signatures in a .cms or a signed PDF long-term, so that they can be checked after
+their certificates expire: the CA certificates and revocation answers (OCSP, or the CAs'
+revocation lists) go into the .cms (CAdES B-LT) or the PDF's document security store
+(PAdES B-LT). LTA (the default) also adds an archive timestamp over everything (CAdES
+archive-time-stamp-v3, or a PDF document timestamp); run it again before that timestamp's
+certificate expires to renew it. Signatures need a timestamp already (sign with --tsa).
+      FILE              .cms or signed PDF.
+      --level=LT|LTA    LTA (default) or LT.
+      --data=ORIGINAL   Original document of a detached .cms (needed for LTA).
+  -o, --out=OUT         Output file (default: FILE itself; the old one is kept as FILE.bak).
+      --tsa[=URL]       Timestamp server (default http://tsp.pki.gov.kz:80).
+      --ocsp[=URL]      OCSP server (default http://ocsp.pki.gov.kz).
       --trust=CA.cer    Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
 
@@ -148,6 +172,7 @@ struct Opts {
     json: bool,
     tsa: Option<String>,
     ocsp: Option<String>,
+    level: Option<kzsigner::ltv::Level>,
 }
 
 /// Parses a command's options; prints help or version and returns None when asked to.
@@ -172,26 +197,36 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
                 o.password = Some(p.value()?.string()?)
             }
             Long("alias") if allowed(&["sign", "info"]) => o.alias = Some(p.value()?.string()?),
-            Long("trust") if allowed(&["sign", "info", "verify", "gui"]) => {
+            Long("trust") if allowed(&["sign", "info", "verify", "gui", "extend"]) => {
                 o.trust.push(p.value()?.into())
             }
-            Short('o') | Long("out") if allowed(&["sign", "extract"]) => {
+            Short('o') | Long("out") if allowed(&["sign", "extract", "extend"]) => {
                 o.out = Some(p.value()?.into())
             }
-            Long("data") if allowed(&["sign", "verify"]) => o.data = Some(p.value()?.into()),
+            Long("data") if allowed(&["sign", "verify", "extend"]) => {
+                o.data = Some(p.value()?.into())
+            }
+            Long("level") if allowed(&["sign", "extend"]) => {
+                let v = p.value()?.string()?;
+                o.level = Some(kzsigner::ltv::Level::parse(&v).ok_or_else(|| {
+                    Fail::Usage(format!("unknown --level {v} (use LT or LTA)"), help)
+                })?)
+            }
             Long("detached") if allowed(&["sign"]) => o.detached = true,
             Long("pdf") if allowed(&["sign"]) => o.pdf = true,
             Long("card") if allowed(&["sign"]) => o.card = true,
             Long("qr") if allowed(&["sign", "verify"]) => o.qr = true,
             Long("lang") if allowed(&["sign"]) => o.lang = Some(p.value()?.string()?),
             Long("json") if allowed(&["verify"]) => o.json = true,
-            Long("tsa") if allowed(&["sign"]) => {
+            Long("tsa") if allowed(&["sign", "extend"]) => {
                 o.tsa = Some(optional_url(&mut p, kzsigner::DEFAULT_TSA_URL)?)
             }
-            Long("ocsp") if allowed(&["verify", "sign"]) => {
+            Long("ocsp") if allowed(&["verify", "sign", "extend"]) => {
                 o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?)
             }
-            Value(v) if o.file.is_none() && allowed(&["sign", "verify", "extract", "gui"]) => {
+            Value(v)
+                if o.file.is_none() && allowed(&["sign", "verify", "extract", "gui", "extend"]) =>
+            {
                 o.file = Some(v.into())
             }
             other => return Err(Fail::Usage(other.unexpected().to_string(), help)),
@@ -280,11 +315,22 @@ fn sign(o: Opts) -> R<u8> {
             )
         })?),
     };
+    if o.level.is_some() && o.card {
+        return Err(Fail::Usage(
+            "--level is not for --card (a card keeps its revocation answers already)".into(),
+            HELP_SIGN,
+        ));
+    }
     let input = read(&file)?;
     if o.pdf && !e.is_pdf(&input) {
         return Err(Fail::User(format!("{} is not a PDF file.", file.display())));
     }
     let original = o.data.as_deref().map(read).transpose()?;
+    // a long-term signature needs a timestamp
+    let tsa = o
+        .tsa
+        .clone()
+        .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
     let r = if o.card {
         let name = file
             .file_name()
@@ -300,17 +346,35 @@ fn sign(o: Opts) -> R<u8> {
             o.qr.then_some(true),
         )?
     } else if o.pdf {
-        e.sign_pdf(&input, &k, o.tsa.as_deref(), o.ocsp.as_deref())?
+        e.sign_pdf(&input, &k, tsa.as_deref(), o.ocsp.as_deref())?
     } else {
         e.sign(
             &input,
             &k,
             o.detached,
-            o.tsa.as_deref(),
+            tsa.as_deref(),
             o.ocsp.as_deref(),
             true,
             original.as_deref(),
         )?
+    };
+    let r = match (o.level, &tsa) {
+        (Some(level), Some(tsa)) => {
+            // a detached .cms's document is the input itself, or the original it co-signs
+            let doc = if o.detached {
+                Some(&input)
+            } else {
+                original.as_ref()
+            };
+            e.extend_new(
+                r,
+                doc.map(Vec::as_slice),
+                level,
+                tsa,
+                o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
+            )?
+        }
+        _ => r,
     };
     let out = o.out.clone().unwrap_or_else(|| {
         if r.cosigned {
@@ -348,13 +412,51 @@ fn sign(o: Opts) -> R<u8> {
         out.display(),
         r.signer_count,
         if r.signer_count == 1 { "" } else { "s" },
-        if r.timestamped {
-            ", with timestamp"
-        } else {
-            ""
+        match (o.level, r.timestamped) {
+            (Some(kzsigner::ltv::Level::Lta), _) => ", long-term with archive timestamp (B-LTA)",
+            (Some(kzsigner::ltv::Level::Lt), _) => ", long-term (B-LT)",
+            (None, true) => ", with timestamp",
+            (None, false) => "",
         }
     );
     if overwrite {
+        println!("Previous version saved as {}", bak.display());
+    }
+    Ok(0)
+}
+
+fn extend(o: Opts) -> R<u8> {
+    let file = need(&o.file, "parameter: 'FILE'", HELP_EXTEND)?.clone();
+    let e = engine(&o)?;
+    let input = read(&file)?;
+    let original = o.data.as_deref().map(read).transpose()?;
+    let level = o.level.unwrap_or(kzsigner::ltv::Level::Lta);
+    let r = e.extend(
+        &input,
+        original.as_deref(),
+        level,
+        o.tsa.as_deref().unwrap_or(kzsigner::DEFAULT_TSA_URL),
+        o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
+    )?;
+    let out = o.out.clone().unwrap_or_else(|| file.clone());
+    let bak = PathBuf::from(format!("{}.bak", file.display()));
+    if out == file {
+        std::fs::copy(&file, &bak)
+            .map_err(|err| Fail::User(format!("could not write {}: {err}", bak.display())))?;
+    }
+    write(&out, &r.cms)?;
+    for w in &r.warnings {
+        println!("Warning: {w}");
+    }
+    println!(
+        "Extended to {}: {}",
+        match level {
+            kzsigner::ltv::Level::Lt => "B-LT",
+            kzsigner::ltv::Level::Lta => "B-LTA",
+        },
+        out.display()
+    );
+    if out == file {
         println!("Previous version saved as {}", bak.display());
     }
     Ok(0)
@@ -520,6 +622,7 @@ fn run() -> R<u8> {
         "sign" => (HELP_SIGN, sign),
         "verify" => (HELP_VERIFY, verify),
         "extract" => (HELP_EXTRACT, extract),
+        "extend" => (HELP_EXTEND, extend),
         "info" => (HELP_INFO, info),
         "gui" => (HELP_GUI, gui),
         // "Open with kzsigner" on a file

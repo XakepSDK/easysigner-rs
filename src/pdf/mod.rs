@@ -10,21 +10,25 @@ pub mod qr;
 
 use std::collections::HashSet;
 
-use lopdf::{Dictionary, Document, IncrementalDocument, Object, ObjectId, StringFormat};
+use lopdf::{Dictionary, Document, IncrementalDocument, Object, ObjectId, Stream, StringFormat};
 
-use crate::cert;
-use crate::cms;
+use crate::cert::{self, Cert};
+use crate::cms::{self, SignedData};
 use crate::der;
 use crate::i18n::{tr, trf};
+use crate::ltv::{self, Kept};
 use crate::p12::Key;
-use crate::report::{SignResult, SignerReport, VerifyReport};
+use crate::report::{ArchiveStamp, SignResult, SignerReport, VerifyReport};
 use crate::trust::TrustStore;
+use crate::tsp;
 use crate::{Error, Result, gost, sign, time, verify};
 
 /// Room reserved in the PDF for the signature, in bytes. A CAdES signature with the signer's
 /// certificate is 2-4 KB; an NCA timestamp token adds 5-7 KB.
 const ROOM: usize = 8 * 1024;
 const ROOM_WITH_TIMESTAMP: usize = 24 * 1024;
+/// Room for a document timestamp: an NCA timestamp token is 5-7 KB.
+const ROOM_DOC_TIMESTAMP: usize = 16 * 1024;
 
 /// What the byte range holds until the real offsets are known: same width, unique in the file.
 const RANGE_PLACEHOLDER: i64 = 9_999_999_999;
@@ -65,12 +69,57 @@ pub fn sign(
             "This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.",
         )));
     }
-    let existing = signature_fields(&doc);
+    let existing = signature_fields(&doc).len();
     let mut r = SignResult {
         warnings: cert::key_warnings(&key.cert),
-        cosigned: !existing.is_empty(),
+        cosigned: existing > 0,
         ..Default::default()
     };
+    let room = if tsa_url.is_some() {
+        ROOM_WITH_TIMESTAMP
+    } else {
+        ROOM
+    };
+    let sig = Dictionary::from_iter([
+        ("Type", Object::from("Sig")),
+        ("Filter", "Adobe.PPKLite".into()),
+        ("SubFilter", "ETSI.CAdES.detached".into()),
+        ("M", Object::string_literal(pdf_date(time::now_ms()))),
+        ("Name", text_string(&signer_name(&key.cert))),
+    ]);
+    let data = add_field(input, doc, "Signature", sig, room, |signed| {
+        let mut sd = cms::sign_once_with(
+            signed,
+            cms::ID_DATA,
+            false,
+            &key.private_key,
+            &key.cert,
+            false,
+            &[],
+        )
+        .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+        if let Some(url) = tsa_url {
+            sign::timestamp(&mut sd, url, key, trust, &mut r)?;
+        }
+        Ok(sd.encode())
+    })?;
+    r.cms = data;
+    r.signer_count = existing + 1;
+    Ok(r)
+}
+
+/// Adds a signature field named `prefix`N to the PDF in an incremental update, with the
+/// signature dictionary `sig` and `room` bytes for its value, which `fill` makes from the bytes
+/// the value's byte range covers.
+fn add_field(
+    input: &[u8],
+    doc: Document,
+    prefix: &str,
+    mut sig: Dictionary,
+    room: usize,
+    fill: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let existing = signature_fields(&doc);
     let bad = |e: lopdf::Error| Error::new(trf("This PDF could not be read: {}", &[&e]));
 
     // everything changed or added, worked out on the original before writing
@@ -84,7 +133,7 @@ pub fn sign(
 
     let names = field_names(&doc);
     let mut k = existing.len() + 1;
-    while names.contains(&format!("Signature{k}").into_bytes()) {
+    while names.contains(&format!("{prefix}{k}").into_bytes()) {
         k += 1;
     }
     let first_page = *doc
@@ -96,7 +145,7 @@ pub fn sign(
         ("Type", Object::from("Annot")),
         ("Subtype", "Widget".into()),
         ("FT", "Sig".into()),
-        ("T", Object::string_literal(format!("Signature{k}"))),
+        ("T", Object::string_literal(format!("{prefix}{k}"))),
         ("F", 132.into()),
         (
             "Rect",
@@ -181,17 +230,7 @@ pub fn sign(
     }
 
     // the signature dictionary, with room for the byte range and the signature
-    let room = if tsa_url.is_some() {
-        ROOM_WITH_TIMESTAMP
-    } else {
-        ROOM
-    };
-    let sig = Dictionary::from_iter([
-        ("Type", Object::from("Sig")),
-        ("Filter", "Adobe.PPKLite".into()),
-        ("SubFilter", "ETSI.CAdES.detached".into()),
-        ("M", Object::string_literal(pdf_date(time::now_ms()))),
-        ("Name", text_string(&signer_name(&key.cert))),
+    sig.extend(&Dictionary::from_iter([
         (
             "ByteRange",
             Object::Array(vec![
@@ -205,7 +244,7 @@ pub fn sign(
             "Contents",
             Object::String(vec![0; room], StringFormat::Hexadecimal),
         ),
-    ]);
+    ]));
     out.push((sig_id, sig.into()));
 
     let mut inc = IncrementalDocument::create_from(input.to_vec(), doc);
@@ -230,20 +269,7 @@ pub fn sign(
     let ranges = format!("0 {a:010} {b:010} {:010}", data.len() - b);
     data[br..br + ranges.len()].copy_from_slice(ranges.as_bytes());
     let signed = [&data[..a], &data[b..]].concat();
-    let mut sd = cms::sign_once_with(
-        &signed,
-        cms::ID_DATA,
-        false,
-        &key.private_key,
-        &key.cert,
-        false,
-        &[],
-    )
-    .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
-    if let Some(url) = tsa_url {
-        sign::timestamp(&mut sd, url, key, trust, &mut r)?;
-    }
-    let der = sd.encode();
+    let der = fill(&signed)?;
     if der.len() > room {
         return Err(Error::new(format!(
             "internal: the signature ({} bytes) is larger than the room for it ({room})",
@@ -252,9 +278,201 @@ pub fn sign(
     }
     let hex = crate::hex(&der).to_uppercase();
     data[a + 1..a + 1 + hex.len()].copy_from_slice(hex.as_bytes());
-    r.cms = data;
-    r.signer_count = existing.len() + 1;
+    Ok(data)
+}
+
+/// Makes a PDF's signatures long-term (PAdES B-LT): the certificates and revocation answers
+/// needed to check them later go into the PDF's document security store (DSS), in an
+/// incremental update. With `archive` (B-LTA), a document timestamp then covers everything;
+/// adding one again later renews it.
+pub fn extend(
+    input: &[u8],
+    archive: bool,
+    tsa_url: &str,
+    ocsp_url: &str,
+    trust: &TrustStore,
+) -> Result<SignResult> {
+    let doc = open(input)?;
+    let mut r = SignResult::default();
+    let mut targets: Vec<(Cert, bool)> = Vec::new();
+    let mut key_alg = None;
+    for f in signature_fields(&doc) {
+        let Some(value) = field_value(&f) else {
+            continue;
+        };
+        if subfilter(&f).as_deref() == Some("ETSI.RFC3161") {
+            if let Some(c) = tsp::token_cert(value) {
+                targets.push((c, false));
+            }
+            continue;
+        }
+        let Some(sd) = SignedData::try_parse(value) else {
+            continue;
+        };
+        for si in &sd.signers {
+            let Some(c) = sd.signer_cert(si) else {
+                continue;
+            };
+            r.signer_count += 1;
+            key_alg.get_or_insert_with(|| c.key_alg());
+            let tsas = ltv::tsa_certs(si);
+            if tsas.is_empty() {
+                r.warnings.push(trf(
+                    "The signature of {} has no timestamp: a long-term signature needs one, so it stays checkable only while the certificate is valid.",
+                    &[&signer_name(&c)],
+                ));
+            }
+            targets.push((c, true));
+            targets.extend(tsas.into_iter().map(|t| (t, false)));
+        }
+    }
+    if r.signer_count == 0 {
+        return Err(Error::new(tr("This PDF has no signatures.")));
+    }
+    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms())?;
+    r.warnings.extend(g.warnings);
+    let mut out = add_dss(input, &g.kept)?;
+    if archive {
+        let doc = open(&out)?;
+        let sig = Dictionary::from_iter([
+            ("Type", Object::from("DocTimeStamp")),
+            ("Filter", "Adobe.PPKLite".into()),
+            ("SubFilter", "ETSI.RFC3161".into()),
+        ]);
+        let (alg, policy) = tsp::hash_and_policy_for(key_alg.as_deref().unwrap_or_default());
+        out = add_field(&out, doc, "Timestamp", sig, ROOM_DOC_TIMESTAMP, |signed| {
+            tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy)
+        })?;
+        r.timestamped = true;
+    }
+    r.cms = out;
     Ok(r)
+}
+
+/// The validation data in a PDF's document security store.
+pub fn dss(doc: &Document) -> Kept {
+    let mut k = Kept::default();
+    let Some(d) = doc
+        .catalog()
+        .ok()
+        .and_then(|c| c.get(b"DSS").ok())
+        .and_then(|o| deref(doc, o))
+        .and_then(|o| o.as_dict().ok())
+    else {
+        return k;
+    };
+    for (key, list) in [
+        (&b"Certs"[..], &mut k.certs),
+        (b"OCSPs", &mut k.ocsps),
+        (b"CRLs", &mut k.crls),
+    ] {
+        let Some(a) = d
+            .get(key)
+            .ok()
+            .and_then(|o| deref(doc, o))
+            .and_then(|o| o.as_array().ok())
+        else {
+            continue;
+        };
+        for o in a {
+            if let Some(Ok(st)) = deref(doc, o).map(Object::as_stream) {
+                let data = if st.dict.has(b"Filter") {
+                    st.decompressed_content().ok()
+                } else {
+                    Some(st.content.clone())
+                };
+                if let Some(data) = data
+                    && !list.contains(&data)
+                {
+                    list.push(data);
+                }
+            }
+        }
+    }
+    k
+}
+
+/// Adds the validation data in `kept` that the PDF's DSS lacks, in an incremental update (the
+/// PDF as it was when nothing is new).
+fn add_dss(input: &[u8], kept: &Kept) -> Result<Vec<u8>> {
+    let doc = open(input)?;
+    let have = dss(&doc);
+    let bad = |e: lopdf::Error| Error::new(trf("This PDF could not be read: {}", &[&e]));
+    let mut next = doc.max_id;
+    let mut alloc = || {
+        next += 1;
+        (next, 0u16)
+    };
+    let root_id = doc
+        .trailer
+        .get(b"Root")
+        .and_then(Object::as_reference)
+        .map_err(bad)?;
+    let mut catalog = doc.catalog().map_err(bad)?.clone();
+    let old = catalog
+        .get(b"DSS")
+        .ok()
+        .and_then(|o| deref(&doc, o))
+        .and_then(|o| o.as_dict().ok())
+        .cloned()
+        .unwrap_or_default();
+    let mut dss = old.clone();
+    let mut out: Vec<(ObjectId, Object)> = Vec::new();
+    for (key, items, had) in [
+        ("Certs", &kept.certs, &have.certs),
+        ("OCSPs", &kept.ocsps, &have.ocsps),
+        ("CRLs", &kept.crls, &have.crls),
+    ] {
+        let mut arr: Vec<Object> = old
+            .get(key.as_bytes())
+            .ok()
+            .and_then(|o| deref(&doc, o))
+            .and_then(|o| o.as_array().ok())
+            .cloned()
+            .unwrap_or_default();
+        let before = arr.len();
+        for it in items.iter().filter(|it| !had.contains(it)) {
+            let id = alloc();
+            out.push((id, Stream::new(Dictionary::new(), it.clone()).into()));
+            arr.push(id.into());
+        }
+        if arr.len() != before {
+            dss.set(key, Object::Array(arr));
+        }
+    }
+    if out.is_empty() {
+        return Ok(input.to_vec());
+    }
+    let dss_id = alloc();
+    dss.set("Type", "DSS");
+    out.push((dss_id, dss.into()));
+    catalog.set("DSS", dss_id);
+    out.push((root_id, catalog.into()));
+    let mut inc = IncrementalDocument::create_from(input.to_vec(), doc);
+    for (id, o) in out {
+        inc.new_document.objects.insert(id, o);
+    }
+    inc.new_document.max_id = next;
+    let mut data = Vec::new();
+    inc.save_to(&mut data)
+        .map_err(|e| Error::new(format!("could not write the PDF: {e}")))?;
+    Ok(data)
+}
+
+fn subfilter(f: &SigField) -> Option<String> {
+    f.v.get(b"SubFilter")
+        .and_then(Object::as_name)
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .ok()
+}
+
+/// A signature field's value (CMS or timestamp token), without the zero padding after it.
+fn field_value(f: &SigField) -> Option<&[u8]> {
+    let contents = f.v.get(b"Contents").and_then(Object::as_str).ok()?;
+    Some(match der::read(contents) {
+        Ok((t, _)) => t.raw,
+        Err(_) => contents,
+    })
 }
 
 /// The certification signature's permission level (/Perms /DocMDP: 1 = no changes, 2 = forms
@@ -477,7 +695,7 @@ fn revisions(data: &[u8]) -> Vec<usize> {
     out
 }
 
-/// Checks every signature in a PDF's signature fields.
+/// Checks every signature in a PDF's signature fields, and its document timestamps.
 pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result<VerifyReport> {
     let doc = open(data)?;
     let mut rep = VerifyReport {
@@ -487,8 +705,15 @@ pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result
         content_sha256: Some(crate::hex(&gost::sha256(data))),
         ..Default::default()
     };
+    let kept = dss(&doc);
+    let mut signers: Vec<(SignerReport, usize)> = Vec::new();
+    let mut stamps: Vec<(ArchiveStamp, usize)> = Vec::new();
     for f in signature_fields(&doc) {
-        let mut s = check_field(data, &doc, &f, trust, ocsp_url);
+        if subfilter(&f).as_deref() == Some("ETSI.RFC3161") {
+            stamps.push(check_doc_timestamp(data, &doc, &f, trust));
+            continue;
+        }
+        let (mut s, end) = check_field(data, &doc, &f, trust, ocsp_url, &kept);
         s.kind = Some(trf("PDF signature \"{}\"", &[&text_from(&f.name)]));
         if s.signing_time.is_none() {
             s.signing_time =
@@ -497,12 +722,42 @@ pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result
                     .ok()
                     .and_then(|m| parse_pdf_date(&text_from(m)));
         }
-        rep.signers.push(s);
+        signers.push((s, end));
     }
+    stamps.sort_by_key(|(_, end)| *end);
+    // a document timestamp added after a signature covers it (PAdES B-LTA)
+    for (s, end) in &mut signers {
+        let covering: Vec<ArchiveStamp> = stamps
+            .iter()
+            .filter(|(_, e)| e > end)
+            .map(|(a, _)| a.clone())
+            .collect();
+        if s.level == Some("B-LT") && covering.iter().any(|a| a.valid) {
+            s.level = Some("B-LTA");
+        }
+        s.archive_timestamps.extend(covering);
+    }
+    rep.signers = signers.into_iter().map(|(s, _)| s).collect();
+    rep.document_timestamps = stamps.into_iter().map(|(a, _)| a).collect();
     for (k, s) in rep.signers.iter_mut().enumerate() {
         s.index = k + 1;
     }
-    rep.valid = !rep.signers.is_empty() && rep.signers.iter().all(|s| s.valid);
+    for a in &rep.document_timestamps {
+        if !a.valid {
+            rep.warnings.push(trf(
+                "A document timestamp is not valid: {}",
+                &[&a.error.clone().unwrap_or_default()],
+            ));
+        } else if !a.trusted {
+            rep.warnings.push(trf(
+                "The document timestamp authority '{}' is not a trusted NCA RK TSA.",
+                &[&a.tsa.clone().unwrap_or_default()],
+            ));
+        }
+    }
+    rep.valid = !rep.signers.is_empty()
+        && rep.signers.iter().all(|s| s.valid)
+        && rep.document_timestamps.iter().all(|a| a.valid);
     if rep.signers.is_empty() {
         rep.warnings.push(tr("This PDF has no signatures.").into());
     }
@@ -516,92 +771,165 @@ fn failed(m: &str) -> SignerReport {
     }
 }
 
+/// What a signature field's byte range covers.
+struct Covered<'a> {
+    /// The field's value: a CMS, or a timestamp token.
+    value: &'a [u8],
+    /// The bytes the range covers.
+    signed: Vec<u8>,
+    /// Where the range ends.
+    end: usize,
+    /// What the range leaves out is more than the field's own value.
+    gap_bad: bool,
+    /// For people: what the range covers, when it holds.
+    note: Option<String>,
+    /// What was changed after the range, beyond adding signatures.
+    changes: Vec<String>,
+}
+
+fn covered<'a>(
+    data: &[u8],
+    doc: &Document,
+    f: &'a SigField,
+) -> std::result::Result<Covered<'a>, String> {
+    let value = field_value(f).ok_or_else(|| tr("The signature field has no signature value."))?;
+    let br: Vec<i64> =
+        f.v.get(b"ByteRange")
+            .and_then(Object::as_array)
+            .map(|a| a.iter().filter_map(|x| x.as_i64().ok()).collect())
+            .unwrap_or_default();
+    let r = (br.len() == 4 && br.iter().all(|&x| x >= 0))
+        .then(|| br.iter().map(|&x| x as usize).collect::<Vec<_>>())
+        .filter(|r| {
+            r[0] == 0 && r[1] < r[2] && r[2].checked_add(r[3]).is_some_and(|e| e <= data.len())
+        })
+        .ok_or_else(|| tr("The signature's byte range is damaged."))?;
+    let signed = [&data[..r[1]], &data[r[2]..r[2] + r[3]]].concat();
+    // what the range leaves out must be exactly the signature value, <hex>
+    let gap = &data[r[1]..r[2]];
+    let gap_bad = !(gap.len() >= 2
+        && gap[0] == b'<'
+        && gap[gap.len() - 1] == b'>'
+        && gap[1..gap.len() - 1].iter().all(u8::is_ascii_hexdigit));
+    let end = r[2] + r[3];
+    let mut c = Covered {
+        value,
+        signed,
+        end,
+        gap_bad,
+        note: None,
+        changes: vec![],
+    };
+    if end == data.len() {
+        c.note = Some(tr("Covers the whole file.").into());
+        return Ok(c);
+    }
+    let later = revisions(&data[end..]).len().max(1);
+    c.changes = match Document::load_mem(&data[..end]) {
+        Ok(old) => changes_after(&old, doc),
+        Err(_) => vec![tr("the signed part of the file cannot be read as a PDF").into()],
+    };
+    if c.changes.is_empty() {
+        c.note = Some(trf(
+            "Covers the file as it was when signed; it was updated {} time(s) after that, only to add signatures, timestamps or validation data.",
+            &[&later],
+        ));
+    }
+    Ok(c)
+}
+
+/// Checks a signature field; returns the report and where its byte range ends.
 fn check_field(
     data: &[u8],
     doc: &Document,
     f: &SigField,
     trust: &TrustStore,
     ocsp_url: Option<&str>,
-) -> SignerReport {
-    let sub =
-        f.v.get(b"SubFilter")
-            .and_then(Object::as_name)
-            .map(|n| String::from_utf8_lossy(n).into_owned())
-            .ok();
+    kept: &Kept,
+) -> (SignerReport, usize) {
+    let sub = subfilter(f);
     if !matches!(
         sub.as_deref(),
         Some("ETSI.CAdES.detached" | "adbe.pkcs7.detached")
     ) {
-        return failed(&trf(
+        let s = failed(&trf(
             "Unsupported PDF signature type: {}",
             &[&sub.unwrap_or_else(|| "-".into())],
         ));
+        return (s, 0);
     }
-    let Ok(contents) = f.v.get(b"Contents").and_then(Object::as_str) else {
-        return failed(tr("The signature field has no signature value."));
+    let c = match covered(data, doc, f) {
+        Ok(c) => c,
+        Err(e) => return (failed(&e), 0),
     };
-    let br: Vec<i64> =
-        f.v.get(b"ByteRange")
-            .and_then(Object::as_array)
-            .map(|a| a.iter().filter_map(|x| x.as_i64().ok()).collect())
-            .unwrap_or_default();
-    let ranges = (br.len() == 4 && br.iter().all(|&x| x >= 0))
-        .then(|| br.iter().map(|&x| x as usize).collect::<Vec<_>>())
-        .filter(|r| {
-            r[0] == 0 && r[1] < r[2] && r[2].checked_add(r[3]).is_some_and(|e| e <= data.len())
-        });
-    let Some(r) = ranges else {
-        return failed(tr("The signature's byte range is damaged."));
-    };
-    // the value is zero-padded after the DER
-    let cms = match der::read(contents) {
-        Ok((t, _)) => t.raw,
-        Err(_) => contents,
-    };
-    let signed = [&data[..r[1]], &data[r[2]..r[2] + r[3]]].concat();
-    let mut s = match verify::verify(cms, Some(&signed), trust, ocsp_url) {
+    let mut s = match verify::verify_kept(c.value, Some(&c.signed), trust, ocsp_url, kept) {
         Ok(rep) if rep.signers.len() == 1 => rep.signers.into_iter().next().unwrap_or_default(),
         Ok(_) => failed(tr("A PDF signature must hold exactly one signer.")),
         Err(e) => failed(&e.0),
     };
-    // what the range leaves out must be exactly the signature value, <hex>
-    let gap = &data[r[1]..r[2]];
-    let gap_ok = gap.len() >= 2
-        && gap[0] == b'<'
-        && gap[gap.len() - 1] == b'>'
-        && gap[1..gap.len() - 1].iter().all(u8::is_ascii_hexdigit);
-    if !gap_ok {
+    if c.gap_bad {
         s.valid = false;
         s.signature_ok = false;
         s.signature_error =
             Some(tr("The signature leaves out more of the file than its own value.").into());
     }
-    let end = r[2] + r[3];
-    if end == data.len() {
-        s.notes.push(tr("Covers the whole file.").into());
-        return s;
-    }
-    let later = revisions(&data[end..]).len().max(1);
-    let changes = match Document::load_mem(&data[..end]) {
-        Ok(old) => changes_after(&old, doc),
-        Err(_) => vec![tr("the signed part of the file cannot be read as a PDF").into()],
-    };
-    if changes.is_empty() {
-        s.notes.push(trf(
-            "Covers the file as it was when signed; it was updated {} time(s) after that, only to add signatures.",
-            &[&later],
-        ));
-    } else {
+    if !c.changes.is_empty() {
         // an incremental update can change what the pages show while the signature over the
         // earlier bytes stays intact: then the signature does not vouch for the document
         s.valid = false;
         s.signature_ok = false;
         s.signature_error = Some(trf(
             "The PDF was changed after this signature, not only by adding signatures, so what it shows now is not what was signed: {}",
-            &[&changes.join("; ")],
+            &[&c.changes.join("; ")],
         ));
     }
-    s
+    s.notes.extend(c.note);
+    (s, c.end)
+}
+
+/// Checks a document timestamp (ETSI.RFC3161); returns it and where its byte range ends.
+fn check_doc_timestamp(
+    data: &[u8],
+    doc: &Document,
+    f: &SigField,
+    trust: &TrustStore,
+) -> (ArchiveStamp, usize) {
+    let bad = |e: String| ArchiveStamp {
+        checked: true,
+        error: Some(e),
+        ..Default::default()
+    };
+    let c = match covered(data, doc, f) {
+        Ok(c) => c,
+        Err(e) => return (bad(e), 0),
+    };
+    let mut r = SignerReport::default();
+    if let Err(e) = tsp::check_token(&mut r, &c.signed, c.value, trust) {
+        return (bad(trf("unreadable timestamp: {}", &[&e.0])), c.end);
+    }
+    let mut a = ArchiveStamp {
+        checked: true,
+        valid: r.timestamp_ok == Some(true),
+        trusted: r.timestamp_trusted == Some(true),
+        time: r.timestamp_time,
+        tsa: r.timestamp_info,
+        error: None,
+    };
+    if !a.valid {
+        a.error = Some(
+            tr("the timestamp does not match the document (it or the document was changed)").into(),
+        );
+    } else if c.gap_bad {
+        a.valid = false;
+        a.error = Some(tr("The signature leaves out more of the file than its own value.").into());
+    } else if !c.changes.is_empty() {
+        a.valid = false;
+        a.error = Some(trf(
+            "the PDF was changed after it, not only by adding signatures: {}",
+            &[&c.changes.join("; ")],
+        ));
+    }
+    (a, c.end)
 }
 
 /// What a later revision changed beyond adding signatures (ETSI EN 319 142 / ISO 32000 allow
@@ -624,11 +952,13 @@ fn changes_after(old: &Document, new: &Document) -> Vec<String> {
             .and_then(|o| o.as_reference().ok())
     };
     let (acroform, metadata) = (reference(b"AcroForm"), reference(b"Metadata"));
+    // the document security store holds validation data, which later updates add to
+    let dss = reference(b"DSS");
     for (id, now) in &new.objects {
         let Some(before) = old.objects.get(id) else {
             continue;
         };
-        if before == now || Some(*id) == info || Some(*id) == metadata {
+        if before == now || Some(*id) == info || Some(*id) == metadata || Some(*id) == dss {
             continue;
         }
         let structural = |o: &Object| {

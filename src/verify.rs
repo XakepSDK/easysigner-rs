@@ -5,6 +5,7 @@ use crate::cms::{self, SignedData, SignerInfo};
 use crate::der;
 use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
+use crate::ltv::{self, Kept};
 use crate::report::{SignerReport, VerifyReport};
 use crate::trust::TrustStore;
 use crate::{Error, Result, gost, ocsp, time, tsp};
@@ -87,7 +88,18 @@ pub fn verify(
     trust: &TrustStore,
     ocsp_url: Option<&str>,
 ) -> Result<VerifyReport> {
-    verify_with(raw, detached_original, trust, ocsp_url, false)
+    verify_with(raw, detached_original, trust, ocsp_url, false, None)
+}
+
+/// [`verify`], with validation data kept outside the CMS (a PDF's DSS).
+pub fn verify_kept(
+    raw: &[u8],
+    detached_original: Option<&[u8]>,
+    trust: &TrustStore,
+    ocsp_url: Option<&str>,
+    kept: &Kept,
+) -> Result<VerifyReport> {
+    verify_with(raw, detached_original, trust, ocsp_url, false, Some(kept))
 }
 
 /// [`verify`]; `signature_only`: without the document, still check each signature over its
@@ -99,6 +111,7 @@ pub fn verify_with(
     trust: &TrustStore,
     ocsp_url: Option<&str>,
     signature_only: bool,
+    kept: Option<&Kept>,
 ) -> Result<VerifyReport> {
     let d = SignedData::parse(raw)?;
     let mut rep = VerifyReport::default();
@@ -133,6 +146,7 @@ pub fn verify_with(
             trust,
             ocsp_url,
             signature_only,
+            kept,
         ));
     }
     // by time: trusted timestamp if any, else the signer's clock; unknown times last
@@ -159,6 +173,7 @@ fn check_one(
     trust: &TrustStore,
     ocsp_url: Option<&str>,
     signature_only: bool,
+    extra: Option<&Kept>,
 ) -> SignerReport {
     let mut sr = SignerReport {
         signing_time: si.signing_time(),
@@ -214,13 +229,83 @@ fn check_one(
         sr.ocsp_status = Some(status);
         sr.ocsp_answer = Some(answer);
     }
+
+    // the validation data kept in the signature (B-LT): what it says counts when it was made
+    // at the signing time, and stands in for an online check that is off or got no answer
+    let mut kept = Kept::from_cms(d, Some(si));
+    if let Some(e) = extra {
+        kept.extend(e);
+    }
+    let kept_status = chain
+        .issuer
+        .as_ref()
+        .and_then(|i| kept.status(&c, i, trust, at));
+    if let Some(k) = &kept_status
+        && sr.ocsp_answer.is_none_or(str::is_empty)
+    {
+        sr.ocsp_status = Some(trf("{} (answer kept in the signature)", &[&k.status]));
+        sr.ocsp_answer = Some(k.answer);
+        sr.revocation_source = Some(if k.source == "ocsp" {
+            "kept-ocsp"
+        } else {
+            "kept-crl"
+        });
+        if !k.fresh {
+            sr.warnings
+                .push(tr("The kept OCSP answer is older than the signature's timestamp.").into());
+        }
+        ocsp_good = if ocsp_url.is_some() {
+            k.answer == "good" && k.fresh && trusted_time
+        } else {
+            k.answer != "revoked"
+        };
+    }
+
+    sr.archive_timestamps = ltv::check_archives(d, si, content, trust);
+    let mut archives_ok = true;
+    for a in &sr.archive_timestamps {
+        let tsa = a.tsa.clone().unwrap_or_default();
+        if !a.checked {
+            sr.notes.push(trf(
+                "Archive timestamp of {}: {}",
+                &[&time::fmt(a.time), &a.error.clone().unwrap_or_default()],
+            ));
+        } else if !a.valid {
+            archives_ok = false;
+            sr.warnings.push(trf(
+                "An archive timestamp is not valid: {}",
+                &[&a.error.clone().unwrap_or_default()],
+            ));
+        } else if !a.trusted {
+            sr.warnings.push(trf(
+                "The archive timestamp authority '{}' is not a trusted NCA RK TSA.",
+                &[&tsa],
+            ));
+        }
+    }
+    sr.level = Some(level(&sr, kept_status.is_some()));
     sr.valid = sr.signature_ok
         && sr.chain_ok
         && sr.usage_error.is_none()
         && valid_at
         && sr.timestamp_ok != Some(false)
-        && ocsp_good;
+        && ocsp_good
+        && archives_ok;
     sr
+}
+
+/// The ETSI baseline level a signature reaches: a signature timestamp makes it B-T, kept
+/// revocation data for the signer's certificate B-LT, and archive timestamps B-LTA.
+pub fn level(sr: &SignerReport, kept_revocation: bool) -> &'static str {
+    if sr.timestamp_time.is_none() {
+        "B-B"
+    } else if !kept_revocation {
+        "B-T"
+    } else if sr.archive_timestamps.is_empty() {
+        "B-LT"
+    } else {
+        "B-LTA"
+    }
 }
 
 /// Whether `c` is revoked, by OCSP at `url`, or, when OCSP gives no answer, by the CA's current

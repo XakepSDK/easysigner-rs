@@ -108,17 +108,37 @@ fn hash_and_policy(scheme: Option<Scheme>) -> (&'static str, &'static str) {
     }
 }
 
+/// The hash and NCA TSA policy for timestamps over the work of a key of type `key_alg` (a
+/// certificate's key algorithm), as [`hash_and_policy`] picks them for a signing key.
+pub fn hash_and_policy_for(key_alg: &str) -> (&'static str, &'static str) {
+    if key_alg == gost::KEY_GOST2004 {
+        (gost::H_GOST34311, "1.2.398.3.3.2.6.1")
+    } else if gost::is_gost(key_alg) {
+        (gost::H_GOST2015_512, "1.2.398.3.3.2.6.4")
+    } else {
+        (gost::H_SHA256, "1.2.398.3.3.2.6.2")
+    }
+}
+
 /// Adds a timestamp from the TSA at `url` to the single signer of `d`.
 pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()> {
     let si = &mut d.signers[0];
     let (hash_oid, policy) = hash_and_policy(scheme);
+    let token = request(url, hash_oid, &gost::hash(hash_oid, &si.signature)?, policy)?;
+    si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, &token);
+    Ok(())
+}
+
+/// A checked timestamp token (ContentInfo) from the TSA at `url` over `hash` (made with
+/// `hash_oid`), under `policy`.
+pub fn request(url: &str, hash_oid: &str, hash: &[u8], policy: &str) -> Result<Vec<u8>> {
     let mut nonce = [0u8; 8];
     crate::random(&mut nonce)?;
     // a positive INTEGER with no leading zero byte, so it reads back exactly as sent
     nonce[0] = (nonce[0] & 0x7f) | 0x40;
     let req = Request {
         hash_oid: hash_oid.into(),
-        hash: gost::hash(hash_oid, &si.signature)?,
+        hash: hash.to_vec(),
         policy: Some(policy.into()),
         nonce: Some(nonce.to_vec()),
         cert_req: true,
@@ -136,8 +156,13 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
             &[&e.0],
         ))
     })?;
-    si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, token);
-    Ok(())
+    Ok(token.to_vec())
+}
+
+/// The certificate that signed a timestamp token, when the token carries it.
+pub fn token_cert(token: &[u8]) -> Option<Cert> {
+    let sd = SignedData::parse_inner(token).ok()?;
+    sd.signers.first().and_then(|s| sd.signer_cert(s))
 }
 
 /// The token (a ContentInfo, as encoded) from a TimeStampResp.

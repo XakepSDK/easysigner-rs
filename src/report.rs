@@ -44,6 +44,12 @@ pub struct SignerReport {
     pub revocation_source: Option<&'static str>,
     pub warnings: Vec<String>,
     pub cert_der: Option<Vec<u8>>,
+    /// The ETSI baseline level the signature reaches: "B-B", "B-T" (signature timestamp),
+    /// "B-LT" (with the revocation data to check it later), "B-LTA" (and archive timestamps).
+    pub level: Option<&'static str>,
+    /// The signature's archive timestamps (CAdES archive-time-stamp-v3, or PDF document
+    /// timestamps that cover it).
+    pub archive_timestamps: Vec<ArchiveStamp>,
     /// What kind of signature this is, when not a plain .cms signer (e.g. a PDF signature).
     pub kind: Option<String>,
     /// Facts about the signature that are not problems (e.g. what part of a PDF it covers).
@@ -72,6 +78,21 @@ impl SignerReport {
     }
 }
 
+/// An archive timestamp (CAdES archive-time-stamp-v3, or a PDF document timestamp).
+#[derive(Clone, Debug, Default)]
+pub struct ArchiveStamp {
+    /// Whether it could be checked (a detached signature's needs the document).
+    pub checked: bool,
+    /// Its signature and message imprint hold.
+    pub valid: bool,
+    /// From a trusted TSA.
+    pub trusted: bool,
+    pub time: Option<i64>,
+    pub tsa: Option<String>,
+    /// Why it is not valid, or why it was not checked.
+    pub error: Option<String>,
+}
+
 /// Result of verifying a .cms: the document and every signature in it.
 #[derive(Clone, Debug, Default)]
 pub struct VerifyReport {
@@ -85,6 +106,8 @@ pub struct VerifyReport {
     pub content_sha256: Option<String>,
     pub detached_provided: bool,
     pub signers: Vec<SignerReport>,
+    /// A PDF's document timestamps (ETSI.RFC3161), oldest first.
+    pub document_timestamps: Vec<ArchiveStamp>,
     pub warnings: Vec<String>,
 }
 
@@ -96,5 +119,7 @@ pub struct SignResult {
     pub cosigned: bool,
     pub signer_count: usize,
     pub timestamped: bool,
+    /// The new signature's value, which tells it apart from the others in a .cms.
+    pub signature: Vec<u8>,
     pub warnings: Vec<String>,
 }

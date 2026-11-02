@@ -73,6 +73,19 @@ pub fn wrap_basic(basic: &[u8]) -> Vec<u8> {
     ])
 }
 
+/// The BasicOCSPResponse inside a successful OCSPResponse.
+pub fn basic_of(raw: &[u8]) -> Option<Vec<u8>> {
+    let resp = der::parse(raw).ok()?.items(der::SEQUENCE).ok()?;
+    if resp.first()?.small_int().ok()? != 0 {
+        return None;
+    }
+    let rb = resp.get(1)?.inner().ok()?.items(der::SEQUENCE).ok()?;
+    if rb.first()?.oid().ok()? != BASIC {
+        return None;
+    }
+    rb.get(1)?.octets().ok()
+}
+
 /// The hash NCALayer uses in OCSP certificate IDs for this issuer's key type.
 fn cert_id_hash(issuer: &Cert) -> &'static str {
     let k = issuer.key_alg();
@@ -116,13 +129,20 @@ pub fn fetch(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<A
     ]);
     let req = der::seq(&[&tbs]);
     let body = http::post(url, "application/ocsp-request", &req, "OCSP server")?;
-    evaluate(&body, c, issuer, Some(&nonce), trust)
+    evaluate(&body, c, issuer, Some(&nonce), trust, time::now_ms())
 }
 
 /// Checks an OCSP response kept inside a signature (no nonce, and its age is judged by whoever
-/// reads it).
-pub fn read_embedded(raw: &[u8], c: &Cert, issuer: &Cert, trust: &TrustStore) -> Result<Answer> {
-    evaluate(raw, c, issuer, None, trust)
+/// reads it). A delegated responder's certificate is checked at `at`, the time the signature
+/// is checked at.
+pub fn read_embedded(
+    raw: &[u8],
+    c: &Cert,
+    issuer: &Cert,
+    trust: &TrustStore,
+    at: i64,
+) -> Result<Answer> {
+    evaluate(raw, c, issuer, None, trust, at)
 }
 
 /// Element `n` of a DER sequence, or an error for a short one.
@@ -140,6 +160,7 @@ fn evaluate(
     issuer: &Cert,
     nonce: Option<&[u8]>,
     trust: &TrustStore,
+    responder_at: i64,
 ) -> Result<Answer> {
     let resp = der::parse(body)?.items(der::SEQUENCE)?;
     let status = resp
@@ -175,7 +196,15 @@ fn evaluate(
             .collect(),
         _ => vec![],
     };
-    let responder = match check_responder(tbs_t.raw, &sig_alg, sig, &certs, issuer, trust) {
+    let responder = match check_responder(
+        tbs_t.raw,
+        &sig_alg,
+        sig,
+        &certs,
+        issuer,
+        trust,
+        responder_at,
+    ) {
         Ok(r) => r,
         Err(problem) => return Ok(Answer::error(trf("ERROR: {}", &[&problem]), body)),
     };
@@ -305,6 +334,7 @@ fn check_responder(
     certs: &[Cert],
     issuer: &Cert,
     trust: &TrustStore,
+    at: i64,
 ) -> std::result::Result<Cert, String> {
     let candidates = std::iter::once(issuer).chain(certs.iter());
     for c in candidates {
@@ -324,7 +354,7 @@ fn check_responder(
         if !c.has_eku(cert::EKU_OCSP_SIGNING) {
             return Err(tr("OCSP responder certificate is not issued for OCSP signing").into());
         }
-        let chain = trust.check(c, time::now_ms());
+        let chain = trust.check(c, at);
         return if chain.ok {
             Ok(c.clone())
         } else {
@@ -347,14 +377,15 @@ mod tests {
         let empty = der::seq(&[]);
         let short = der::seq(&[&der::seq(&[]), &der::seq(&[])]);
         for basic in [&empty, &short] {
-            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust).is_err());
+            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust, 0).is_err());
         }
         assert!(
             read_embedded(
                 &der::seq(&[&der::tlv(der::ENUMERATED, &[0])]),
                 &ca,
                 &ca,
-                &trust
+                &trust,
+                0
             )
             .is_err()
         );

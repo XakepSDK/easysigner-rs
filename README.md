@@ -24,8 +24,18 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
   Cards made by kzsigner open in SIGEX's [ddc](https://github.com/sigex-kz/ddc), and kzsigner
   checks and co-signs cards made by SIGEX.
 
-The network is used only for an NCA timestamp (`--tsa`, always for a card) and the NCA
-revocation check (`--ocsp`, always for a card, whose signatures keep the answer).
+* **Long-term signatures** (ETSI B-LT and B-LTA, `--level LT|LTA`, or `kzsigner extend` on an
+  existing file): the CA certificates and NCA's revocation answers go into the signature (a
+  .cms's certificates and `crls`, plus the revocationValues and certValues attributes Order
+  500 p.8 names; a PDF's document security store), so it can still be checked after the
+  certificate expires. LTA adds an archive timestamp over everything (CAdES
+  archive-time-stamp-v3, or a PDF document timestamp); running `kzsigner extend` again later
+  renews it before the timestamp's own certificate expires. The window makes long-term
+  signatures by default when it adds the NCA time.
+
+The network is used only for an NCA timestamp (`--tsa`, always for a card and a long-term
+signature), the NCA revocation check (`--ocsp`, always for a card and a long-term signature,
+whose signatures keep the answer), and the CAs' revocation lists when OCSP gives no answer.
 
 ### What is checked (Order 500/НҚ)
 
@@ -38,7 +48,10 @@ revocation check (`--ocsp`, always for a card, whose signatures keep the answer)
   non-repudiation, a timestamp or OCSP service key, or a certificate policy outside its CA's
   policy is not accepted for document signatures (`usageError` in `--json`, "Usage" in text).
 * **Revocation** (p.18): OCSP first; if it gives no answer, the CA's CRL (with its delta CRL) is
-  used instead. `revocationSource` in `--json` says which answered. Lists are cached until their
+  used instead. An answer kept in a long-term signature counts when it was made at the
+  signing time and the online check is off or gets no answer. `revocationSource` in `--json`
+  says which answered (`ocsp`, `crl`, `kept-ocsp`, `kept-crl`); `level` gives the ETSI level
+  (B-B, B-T, B-LT, B-LTA), with `archiveTimestamps` and a PDF's `documentTimestamps`. Lists are cached until their
   next update (at most an hour), failures for five minutes.
 * **Timestamps** (p.17.2): a warning when the timestamp comes from a different CA than the
   signer's (NCA's own CAs count as one).
@@ -76,6 +89,8 @@ no root, and works the same on GNOME, KDE Plasma and other desktops.
 kzsigner sign document.pdf -k GOSTKNCA_xxx.p12          # -> document.pdf.cms
 kzsigner sign document.pdf.cms -k RSA_yyy.p12           # adds a second signature (co-signing)
 kzsigner sign document.pdf -k key.p12 --detached --tsa  # detached, with an NCA timestamp
+kzsigner sign document.pdf -k key.p12 --pdf --level LTA # inside the PDF, long-term (B-LTA)
+kzsigner extend document.pdf.cms                        # make a .cms long-term, or renew it
 kzsigner verify document.pdf.cms [--ocsp] [--json]      # exit code 0 only if all signatures are valid
 kzsigner verify detached.cms --data document.pdf
 kzsigner extract document.pdf.cms                       # -> document.pdf
@@ -150,6 +165,9 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   timestamps (CAdES-T), certificate paths built only from trusted certificates, OCSP.
 * `crl.rs`, `cert.rs`: CRLs and delta CRLs (the OCSP fallback), key usage and certificate
   policies.
+* `ltv.rs`: long-term validation data (fetching it, keeping it, reading it back) and CAdES
+  archive-time-stamp-v3 with its ats-hash-index-v3 (ETSI EN 319 122-1 5.5). PDF document
+  timestamps and the DSS are in `pdf/mod.rs`.
 * `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
   (plain http, which NCA's servers use; a proxy from the environment is honoured).
 * `gui.rs`: the window ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
@@ -189,6 +207,8 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * A timestamp's signing-certificate reference must match the TSA certificate.
 * A file can be given on the command line (or with "Open with") to start the window with it.
 * RSA-PSS signatures are not supported (NCA does not use them).
+* Long-term signatures follow ETSI EN 319 122-1 / 319 142-1; they were checked by kzsigner's
+  own tests, not yet against NCALayer's or the EU DSS validator's reading of them.
 * The GOST curve arithmetic is on `num-bigint`, which is not constant-time (no maintained Rust
   crate implements KZ GOST 34.10). Keys never leave the computer. RSA uses the `rsa` crate.
 
@@ -212,6 +232,9 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
 * `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later
   signatures alone keep earlier ones valid, and a no-changes certified PDF is not signed.
+* `tests/e2e.rs` `long_term`: B-LTA .cms and PDFs signed, renewed, co-signed and checked
+  offline from the kept answers; removed validation data and changed files are caught; a
+  detached signature's archive timestamp needs its document.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges

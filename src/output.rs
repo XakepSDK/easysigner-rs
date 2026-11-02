@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::report::{SignerReport, VerifyReport};
+use crate::report::{ArchiveStamp, SignerReport, VerifyReport};
 use crate::time::{fmt, iso};
 
 /// Plain-text verification report. `data`: the original file given for a detached .cms.
@@ -51,6 +51,9 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
     for w in &r.warnings {
         let _ = writeln!(o, "Note: {w}");
     }
+    for a in &r.document_timestamps {
+        let _ = writeln!(o, "Document timestamp: {}", stamp(a));
+    }
     for s in &r.signers {
         let _ = writeln!(o);
         let _ = writeln!(
@@ -88,6 +91,15 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
             line(&mut o, "Email", v);
         }
         line(&mut o, "Signed at", &signed_at(s));
+        if let Some(l) = s.level {
+            line(&mut o, "Level", &format!("{l} ({})", level_words(l)));
+        }
+        // a PDF's document timestamps are listed once, above
+        if !r.is_pdf {
+            for a in &s.archive_timestamps {
+                line(&mut o, "Archived", &stamp(a));
+            }
+        }
         line(
             &mut o,
             "Algorithm",
@@ -134,6 +146,33 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         }
     }
     o
+}
+
+fn level_words(l: &str) -> &'static str {
+    match l {
+        "B-B" => "no timestamp",
+        "B-T" => "timestamped",
+        "B-LT" => "long-term: revocation data kept",
+        "B-LTA" => "long-term with archive timestamp",
+        _ => "",
+    }
+}
+
+fn stamp(a: &ArchiveStamp) -> String {
+    let state = if !a.checked {
+        a.error.clone().unwrap_or_default()
+    } else if !a.valid {
+        format!("INVALID: {}", a.error.as_deref().unwrap_or(""))
+    } else if a.trusted {
+        "verified, trusted TSA".into()
+    } else {
+        "signature ok but TSA not trusted".into()
+    };
+    format!(
+        "{} (by {}, {state})",
+        fmt(a.time),
+        a.tsa.as_deref().unwrap_or("unknown TSA")
+    )
 }
 
 fn signed_at(s: &SignerReport) -> String {
@@ -199,10 +238,25 @@ pub fn json(r: &VerifyReport) -> String {
         ("signers", J::List(r.signers.iter().map(signer).collect())),
         ("isPdf", J::Bool(r.is_pdf)),
         ("cardDocument", s(&r.card_document)),
+        (
+            "documentTimestamps",
+            J::List(r.document_timestamps.iter().map(archive).collect()),
+        ),
     ]);
     let mut out = String::new();
     write(&mut out, &o, "");
     out
+}
+
+fn archive(a: &ArchiveStamp) -> J {
+    obj(vec![
+        ("time", t(a.time)),
+        ("authority", s(&a.tsa)),
+        ("checked", J::Bool(a.checked)),
+        ("valid", J::Bool(a.valid)),
+        ("trusted", J::Bool(a.trusted)),
+        ("error", s(&a.error)),
+    ])
 }
 
 fn signer(x: &SignerReport) -> J {
@@ -241,12 +295,22 @@ fn signer(x: &SignerReport) -> J {
         ("certValidAtSigning", b(x.cert_valid_at_signing)),
         ("checkedAt", t(x.checked_at)),
         ("ocspStatus", s(&x.ocsp_status)),
-        // "ocsp", "crl", or null when there is no revocation answer
+        // "ocsp", "crl", "kept-ocsp" or "kept-crl" (an answer kept in the signature), or null
+        // when there is no revocation answer
         (
             "revocationSource",
             x.revocation_source
                 .map(|v| J::Str(v.into()))
                 .unwrap_or(J::Null),
+        ),
+        // "B-B", "B-T", "B-LT" or "B-LTA" (ETSI baseline levels)
+        (
+            "level",
+            x.level.map(|v| J::Str(v.into())).unwrap_or(J::Null),
+        ),
+        (
+            "archiveTimestamps",
+            J::List(x.archive_timestamps.iter().map(archive).collect()),
         ),
         ("warnings", strs(&x.warnings)),
         ("kind", s(&x.kind)),

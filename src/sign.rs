@@ -9,7 +9,7 @@ use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport};
 use crate::trust::TrustStore;
-use crate::{Error, Result, gost, tsp};
+use crate::{Error, Result, gost, ltv, tsp};
 
 /// Checks the signer's own certificate before signing (Order 500/НҚ p.4): issued by a trusted
 /// CA, valid now, allowed to sign under its CA's policy, and, with `ocsp_url`, not revoked
@@ -102,6 +102,7 @@ pub fn sign(
     if let Some(url) = tsa_url {
         timestamp(&mut out, url, key, trust, &mut r)?;
     }
+    r.signature = out.signers[0].signature.clone();
     if let Some(e) = &existing {
         out = e.merge(&out);
         r.cosigned = true;
@@ -140,6 +141,111 @@ pub fn timestamp(
     r.warnings.extend(check.warnings);
     r.timestamped = true;
     Ok(())
+}
+
+/// Makes the signatures of a .cms long-term (CAdES B-LT): the certificates and revocation
+/// answers needed to check them later go into it. With `archive` (B-LTA), each also gets an
+/// archive timestamp over all of it; doing that again later renews it. `original`: the
+/// document of a detached .cms, which archive timestamps need. `only`: just the signer with
+/// that signature value.
+#[allow(clippy::too_many_arguments)]
+pub fn extend(
+    raw: &[u8],
+    original: Option<&[u8]>,
+    archive: bool,
+    tsa_url: &str,
+    ocsp_url: &str,
+    trust: &TrustStore,
+    only: Option<&[u8]>,
+) -> Result<SignResult> {
+    let mut sd = SignedData::parse(raw)?;
+    let content = match (&sd.content, original) {
+        (Some(c), _) => Some(c.clone()),
+        (None, Some(o)) => {
+            require_same_document(&sd, o)?;
+            Some(o.to_vec())
+        }
+        (None, None) => None,
+    };
+    if archive && content.is_none() {
+        return Err(Error::new(tr(
+            "This .cms has no embedded document (detached signature). Provide the original file to add an archive timestamp.",
+        )));
+    }
+    let mut r = SignResult {
+        signer_count: sd.signers.len(),
+        ..Default::default()
+    };
+    let now = crate::time::now_ms();
+    let mut todo: Vec<(usize, bool, ltv::Kept)> = Vec::new();
+    for (idx, si) in sd.signers.iter().enumerate() {
+        if only.is_some_and(|o| o != si.signature) {
+            continue;
+        }
+        let Some(c) = sd.signer_cert(si) else {
+            r.warnings.push(
+                tr("The signer's certificate is not included in the .cms, so this signature cannot be checked.").into(),
+            );
+            continue;
+        };
+        let name = signer_name(&c);
+        let tsas = ltv::tsa_certs(si);
+        if tsas.is_empty() {
+            r.warnings.push(trf(
+                "The signature of {} has no timestamp: a long-term signature needs one, so it stays checkable only while the certificate is valid.",
+                &[&name],
+            ));
+            continue;
+        }
+        let mut targets = vec![(c, true)];
+        targets.extend(tsas.into_iter().map(|t| (t, false)));
+        match ltv::gather(&targets, ocsp_url, trust, now) {
+            Ok(g) => {
+                r.warnings.extend(g.warnings);
+                let archived = si
+                    .unsigned()
+                    .iter()
+                    .any(|(o, _)| o == ltv::ATTR_ARCHIVE_TIMESTAMP_V3);
+                todo.push((idx, archived, g.kept));
+            }
+            Err(e) => r.warnings.push(trf(
+                "The signature of {} was not extended: {}",
+                &[&name, &e],
+            )),
+        }
+    }
+    if todo.is_empty() {
+        return Err(Error::new(trf(
+            "No signature could be made long-term: {}",
+            &[&r.warnings.join(" ")],
+        )));
+    }
+    // the validation data goes in first, so that the archive timestamps cover it
+    for (idx, archived, kept) in &todo {
+        if !archived {
+            ltv::embed(&mut sd, *idx, kept);
+        }
+    }
+    if let (true, Some(content)) = (archive, &content) {
+        for (idx, archived, kept) in &todo {
+            // a signature archived before keeps what is new inside its new archive timestamp
+            let extra = if *archived {
+                kept.without(&ltv::Kept::from_cms(&sd, Some(&sd.signers[*idx])))
+            } else {
+                ltv::Kept::default()
+            };
+            ltv::archive(&mut sd, *idx, content, tsa_url, &extra)?;
+        }
+        r.timestamped = true;
+    }
+    r.cms = sd.encode();
+    Ok(r)
+}
+
+fn signer_name(c: &Cert) -> String {
+    let mut sr = SignerReport::default();
+    cert::describe(&mut sr, c);
+    sr.name()
 }
 
 /// Refuses to co-sign a detached .cms over a different document than the one its signers

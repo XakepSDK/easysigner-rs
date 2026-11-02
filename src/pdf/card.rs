@@ -20,7 +20,7 @@ use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
 use crate::trust::TrustStore;
 use crate::tsp::TstInfo;
-use crate::{Error, Result, gost, ocsp, sign, time, verify};
+use crate::{Error, Result, gost, ltv, sign, time, verify};
 
 // ------------------------------------------------------------------ languages
 
@@ -149,9 +149,7 @@ fn t(l: CardLang, ru: &'static str, args: &[&str]) -> String {
 
 /// mime-type (ETSI EN 319 122-1, 5.2.4.2)
 const ATTR_MIME_TYPE: &str = "0.4.0.1733.2.1";
-/// id-ri-ocsp-response (RFC 5940)
-const RI_OCSP: &str = "1.3.6.1.5.5.7.16.2";
-
+/// The media type the card's signatures name for `file_name`.
 pub fn mime_type(file_name: &str) -> &'static str {
     let ext = file_name
         .rsplit('.')
@@ -212,100 +210,42 @@ pub fn sign_for_card(
             sd.certs.push(c.der.clone());
         }
     }
-    // the key was checked before signing, so its issuer is known
+    // the OCSP answer for the signer's certificate (in `crls`, as the card specification asks,
+    // and in revocationValues, Order 500/НҚ p.8), the TSA's, the CA paths and the CAs' lists
+    let mut targets = vec![(key.cert.clone(), true)];
+    targets.extend(
+        ltv::tsa_certs(&sd.signers[0])
+            .into_iter()
+            .map(|c| (c, false)),
+    );
+    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms())?;
+    r.warnings.extend(g.warnings);
     let issuer = chain
         .issuer
         .as_ref()
         .ok_or_else(|| Error::new(chain.status.clone()))?;
-    match ocsp::fetch(&key.cert, issuer, ocsp_url, trust) {
-        Ok(a) if a.good => {
-            let other = der::tlv(der::ctx(1), &der::cat(&[&der::oid(RI_OCSP), &a.raw]));
-            sd.crls = Some(der::tlv(der::ctx(1), &other));
-            // the same answer where Order 500/НҚ p.8 names it: the CAdES revocationValues
-            // attribute, ocspVals [1] SEQUENCE OF BasicOCSPResponse (RFC 5126 §6.3.4)
-            let values = der::seq(&[&der::tlv(der::ctx(1), &der::seq(&[&a.basic]))]);
-            sd.signers[0].add_unsigned(ATTR_REVOCATION_VALUES, &values);
-            // and the certificates to check it with: the CA path and the OCSP responder
-            // (certValues, p.8)
-            let mut certs: Vec<&[u8]> = chain.issuers.iter().map(|c| c.der.as_slice()).collect();
-            if let Some(r) = &a.responder
-                && !certs.contains(&r.der.as_slice())
-            {
-                certs.push(&r.der);
-            }
-            sd.signers[0].add_unsigned(ATTR_CERT_VALUES, &der::seq(&certs));
-        }
-        Ok(a) => {
-            return Err(Error::new(trf(
-                "The certificate is not usable for signing: {}",
-                &[&a.status],
-            )));
-        }
-        Err(e) => {
-            // no OCSP answer: the CA's revocation list still decides whether to sign (p.4.3)
-            let (_, status, answer) = crate::crl::check(&key.cert, Some(issuer));
-            if !answer.is_empty() && answer != "good" {
-                return Err(Error::new(trf(
-                    "The certificate is not usable for signing: {}",
-                    &[&status],
-                )));
-            }
-            r.warnings.push(trf(
-                "No OCSP answer could be embedded in the signature ({}); the card does not fully meet its specification.",
-                &[&e],
-            ));
-            if answer.is_empty() {
-                r.warnings.push(trf(
-                    "Could not check that your key is not revoked: {}",
-                    &[&status],
-                ));
-            }
-        }
+    let kept_ocsp = g
+        .kept
+        .status(&key.cert, issuer, trust, time::now_ms())
+        .is_some_and(|k| k.source == "ocsp");
+    if !kept_ocsp {
+        r.warnings.push(tr(
+            "No OCSP answer could be embedded in the signature; the card does not fully meet its specification.",
+        ).into());
     }
+    ltv::embed(&mut sd, 0, &g.kept);
     Ok(sd.encode())
 }
 
-/// id-aa-ets-revocationValues (CAdES, RFC 5126).
-pub const ATTR_REVOCATION_VALUES: &str = "1.2.840.113549.1.9.16.2.24";
-/// id-aa-ets-certValues (CAdES, RFC 5126).
-pub const ATTR_CERT_VALUES: &str = "1.2.840.113549.1.9.16.2.23";
+pub use crate::ltv::{ATTR_CERT_VALUES, ATTR_REVOCATION_VALUES};
 
-/// The OCSP response embedded in a SignedData's `crls` (RFC 5940), or else in the first
-/// signer's revocationValues attribute, if any.
+/// The first OCSP answer kept in a SignedData: in its `crls` (RFC 5940), or else in the first
+/// signer's revocationValues attribute.
 pub fn embedded_ocsp(sd: &SignedData) -> Option<Vec<u8>> {
-    in_crls(sd).or_else(|| in_revocation_values(sd))
-}
-
-fn in_revocation_values(sd: &SignedData) -> Option<Vec<u8>> {
-    let (_, values) = sd
-        .signers
-        .first()?
-        .unsigned()
+    ltv::Kept::from_cms(sd, sd.signers.first())
+        .ocsps
         .into_iter()
-        .find(|(o, _)| o == ATTR_REVOCATION_VALUES)?;
-    let rv = der::parse(values.first()?).ok()?;
-    for v in rv.children().ok()? {
-        if v.tag == der::ctx(1) {
-            let basic = v.inner().ok()?.children().ok()?;
-            return Some(ocsp::wrap_basic(basic.first()?.raw));
-        }
-    }
-    None
-}
-
-fn in_crls(sd: &SignedData) -> Option<Vec<u8>> {
-    let crls = sd.crls.as_ref()?;
-    let t = der::parse(crls).ok()?;
-    for c in t.children().ok()? {
-        if c.tag != der::ctx(1) {
-            continue;
-        }
-        let k = c.children().ok()?;
-        if k.first()?.oid().ok()? == RI_OCSP {
-            return Some(k.get(1)?.raw.to_vec());
-        }
-    }
-    None
+        .next()
 }
 
 // ------------------------------------------------------------------ what a signature shows
@@ -448,15 +388,14 @@ fn view(cms: &[u8], trust: &TrustStore) -> Result<SigView> {
             tsa.as_ref().map(|c| dn(&c.issuer)).unwrap_or_default(),
         ));
     }
-    if let Some(raw) = embedded_ocsp(&sd)
-        && let Some(issuer) = trust
-            .check(&c, v.tsp_ms.unwrap_or_else(time::now_ms))
-            .issuer
-        && let Ok(a) = ocsp::read_embedded(&raw, &c, &issuer, trust)
+    let at = v.tsp_ms.unwrap_or_else(time::now_ms);
+    if let Some(issuer) = trust.check(&c, at).issuer
+        && let Some(a) = ltv::Kept::from_cms(&sd, Some(si)).status(&c, &issuer, trust, at)
+        && a.source == "ocsp"
     {
         let r = a.responder.as_ref();
         v.ocsp = Some((
-            a.cert_status.to_string(),
+            a.answer.to_string(),
             a.this_update.map(astana).unwrap_or_default(),
             r.map(Cert::serial_hex).unwrap_or_default(),
             r.map(|c| dn(&c.subject)).unwrap_or_default(),
@@ -1286,32 +1225,8 @@ pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> Verify
             if sd.content.is_some() {
                 s.warnings.push(tr("The signature contains the document; a card's signatures should be detached.").into());
             }
-            match embedded_ocsp(&sd) {
-                Some(raw) if ocsp_url.is_none() => {
-                    let c = sd.signers.first().and_then(|si| sd.signer_cert(si));
-                    let at = s.trusted_time().unwrap_or_else(time::now_ms);
-                    let issuer = c.as_ref().and_then(|c| trust.check(c, at).issuer);
-                    if let (Some(c), Some(i)) = (c, issuer) {
-                        match ocsp::read_embedded(&raw, &c, &i, trust) {
-                            Ok(a) => {
-                                s.ocsp_status = Some(trf("{} (answer kept in the signature)", &[&a.status]));
-                                // a revoked certificate fails the signature; an answer that
-                                // cannot be relied on only warns, as no answer would
-                                if a.cert_status == "revoked" {
-                                    s.valid = false;
-                                }
-                                if let (Some(u), Some(ts)) = (a.this_update, s.timestamp_time)
-                                    && u + 5 * 60 * 1000 < ts
-                                {
-                                    s.warnings.push(tr("The kept OCSP answer is older than the signature's timestamp.").into());
-                                }
-                            }
-                            Err(e) => s.ocsp_status = Some(trf("ERROR: could not check OCSP ({})", &[&e])),
-                        }
-                    }
-                }
-                None => s.warnings.push(tr("The signature carries no OCSP answer, which the card specification asks for.").into()),
-                _ => {}
+            if embedded_ocsp(&sd).is_none() {
+                s.warnings.push(tr("The signature carries no OCSP answer, which the card specification asks for.").into());
             }
             if s.timestamp_time.is_none() {
                 s.warnings.push(
