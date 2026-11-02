@@ -1,6 +1,5 @@
 //! The window's building blocks: tones, notes, cards, buttons.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// A note under a field: lines of text with a tone each.

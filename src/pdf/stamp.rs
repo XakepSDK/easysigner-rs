@@ -115,8 +115,12 @@ pub fn draw(
             .unwrap_or(0)
             .rem_euclid(360),
     };
-    let mut objects = Vec::new();
-    let (ops, resources, height) = compose(stamp, c, at, alloc, &mut objects)?;
+    let Appearance {
+        ops,
+        resources,
+        height,
+        mut objects,
+    } = compose(stamp, c, at, alloc)?;
     let (sw, sh) = (W * MM, height * MM);
     let rect = space.place(&widget_rects(doc, page), stamp.corner, sw, sh)?;
     let mut form = Stream::new(
@@ -158,15 +162,24 @@ pub fn draw(
     })
 }
 
-/// The stamp's appearance, upright: its content, its resources (the objects they need go
-/// into `objects`) and its height in mm.
+/// The stamp's appearance, upright.
+struct Appearance {
+    /// The content stream.
+    ops: String,
+    resources: Dictionary,
+    /// In mm.
+    height: f64,
+    /// The objects the resources refer to.
+    objects: Vec<(ObjectId, Object)>,
+}
+
 fn compose(
     stamp: &Stamp,
     c: &Cert,
     at: i64,
     alloc: &mut dyn FnMut() -> ObjectId,
-    objects: &mut Vec<(ObjectId, Object)>,
-) -> Result<(String, Dictionary, f64)> {
+) -> Result<Appearance> {
+    let mut objects = Vec::new();
     let lang = stamp.lang.unwrap_or(Lang::Ru);
     let t = texts(lang);
     let mut sr = SignerReport::default();
@@ -275,7 +288,12 @@ fn compose(
         "Font",
         Dictionary::from_iter([("F1", Object::Reference(font))]),
     );
-    Ok((p.ops, resources, height))
+    Ok(Appearance {
+        ops: p.ops,
+        resources,
+        height,
+        objects,
+    })
 }
 
 /// A page's visible box and rotation: where things go on it as it is shown.

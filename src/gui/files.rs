@@ -1,6 +1,5 @@
 //! Files taken out of signed files, opened for reading or shown in the file manager.
 
-#[allow(unused_imports)]
 use super::*;
 
 impl App {

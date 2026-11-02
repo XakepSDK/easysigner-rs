@@ -1,6 +1,5 @@
 //! A check's result, shown to people: the verdict, then each signer.
 
-#[allow(unused_imports)]
 use super::*;
 
 /// The main reason a check failed, in a sentence.

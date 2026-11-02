@@ -1,6 +1,5 @@
 //! The Sign and Signed screens: the document, the key, how to sign, and saving.
 
-#[allow(unused_imports)]
 use super::*;
 
 impl App {

@@ -428,6 +428,8 @@ const BOTTOM: f64 = 10.0;
 const HEADER: f64 = 10.0;
 const FOOTER: f64 = 10.0;
 const CONTENT_TOP: f64 = TOP + HEADER + 5.0;
+/// The width between the side margins of a portrait page.
+const WIDTH: f64 = A4.0 - LEFT - RIGHT;
 
 struct Section {
     page: Page,
@@ -595,7 +597,7 @@ impl Info<'_> {
     fn pages(&self, w: &mut Writer, first_doc_page: usize, first_sig_page: usize) -> Vec<Page> {
         let (input, attachments, l) = (self.input, self.attachments, self.input.lang);
         let (created, builder) = (self.created, self.builder);
-        let width = A4.0 - LEFT - RIGHT;
+        let width = WIDTH;
         let mut pages = vec![Page::new(false)];
         let bottom = A4.1 - BOTTOM - FOOTER;
         let mut y = TOP + 2.0;
@@ -826,7 +828,7 @@ fn signature_pages(
     qr: bool,
 ) -> Result<Vec<Section>> {
     let (cms, v) = (&sig.cms, &sig.view);
-    let width = A4.0 - LEFT - RIGHT;
+    let width = WIDTH;
     let mut p = Page::new(false);
     let left_w = width / 3.0 * 2.0;
     let right_x = LEFT + left_w;

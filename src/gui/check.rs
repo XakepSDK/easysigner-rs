@@ -1,6 +1,5 @@
 //! The Check screen: a signed file, its check, and taking its document out.
 
-#[allow(unused_imports)]
 use super::*;
 
 impl App {
