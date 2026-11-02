@@ -97,6 +97,18 @@ pub fn hash(oid: &str, data: &[u8]) -> Result<Vec<u8>> {
     })
 }
 
+/// The length of an `oid` digest, in bytes.
+pub fn digest_len(oid: &str) -> Result<usize> {
+    Ok(match oid {
+        H_GOST34311 | H_GOST2015_256 | H_SHA256 => 32,
+        H_GOST2015_512 | H_SHA512 => 64,
+        H_SHA1 => 20,
+        H_SHA224 => 28,
+        H_SHA384 => 48,
+        _ => return Err(Error::new(format!("Unsupported digest algorithm {oid}"))),
+    })
+}
+
 pub fn sha256(data: &[u8]) -> Vec<u8> {
     hash(H_SHA256, data).expect("SHA-256")
 }

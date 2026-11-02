@@ -2,7 +2,7 @@
 //! systems use (windows-1251, KZ-1048) and Latin-1. Decoding and encoding back give the same
 //! bytes, so the signed document keeps its encoding.
 
-use crate::i18n::trf;
+use crate::i18n::{tr, trf};
 use crate::{Error, Result};
 
 /// A document's encoding.
@@ -90,29 +90,34 @@ pub fn decode(input: &[u8]) -> Result<(String, Encoding, &'static [u8])> {
     Ok((text, enc, &[]))
 }
 
-/// `text` in `enc`. Every character must be one the encoding has (a signature adds only
-/// ASCII to a document that was decoded from it).
+/// `text` in `enc`. A character the encoding lacks becomes a character reference, which
+/// reads back the same in text and attribute values (a signature adds only ASCII names, and the
+/// document's own text was decoded from `enc`, so nothing else needs one).
 pub fn encode(text: &str, enc: Encoding) -> Result<Vec<u8>> {
-    match enc {
-        Encoding::Utf8 => Ok(text.as_bytes().to_vec()),
-        Encoding::Single(t) => text
-            .chars()
-            .map(|c| {
-                if (c as u32) < 0x80 {
-                    Ok(c as u8)
-                } else {
-                    t.iter()
-                        .position(|&u| u32::from(u) == c as u32)
-                        .map(|i| 0x80 + i as u8)
-                        .ok_or_else(|| Error::new(format!("character {c:?} not in the encoding")))
-                }
-            })
-            .collect(),
+    let Encoding::Single(t) = enc else {
+        return Ok(text.as_bytes().to_vec());
+    };
+    let mut back = std::collections::HashMap::with_capacity(128);
+    for (i, &u) in t.iter().enumerate() {
+        back.entry(u32::from(u)).or_insert(0x80 + i as u8);
     }
+    let mut out = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        match back.get(&(c as u32)) {
+            _ if (c as u32) < 0x80 => out.push(c as u8),
+            Some(&b) => out.push(b),
+            None => out.extend_from_slice(format!("&#x{:X};", c as u32).as_bytes()),
+        }
+    }
+    Ok(out)
 }
 
 fn utf8(b: &[u8]) -> Result<String> {
-    String::from_utf8(b.to_vec()).map_err(|_| unsupported("not UTF-8"))
+    String::from_utf8(b.to_vec()).map_err(|_| {
+        Error::new(tr(
+            "This XML document is not valid UTF-8: name its encoding in the XML declaration (windows-1251, KZ-1048 or ISO-8859-1), or save it as UTF-8.",
+        ))
+    })
 }
 
 fn unsupported(what: &str) -> Error {
@@ -157,5 +162,18 @@ mod tests {
         assert!(text.contains("Ша"));
         assert!(decode(b"<?xml version=\"1.0\" encoding=\"koi8-r\"?><a/>").is_err());
         assert!(decode(b"\xff\xfe<\x00").is_err());
+        // a character the encoding lacks is written as a reference
+        assert_eq!(
+            encode("<a>Ұ</a>", enc_of("windows-1251")).unwrap(),
+            b"<a>&#x4B0;</a>"
+        );
+        // invalid UTF-8 is refused
+        assert!(decode(b"<a>\xc4</a>").is_err());
+    }
+
+    fn enc_of(name: &str) -> Encoding {
+        decode(format!("<?xml version=\"1.0\" encoding=\"{name}\"?><a/>").as_bytes())
+            .unwrap()
+            .1
     }
 }

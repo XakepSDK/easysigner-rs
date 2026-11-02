@@ -7,8 +7,8 @@ use roxmltree::{Document, Node, NodeId};
 
 use super::c14n::{self, Method};
 use super::{
-    DS, XADES, b64, child, children, encoding, method_of, parse, qualifying, reference_octets,
-    signatures, signer_cert,
+    DS, XADES, b64, child, children, encoding, leaves_room, method_of, parse, qualifying,
+    reference_octets, signatures, signer_cert,
 };
 use crate::cert::{self, Cert};
 use crate::i18n::{tr, trf};
@@ -252,6 +252,18 @@ pub fn extend(
             let sig = signatures(&doc)[i];
             let value = b64(child(sig, DS, "SignatureValue")).unwrap_or_default();
             if only.is_some_and(|o| o != value) {
+                continue;
+            }
+            // what goes into this signature must not break another one (or itself)
+            let at = unsigned_props(sig).unwrap_or(sig);
+            if !signatures(&doc)
+                .into_iter()
+                .all(|s| leaves_room(&doc, s, at))
+            {
+                r.warnings.push(
+                    tr("Another signature in this XML document covers this one, so adding validation data to it would break that signature.")
+                        .into(),
+                );
                 continue;
             }
             let Some(c) = signer_cert(sig) else {

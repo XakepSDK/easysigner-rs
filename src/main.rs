@@ -584,9 +584,19 @@ fn verify(o: Opts) -> R<u8> {
 /// sign --hash: a detached .cms from a document's hash.
 fn sign_hash(o: Opts) -> R<u8> {
     let value = o.hash.as_deref().unwrap_or_default();
-    if o.file.is_some() || o.detached || o.pdf || o.xml || o.card || o.data.is_some() {
+    // (--detached is allowed: the .cms is detached anyway)
+    if o.file.is_some()
+        || o.pdf
+        || o.xml
+        || o.card
+        || o.data.is_some()
+        || o.stamp.is_some()
+        || o.stamp_logo.is_some()
+        || o.qr
+        || o.lang.is_some()
+    {
         return Err(Fail::Usage(
-            "--hash signs a hash, not a file: give no FILE, --pdf, --xml, --card or --data".into(),
+            "--hash signs a hash, not a file: give no FILE, --pdf, --xml, --card, --stamp, --qr, --lang or --data".into(),
             HELP_SIGN,
         ));
     }

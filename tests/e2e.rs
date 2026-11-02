@@ -1591,11 +1591,32 @@ fn xml() {
         .find("<ds:Transform Algorithm=\"http://www.w3.org/2002/06/xmldsig-filter2\"")
         .unwrap();
     let b = a + closed[a..].find("</ds:Transform>").unwrap() + 15;
-    std::fs::write(
-        t.path("closed.xml"),
-        format!("{}{}", &closed[..a], &closed[b..]),
-    )
-    .unwrap();
+    let cut = format!("{}{}", &closed[..a], &closed[b..]);
+    std::fs::write(t.path("closed.xml"), &cut).unwrap();
+    // nor one that names the root element by its Id instead of URI=""
+    let by_id = cut
+        .replacen("<z:Request ", "<z:Request Id=\"r\" ", 1)
+        .replacen("<ds:Reference URI=\"\"", "<ds:Reference URI=\"#r\"", 1);
+    std::fs::write(t.path("by-id.xml"), by_id).unwrap();
+    let v = t.kz(&["sign", "--xml", "-k", &bob, "-o", "again.xml", "by-id.xml"]);
+    t.check(
+        "xml: a reference by the root's Id leaves no room",
+        v.contains("covers everything"),
+    );
+    // nor a filter that puts the signatures back
+    let union = closed.replacen(
+        "/descendant::ds:Signature</dsig-xpath:XPath>",
+        "/descendant::ds:Signature</dsig-xpath:XPath><dsig-xpath:XPath \
+         xmlns:dsig-xpath=\"http://www.w3.org/2002/06/xmldsig-filter2\" \
+         Filter=\"union\">/</dsig-xpath:XPath>",
+        1,
+    );
+    std::fs::write(t.path("union.xml"), union).unwrap();
+    let v = t.kz(&["sign", "--xml", "-k", &bob, "-o", "again.xml", "union.xml"]);
+    t.check(
+        "xml: a filter that adds the signatures back leaves no room",
+        v.contains("covers everything"),
+    );
     let v = t.kz(&["sign", "--xml", "-k", &bob, "-o", "again.xml", "closed.xml"]);
     t.check(
         "xml: no second signature when the first covers everything",
@@ -1694,6 +1715,19 @@ fn by_hash() {
     t.check("hash: wrong length refused", v.contains("64-byte"));
     let v = t.kz(&["sign", "--hash", &h, "-k", &key, "doc.txt"]);
     t.check("hash: no FILE with --hash", v.contains("not a file"));
+    let v = t.kz(&["sign", "--hash", &h, "-k", &key, "--stamp", "-o", "x.cms"]);
+    t.check("hash: no --stamp with --hash", v.contains("not a file"));
+    let v = t.kz(&[
+        "sign",
+        "--hash",
+        &h,
+        "-k",
+        &key,
+        "--detached",
+        "-o",
+        "d.cms",
+    ]);
+    t.check("hash: --detached is fine", v.contains("Signed by"));
     let v = t.kz(&[
         "sign", "--hash", &h, "-k", &key, "--level", "LTA", "-o", "x.cms",
     ]);

@@ -134,6 +134,7 @@ impl Engine {
         tsa_url: Option<&str>,
         ocsp_url: Option<&str>,
     ) -> Result<SignResult> {
+        sign::check_hash_length(hash, key)?;
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
         let mut r = sign::sign_hash(hash, key, tsa_url, &self.trust)?;
         warnings.append(&mut r.warnings);
@@ -244,6 +245,11 @@ impl Engine {
             return pdf::extend(input, archive, tsa_url, ocsp_url, &self.trust);
         }
         if xml::is_xml(input) {
+            if original.is_some() {
+                return Err(Error::new(i18n::tr(
+                    "An XML document's signatures are inside it: extend the signed XML file alone, without --data.",
+                )));
+            }
             return xml::ltv::extend(input, archive, tsa_url, ocsp_url, &self.trust, None);
         }
         sign::extend(

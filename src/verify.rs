@@ -332,7 +332,8 @@ pub fn apply_kept(
 /// Reports `sr`'s archive timestamps as notes and warnings; false when one is not valid.
 pub fn report_archives(sr: &mut SignerReport) -> bool {
     let mut ok = true;
-    for a in sr.archive_timestamps.clone() {
+    let archives = std::mem::take(&mut sr.archive_timestamps);
+    for a in &archives {
         let tsa = a.tsa.clone().unwrap_or_default();
         if !a.checked {
             sr.notes.push(trf(
@@ -352,6 +353,7 @@ pub fn report_archives(sr: &mut SignerReport) -> bool {
             ));
         }
     }
+    sr.archive_timestamps = archives;
     ok
 }
 

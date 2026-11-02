@@ -181,7 +181,10 @@ pub fn sign(
     let text = text.as_str();
     let doc = parse(text)?;
     let existing = signatures(&doc);
-    if !existing.iter().all(|s| leaves_room(*s)) {
+    if !existing
+        .iter()
+        .all(|s| leaves_room(&doc, *s, doc.root_element()))
+    {
         return Err(Error::new(tr(
             "This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file or a card instead.",
         )));
@@ -480,12 +483,14 @@ pub(crate) fn reference_octets<'a, 'i>(
 /// not(ancestor-or-self::ds:Signature). Only these forms are understood.
 fn excludes_signatures(t: Node) -> bool {
     let alg = t.attribute("Algorithm").unwrap_or_default();
-    let Some(x) = t
-        .children()
-        .find(|c| c.is_element() && c.tag_name().name() == "XPath")
-    else {
+    // exactly one XPath step: another (a filter2 "union") could put the signatures back
+    let mut steps = t.children().filter(|c| c.is_element());
+    let (Some(x), None) = (steps.next(), steps.next()) else {
         return false;
     };
+    if x.tag_name().name() != "XPath" {
+        return false;
+    }
     let expr: String = x
         .text()
         .unwrap_or_default()
@@ -506,7 +511,7 @@ fn excludes_signatures(t: Node) -> bool {
                     .iter()
                     .any(|a| expr.strip_prefix(a).is_some_and(names_signature))
         }
-        XPATH => expr
+        XPATH if x.tag_name().namespace() == Some(DS) => expr
             .strip_prefix("not(ancestor-or-self::")
             .and_then(|e| e.strip_suffix(')'))
             .is_some_and(names_signature),
@@ -538,21 +543,41 @@ fn check_reference<'a, 'i>(
 /// leaves the others out of what it signs.
 pub fn has_room(input: &[u8]) -> bool {
     encoding::decode(input).is_ok_and(|(text, ..)| {
-        parse(&text).is_ok_and(|doc| signatures(&doc).into_iter().all(leaves_room))
+        parse(&text).is_ok_and(|doc| {
+            let at = doc.root_element();
+            signatures(&doc)
+                .into_iter()
+                .all(|s| leaves_room(&doc, s, at))
+        })
     })
 }
 
-/// Whether the signature `sig` still holds when another signature is added to the document:
-/// each reference to the whole document leaves out every signature.
-fn leaves_room(sig: Node) -> bool {
-    child(sig, DS, "SignedInfo").is_some_and(|si| {
-        children(si, DS, "Reference")
-            .filter(|r| r.attribute("URI").unwrap_or_default().is_empty())
-            .all(|r| {
-                child(r, DS, "Transforms")
-                    .is_some_and(|ts| children(ts, DS, "Transform").any(excludes_signatures))
-            })
-    })
+/// Whether the signature `sig` still holds when something is added inside `at`, a new
+/// signature or a signature's unsigned properties: each of its references either covers a
+/// part that does not hold `at`, or leaves out every signature (or, for a change inside `sig`
+/// itself, `sig`) and so the change.
+pub(crate) fn leaves_room(doc: &Document, sig: Node, at: Node) -> bool {
+    let in_sig = at.ancestors().any(|a| a == sig);
+    let unaffected = |r: Node| {
+        let uri = r.attribute("URI").unwrap_or_default();
+        let target = if uri.is_empty() {
+            Some(doc.root())
+        } else {
+            uri.strip_prefix('#').and_then(|id| by_id(doc, id))
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        let transforms = || {
+            child(r, DS, "Transforms")
+                .into_iter()
+                .flat_map(|ts| children(ts, DS, "Transform"))
+        };
+        !at.ancestors().any(|a| a == target)
+            || transforms().any(excludes_signatures)
+            || in_sig && transforms().any(|t| t.attribute("Algorithm") == Some(ENVELOPED))
+    };
+    child(sig, DS, "SignedInfo").is_some_and(|si| children(si, DS, "Reference").all(unaffected))
 }
 
 /// Checks the signature `sig` and its signer.

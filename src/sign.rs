@@ -112,6 +112,19 @@ pub fn sign(
     Ok(r)
 }
 
+/// Refuses a hash whose length is not the key's digest length.
+pub fn check_hash_length(hash: &[u8], key: &Key) -> Result<()> {
+    let oid = key.private_key.digest_oid();
+    let want = gost::digest_len(oid)?;
+    if hash.len() != want {
+        return Err(Error::new(trf(
+            "The hash is {} bytes long, but this key signs {}-byte hashes ({}).",
+            &[&hash.len(), &want, &cert::digest_label(Some(oid))],
+        )));
+    }
+    Ok(())
+}
+
 /// Signs a document known only by its hash `hash` (made with the key's digest algorithm: GOST
 /// 34.11-2015 for 2015 keys, GOST 34.311-95 for 2004 keys, SHA-256 for RSA) into a detached .cms,
 /// as NCALayer's createCAdESFromBase64Hash does; checking it needs the document itself.
@@ -121,17 +134,7 @@ pub fn sign_hash(
     tsa_url: Option<&str>,
     trust: &TrustStore,
 ) -> Result<SignResult> {
-    let want = gost::hash(key.private_key.digest_oid(), b"")?.len();
-    if hash.len() != want {
-        return Err(Error::new(trf(
-            "The hash is {} bytes long, but this key signs {}-byte hashes ({}).",
-            &[
-                &hash.len(),
-                &want,
-                &cert::digest_label(Some(key.private_key.digest_oid())),
-            ],
-        )));
-    }
+    check_hash_length(hash, key)?;
     let mut r = SignResult {
         warnings: cert::key_warnings(&key.cert),
         signer_count: 1,
