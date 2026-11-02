@@ -209,7 +209,9 @@ fn validate(req: &Request, token: &[u8]) -> Result<()> {
 }
 
 /// Checks the signature timestamp of `si`, if any, and records it in `sr`.
-pub fn check(sr: &mut SignerReport, si: &SignerInfo, trust: &TrustStore) {
+/// `signer`: the signer's certificate, when known; Order 500/НҚ p.17.2 wants the TSA's
+/// certificate from the same CA.
+pub fn check(sr: &mut SignerReport, si: &SignerInfo, signer: Option<&Cert>, trust: &TrustStore) {
     let Some(value) = si
         .unsigned()
         .into_iter()
@@ -218,7 +220,7 @@ pub fn check(sr: &mut SignerReport, si: &SignerInfo, trust: &TrustStore) {
     else {
         return;
     };
-    if let Err(e) = check_token(sr, &si.signature, &value, trust) {
+    if let Err(e) = check_token(sr, &si.signature, &value, signer, trust) {
         sr.timestamp_ok = Some(false);
         sr.timestamp_info = Some(trf("unreadable timestamp: {}", &[&e.0]));
     }
@@ -230,6 +232,7 @@ pub fn check_token(
     sr: &mut SignerReport,
     stamped: &[u8],
     token: &[u8],
+    signer: Option<&Cert>,
     trust: &TrustStore,
 ) -> Result<()> {
     let sd = SignedData::parse_inner(token)?;
@@ -284,6 +287,15 @@ pub fn check_token(
         sr.warnings.push(
             tr("The timestamp authority's certificate is not issued for timestamping.").into(),
         );
+    } else if let Some(s) = signer
+        && !cert::names_equal(&tsa_cert.issuer, &s.issuer)
+        // NCA RK is one CA with several certificates (GOST, RSA, generations)
+        && !(trust.is_nca(&tsa_cert.issuer) && trust.is_nca(&s.issuer))
+    {
+        sr.warnings.push(trf(
+            "The timestamp authority '{}' was certified by {}, not by the signer's CA ({}).",
+            &[&tsa, &cert::cn(&tsa_cert.issuer), &cert::cn(&s.issuer)],
+        ));
     }
     Ok(())
 }
@@ -304,11 +316,40 @@ mod tests {
             let token = read_response(&resp).unwrap();
             validate(&req, token).unwrap_or_else(|e| panic!("{case}: {e}"));
             let mut sr = SignerReport::default();
-            check_token(&mut sr, &f("data.bin"), token, &trust).unwrap();
+            check_token(&mut sr, &f("data.bin"), token, None, &trust).unwrap();
             assert_eq!(sr.timestamp_ok, Some(true), "{case}: token signature");
             assert_eq!(sr.timestamp_trusted, Some(true), "{case}: TSA trusted");
             assert!(sr.warnings.is_empty(), "{case}: {:?}", sr.warnings);
             println!("{case}: {:?} {:?}", sr.timestamp_info, sr.timestamp_time);
+
+            // p.17.2: a signer certified by NCA RK (any of its CA certificates) is fine; one
+            // from another CA gets a warning
+            let nca = |n: &str| {
+                let (_, d) = crate::trust::BUNDLED_CA
+                    .iter()
+                    .find(|(x, _)| *x == n)
+                    .unwrap();
+                Cert::parse_any(d).unwrap()
+            };
+            let other =
+                Cert::parse_any(&std::fs::read(format!("{dir}/../ocsp/ca.cer")).unwrap()).unwrap();
+            for (issuer, warns) in [
+                (nca("nca_rsa_2022").subject, false),
+                (nca("nca_gost_2022").subject, false),
+                (nca("root_rsa").subject, false),
+                (other.subject.clone(), true),
+            ] {
+                let mut signer = nca("nca_rsa_2022");
+                signer.issuer = issuer;
+                let mut sr = SignerReport::default();
+                check_token(&mut sr, &f("data.bin"), token, Some(&signer), &trust).unwrap();
+                assert_eq!(
+                    sr.warnings.len(),
+                    usize::from(warns),
+                    "{case}: {:?}",
+                    sr.warnings
+                );
+            }
         }
         let rejected = std::fs::read(format!("{dir}/rejected-policy-6.1/tsr.der")).unwrap();
         let e = read_response(&rejected).unwrap_err();

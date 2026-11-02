@@ -130,6 +130,13 @@ impl TrustStore {
         }
     }
 
+    /// Whether `name` is the subject of one of the bundled NCA RK CA certificates.
+    pub fn is_nca(&self, name: &[u8]) -> bool {
+        self.trusted[..BUNDLED_CA.len()]
+            .iter()
+            .any(|t| cert::names_equal(&t.subject, name))
+    }
+
     fn find_issuer(&self, c: &Cert, seen: &[Cert]) -> Option<Cert> {
         self.trusted
             .iter()

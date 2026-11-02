@@ -180,7 +180,7 @@ fn check_one(
         }
     }
 
-    tsp::check(&mut sr, si, trust);
+    tsp::check(&mut sr, si, Some(&c), trust);
     // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine.
     // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
