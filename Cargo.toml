@@ -84,3 +84,13 @@ egui_kittest = "0.37"
 
 [build-dependencies]
 winresource = { version = "0.1", default-features = false }
+
+# For mutation testing (cargo mutants, .cargo/mutants.toml): quick to rebuild after a small
+# change, with the dependencies (the crypto) optimized, so each run of the tests is short.
+[profile.mutants]
+inherits = "dev"
+debug = false
+opt-level = 1
+
+[profile.mutants.package."*"]
+opt-level = 3

@@ -1024,6 +1024,35 @@ fn long_term() {
         "extend: a revoked signer is refused",
         v.contains("REVOKED") && v.contains("Error"),
     );
+    // checking online: revoked, and good
+    let v = kz(&t, &["verify", "rev.cms", "--ocsp", &fake_ocsp(true)]);
+    t.check(
+        "verify --ocsp: a revoked signer is not valid",
+        v.contains("NOT VALID") && v.contains("REVOKED"),
+    );
+    let v = kz(&t, &["verify", "rev.cms", "--ocsp", &ocsp]);
+    t.check(
+        "verify --ocsp: a good answer",
+        v.contains("VALID - all 1") && v.contains("GOOD"),
+    );
+    // and signing with a revoked key is refused
+    let v = kz(
+        &t,
+        &[
+            "sign",
+            "-k",
+            &carol,
+            "--ocsp",
+            &fake_ocsp(true),
+            "-o",
+            "x.cms",
+            "doc.txt",
+        ],
+    );
+    t.check(
+        "sign: a revoked key is refused",
+        v.contains("cannot sign") && v.contains("REVOKED") && !t.path("x.cms").exists(),
+    );
 
     // without a timestamp there is nothing to make long-term
     kz(&t, &["sign", "-k", &carol, "-o", "bare.cms", "doc.txt"]);
@@ -1319,7 +1348,23 @@ fn long_term() {
     let v = kz(&t, &["verify", "cut.xml"]);
     t.check(
         "XAdES LTA: removed data is caught",
-        start > 0 && v.contains("NOT VALID") && v.contains("archive timestamp"),
+        start > 0
+            && v.contains("NOT VALID")
+            && v.contains("archive timestamp does not match the signature"),
+    );
+    // a damaged archive timestamp
+    let a = renewed.find("<xades141:ArchiveTimeStamp").unwrap_or(0);
+    let e = a
+        + renewed[a..]
+            .find("<xades:EncapsulatedTimeStamp>")
+            .unwrap_or(0)
+        + "<xades:EncapsulatedTimeStamp>".len();
+    let broken = format!("{}AAAA{}", &renewed[..e], &renewed[e + 4..]);
+    std::fs::write(t.path("broken.xml"), broken.as_bytes()).unwrap();
+    let v = kz(&t, &["verify", "broken.xml"]);
+    t.check(
+        "XAdES LTA: a damaged archive timestamp is not valid",
+        v.contains("NOT VALID") && v.contains("An archive timestamp is not valid"),
     );
     // B-LT on an XAdES B-T signed earlier, then a co-signature with its own LT data
     kz(
@@ -1506,6 +1551,17 @@ fn xml() {
     t.check(
         "xml B-T: verifies with the timestamp",
         v.contains("\"valid\": true") && v.contains("B-T") && v.contains("FAKE TEST TSA"),
+    );
+    let sha = kzsigner::hex(&kzsigner::gost::sha256(
+        &std::fs::read(t.path("req-signed.xml")).unwrap_or_default(),
+    ));
+    t.check(
+        "xml B-T: JSON has the signing time, the file's hash and the signature kind",
+        v.contains("\"hasContent\": true")
+            && v.contains(&format!("\"contentSha256\": \"{sha}\""))
+            && !v.contains("\"signingTime\": null")
+            && v.contains("\"signingTime\": \"")
+            && v.contains("XAdES"),
     );
     let signed = std::fs::read_to_string(t.path("req-signed.xml")).unwrap();
     // the timestamp covers the signature value

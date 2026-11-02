@@ -274,6 +274,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   renewed, cut and co-signed; a hash signed as B-LT.
 * `tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
   a duplicated signed part, broken XML, encodings, several signatures in one document.
+* `tests/xml_room.rs`: when another XML signature can go inside a signed document.
 * `tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).

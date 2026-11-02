@@ -7,7 +7,7 @@
 # mutants: cargo-mutants changes the code in small ways (a condition flipped, a function
 # returning a default) and checks that some test fails. A mutant that survives is code no
 # test really checks. A full run is long (over 4000 mutants), so it runs weekly and by hand,
-# split over shards; a pull request runs it only on the lines it changes. Survivors are
+# split over 8 shards (about an hour each); a pull request runs it only on the lines it changes. Survivors are
 # reported, not failed on, while the existing ones are worked down: see mutants.out in the
 # artifact (missed.txt).
 name: quality
@@ -74,7 +74,7 @@ jobs:
   mutants:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +99,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set +e
-          args="--no-shuffle -j 2 --timeout 600 --output ."
+          args="--no-shuffle -j 2 --timeout 180 --output ."
           if [ "${{ github.event_name }}" = pull_request ]; then
             git diff "$BASE...HEAD" -- src > pr.diff
             args="$args --in-diff pr.diff"
