@@ -76,7 +76,11 @@ pub fn timestamp(
     tsp::stamp(out, url, key.private_key.scheme())?;
     // the token's signature must hold; an untrusted TSA is reported, as verify would
     let mut check = SignerReport::default();
-    tsp::check(&mut check, &out.signers[0], Some(&key.cert), trust);
+    let tsa_ca = tsp::check(&mut check, &out.signers[0], trust);
+    let chain = trust.check(&key.cert, crate::time::now_ms());
+    if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
+        tsp::same_ca(&mut check, t, i, trust);
+    }
     if check.timestamp_ok != Some(true) {
         return Err(Error::new(trf(
             "The timestamp server's answer does not match the request: {}",

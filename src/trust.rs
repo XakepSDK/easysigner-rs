@@ -39,7 +39,9 @@ pub struct Chain {
 }
 
 pub struct TrustStore {
+    /// The bundled NCA RK certificates, then the extra ones.
     trusted: Vec<Cert>,
+    bundled: usize,
 }
 
 impl TrustStore {
@@ -51,8 +53,9 @@ impl TrustStore {
                 Cert::parse_any(d).unwrap_or_else(|e| panic!("bundled certificate {n}: {e}"))
             })
             .collect();
+        let bundled = trusted.len();
         trusted.extend(extra);
-        TrustStore { trusted }
+        TrustStore { trusted, bundled }
     }
 
     /// Builds the path from `c` to a trusted CA using only trusted certificates, never ones
@@ -130,11 +133,9 @@ impl TrustStore {
         }
     }
 
-    /// Whether `name` is the subject of one of the bundled NCA RK CA certificates.
-    pub fn is_nca(&self, name: &[u8]) -> bool {
-        self.trusted[..BUNDLED_CA.len()]
-            .iter()
-            .any(|t| cert::names_equal(&t.subject, name))
+    /// Whether `c` is one of the bundled NCA RK CA certificates.
+    pub fn is_nca(&self, c: &Cert) -> bool {
+        self.trusted[..self.bundled].contains(c)
     }
 
     fn find_issuer(&self, c: &Cert, seen: &[Cert]) -> Option<Cert> {

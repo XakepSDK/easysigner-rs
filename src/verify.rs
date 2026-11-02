@@ -180,7 +180,7 @@ fn check_one(
         }
     }
 
-    tsp::check(&mut sr, si, Some(&c), trust);
+    let tsa_ca = tsp::check(&mut sr, si, trust);
     // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine.
     // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
@@ -203,6 +203,9 @@ fn check_one(
     sr.chain_status = Some(chain.status);
     sr.chain = chain.path;
     sr.usage_error = cert::usage_problem(&c, chain.issuer.as_ref());
+    if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
+        tsp::same_ca(&mut sr, t, i, trust);
+    }
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
         let (mut good, mut status, mut answer) = ocsp::check(&c, chain.issuer.as_ref(), url, trust);
