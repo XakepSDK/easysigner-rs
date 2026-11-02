@@ -1695,7 +1695,10 @@ fn failure_reason(r: &VerifyReport) -> String {
             .unwrap_or_else(|| tr("The document was changed after it was signed.").into());
     }
     if s.cert_valid_at_signing == Some(false) {
-        return tr("The signer's key was not valid when the document was signed (expired, or not yet valid).").into();
+        if s.timestamp_ok == Some(true) && s.timestamp_trusted == Some(true) {
+            return tr("The signer's key was not valid when the document was signed (expired, or not yet valid).").into();
+        }
+        return tr("The signer's key is not valid now, and the signature has no trusted timestamp that would show it was valid when the document was signed.").into();
     }
     if !s.chain_ok {
         return trf(

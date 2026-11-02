@@ -184,17 +184,25 @@ fn check_one(
     // only a valid timestamp from a trusted TSA may move the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine
     let trusted_time = sr.timestamp_ok == Some(true) && sr.timestamp_trusted == Some(true);
+    // Order 500/НҚ p.13-14: with a valid timestamp the certificates are checked at its time,
+    // without one at the moment of checking (the signing time the signer's computer wrote in
+    // is only a claim)
     let at = if trusted_time {
         sr.timestamp_time
     } else {
-        sr.signing_time
+        None
     }
     .unwrap_or_else(time::now_ms);
     let valid_at = c.valid_on(at);
     sr.cert_valid_at_signing = Some(valid_at);
-    if !valid_at {
+    if !valid_at && trusted_time {
         sr.warnings.push(trf(
             "The certificate was not valid at the signing time ({}).",
+            &[&time::fmt(Some(at))],
+        ));
+    } else if !valid_at {
+        sr.warnings.push(trf(
+            "The certificate is not valid now ({}), and no trusted timestamp shows that it was valid when the document was signed.",
             &[&time::fmt(Some(at))],
         ));
     }
