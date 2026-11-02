@@ -11,6 +11,8 @@ pub mod gost;
 pub mod gui;
 pub mod http;
 pub mod i18n;
+#[cfg(feature = "gui")]
+pub mod icons;
 pub mod keys;
 pub mod ocsp;
 pub mod output;
