@@ -1262,6 +1262,91 @@ fn long_term() {
         "hash LT: verifies, B-LT",
         v.contains("VALID - all 1") && v.contains("B-LT"),
     );
+    // XAdES B-LTA: validation data and an archive timestamp inside the signature
+    // windows-1251: Д is 0xC4
+    std::fs::write(
+        t.path("req.xml"),
+        b"<?xml version=\"1.0\" encoding=\"windows-1251\"?>\n<r><a>\xC4</a></r>\n",
+    )
+    .unwrap();
+    let v = kz(
+        &t,
+        &[
+            "sign", "--xml", "-k", &carol, "--tsa", &tsa, "--ocsp", &ocsp, "--level", "LTA",
+            "req.xml",
+        ],
+    );
+    t.check(
+        "XAdES LTA: signed",
+        v.contains("long-term with archive timestamp (B-LTA)"),
+    );
+    let signed = std::fs::read(t.path("req-signed.xml")).unwrap_or_default();
+    let text = String::from_utf8_lossy(&signed).into_owned();
+    t.check(
+        "XAdES LTA: certificate and revocation values, archive timestamp, still windows-1251",
+        text.contains("<xades:CertificateValues")
+            && text.contains("<xades:EncapsulatedOCSPValue>")
+            && text.contains("<xades141:ArchiveTimeStamp")
+            && signed.windows(5).any(|w| w == b"<a>\xC4<"),
+    );
+    let v = kz(&t, &["verify", "req-signed.xml"]);
+    t.check(
+        "XAdES LTA: verifies offline with the kept answer",
+        v.contains("VALID - all 1")
+            && v.contains("B-LTA")
+            && v.contains("answer kept in the signature")
+            && v.contains("Archived:"),
+    );
+    let v = kz(
+        &t,
+        &["extend", "req-signed.xml", "--tsa", &tsa, "--ocsp", &ocsp],
+    );
+    t.check("XAdES extend: renewed", v.contains("Extended to B-LTA"));
+    let v = kz(&t, &["verify", "req-signed.xml"]);
+    t.check(
+        "XAdES extend: two archive timestamps, valid",
+        v.contains("VALID - all 1") && v.matches("Archived:").count() == 2,
+    );
+    // taking kept data out breaks the archive timestamps over it
+    let renewed =
+        String::from_utf8_lossy(&std::fs::read(t.path("req-signed.xml")).unwrap()).into_owned();
+    let start = renewed.find("<xades:CertificateValues").unwrap_or(0);
+    let end = renewed
+        .find("</xades:CertificateValues>")
+        .map_or(0, |e| e + "</xades:CertificateValues>".len());
+    let cut = format!("{}{}", &renewed[..start], &renewed[end..]);
+    std::fs::write(t.path("cut.xml"), cut.as_bytes()).unwrap();
+    let v = kz(&t, &["verify", "cut.xml"]);
+    t.check(
+        "XAdES LTA: removed data is caught",
+        start > 0 && v.contains("NOT VALID") && v.contains("archive timestamp"),
+    );
+    // B-LT on an XAdES B-T signed earlier, then a co-signature with its own LT data
+    kz(
+        &t,
+        &[
+            "sign", "--xml", "-k", &carol, "--tsa", &tsa, "-o", "bt.xml", "req.xml",
+        ],
+    );
+    let v = kz(&t, &["extend", "--level", "LT", "bt.xml", "--ocsp", &ocsp]);
+    t.check("XAdES extend LT: done", v.contains("Extended to B-LT"));
+    let v = kz(
+        &t,
+        &[
+            "sign", "--xml", "-k", &carol, "--tsa", &tsa, "--ocsp", &ocsp, "--level", "LT", "-o",
+            "bt2.xml", "bt.xml",
+        ],
+    );
+    t.check(
+        "XAdES LT co-sign: signed",
+        v.contains("Signature added") && v.contains("long-term (B-LT)"),
+    );
+    let v = kz(&t, &["verify", "bt2.xml"]);
+    t.check(
+        "XAdES LT co-sign: both B-LT and valid",
+        v.contains("VALID - all 2") && v.matches("B-LT").count() >= 2 && !v.contains("B-LTA"),
+    );
+
     let v = kz(&t, &["sign", "--stamp", "-k", &carol, "doc.txt"]);
     t.check("stamp: only with --pdf", v.contains("need --pdf"));
 
@@ -1521,11 +1606,6 @@ fn xml() {
     std::fs::write(t.path("doc.txt"), "not xml").unwrap();
     let v = t.kz(&["sign", "--xml", "-k", &key, "doc.txt"]);
     t.check("xml: only XML", v.contains("not an XML document"));
-    let v = t.kz(&["sign", "--xml", "--level", "LTA", "-k", &key, "req.xml"]);
-    t.check(
-        "xml: no long-term level yet",
-        v.contains("--level is not supported"),
-    );
     let v = t.kz(&["verify", "--trust", &ca, "req.xml"]);
     t.check("xml: an unsigned document", v.contains("no signatures"));
     // text that looks like the signer's own placeholders stays as it was

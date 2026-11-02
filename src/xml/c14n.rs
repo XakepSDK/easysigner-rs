@@ -339,13 +339,8 @@ mod tests {
         let s = "<r xmlns=\"urn:d\"><p:s xmlns:p=\"urn:p\"><t/></p:s></r>";
         let doc = roxmltree::Document::parse(s).unwrap();
         let ps = doc.root_element().first_child().unwrap();
-        let exc = String::from_utf8(canonicalize(
-            s,
-            ps,
-            &Method::by_uri(EXC_C14N).unwrap(),
-            &[],
-        ))
-        .unwrap();
+        let exc = String::from_utf8(canonicalize(s, ps, &Method::by_uri(EXC_C14N).unwrap(), &[]))
+            .unwrap();
         assert_eq!(exc, "<p:s xmlns:p=\"urn:p\"><t xmlns=\"urn:d\"></t></p:s>");
         // leaving out a subtree
         let s = "<r><s>1</s><t/></r>";

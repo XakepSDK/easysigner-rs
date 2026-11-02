@@ -314,8 +314,6 @@ impl App {
                         &mut self.sign.timestamp,
                         tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
                     );
-                    // (XAdES has no long-term level yet)
-                    if self.sign.sign_as != SignAs::Xml {
                     ui.add_enabled(
                         self.sign.timestamp && self.ocsp,
                         egui::Checkbox::new(
@@ -323,7 +321,6 @@ impl App {
                             tr("Keep it checkable for years: store NCA's revocation answers in the signature and add an archive timestamp (long-term signature)"),
                         ),
                     );
-                    }
                 }
                 if self.sign.sign_as == SignAs::Pdf {
                     ui.checkbox(
@@ -592,7 +589,7 @@ impl App {
         let long_term = self.sign.timestamp
             && self.ocsp
             && self.sign.long_term
-            && matches!(self.sign.sign_as, SignAs::Cms | SignAs::Pdf);
+            && self.sign.sign_as != SignAs::Card;
         let stamp = self.sign.stamp.then(|| crate::pdf::stamp::Stamp {
             lang: Some(crate::i18n::lang()),
             ..Default::default()

@@ -196,65 +196,25 @@ fn check_one(
     }
 
     let tsa_ca = tsp::check(&mut sr, si, trust);
-    let CertCheck {
-        at,
-        trusted_time,
-        valid_at,
-        issuer,
-        mut ocsp_good,
-    } = check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
+    let cert_check = check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
+    let (valid_at, mut ocsp_good) = (cert_check.valid_at, cert_check.ocsp_good);
 
-    // the validation data kept in the signature (B-LT): what it says counts when it was made
-    // at the signing time, and stands in for an online check that is off or got no answer
     let mut kept = Kept::from_cms(d, Some(si));
     if let Some(e) = extra {
         kept.extend(e);
     }
-    let kept_status = issuer.as_ref().and_then(|i| kept.status(&c, i, trust, at));
-    if let Some(k) = &kept_status
-        && sr.ocsp_answer.is_none_or(str::is_empty)
-    {
-        sr.ocsp_status = Some(trf("{} (answer kept in the signature)", &[&k.status]));
-        sr.ocsp_answer = Some(k.answer);
-        sr.revocation_source = Some(if k.source == "ocsp" {
-            "kept-ocsp"
-        } else {
-            "kept-crl"
-        });
-        if !k.fresh {
-            sr.warnings
-                .push(tr("The kept OCSP answer is older than the signature's timestamp.").into());
-        }
-        ocsp_good = if ocsp_url.is_some() {
-            k.answer == "good" && k.fresh && trusted_time
-        } else {
-            k.answer != "revoked"
-        };
-    }
-
+    let kept_found = apply_kept(
+        &mut sr,
+        &c,
+        &kept,
+        trust,
+        &cert_check,
+        ocsp_url,
+        &mut ocsp_good,
+    );
     sr.archive_timestamps = ltv::check_archives(d, si, content, trust);
-    let mut archives_ok = true;
-    for a in &sr.archive_timestamps {
-        let tsa = a.tsa.clone().unwrap_or_default();
-        if !a.checked {
-            sr.notes.push(trf(
-                "Archive timestamp of {}: {}",
-                &[&time::fmt(a.time), &a.error.clone().unwrap_or_default()],
-            ));
-        } else if !a.valid {
-            archives_ok = false;
-            sr.warnings.push(trf(
-                "An archive timestamp is not valid: {}",
-                &[&a.error.clone().unwrap_or_default()],
-            ));
-        } else if !a.trusted {
-            sr.warnings.push(trf(
-                "The archive timestamp authority '{}' is not a trusted NCA RK TSA.",
-                &[&tsa],
-            ));
-        }
-    }
-    sr.level = Some(level(&sr, kept_status.is_some()));
+    let archives_ok = report_archives(&mut sr);
+    sr.level = Some(level(&sr, kept_found));
     sr.valid = sr.signature_ok
         && sr.chain_ok
         && sr.usage_error.is_none()
@@ -328,6 +288,71 @@ pub fn check_certificate(
         issuer: chain.issuer,
         ocsp_good,
     }
+}
+
+/// The validation data kept in the signature (B-LT): what it says counts when it was made at
+/// the signing time, and stands in for an online check that is off or got no answer. Records
+/// it in `sr` and updates `ocsp_good`; returns whether it had an answer for `c`.
+pub fn apply_kept(
+    sr: &mut SignerReport,
+    c: &Cert,
+    kept: &Kept,
+    trust: &TrustStore,
+    check: &CertCheck,
+    ocsp_url: Option<&str>,
+    ocsp_good: &mut bool,
+) -> bool {
+    let kept_status = check
+        .issuer
+        .as_ref()
+        .and_then(|i| kept.status(c, i, trust, check.at));
+    if let Some(k) = &kept_status
+        && sr.ocsp_answer.is_none_or(str::is_empty)
+    {
+        sr.ocsp_status = Some(trf("{} (answer kept in the signature)", &[&k.status]));
+        sr.ocsp_answer = Some(k.answer);
+        sr.revocation_source = Some(if k.source == "ocsp" {
+            "kept-ocsp"
+        } else {
+            "kept-crl"
+        });
+        if !k.fresh {
+            sr.warnings
+                .push(tr("The kept OCSP answer is older than the signature's timestamp.").into());
+        }
+        *ocsp_good = if ocsp_url.is_some() {
+            k.answer == "good" && k.fresh && check.trusted_time
+        } else {
+            k.answer != "revoked"
+        };
+    }
+    kept_status.is_some()
+}
+
+/// Reports `sr`'s archive timestamps as notes and warnings; false when one is not valid.
+pub fn report_archives(sr: &mut SignerReport) -> bool {
+    let mut ok = true;
+    for a in sr.archive_timestamps.clone() {
+        let tsa = a.tsa.clone().unwrap_or_default();
+        if !a.checked {
+            sr.notes.push(trf(
+                "Archive timestamp of {}: {}",
+                &[&time::fmt(a.time), &a.error.clone().unwrap_or_default()],
+            ));
+        } else if !a.valid {
+            ok = false;
+            sr.warnings.push(trf(
+                "An archive timestamp is not valid: {}",
+                &[&a.error.clone().unwrap_or_default()],
+            ));
+        } else if !a.trusted {
+            sr.warnings.push(trf(
+                "The archive timestamp authority '{}' is not a trusted NCA RK TSA.",
+                &[&tsa],
+            ));
+        }
+    }
+    ok
 }
 
 /// The ETSI baseline level a signature reaches: a signature timestamp makes it B-T, kept

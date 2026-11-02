@@ -223,8 +223,8 @@ impl Engine {
         Ok(r)
     }
 
-    /// Makes the signatures in a .cms or a PDF long-term (B-LT, or B-LTA with an archive
-    /// timestamp); see [`sign::extend`] and [`pdf::extend`]. `original`: a detached .cms's
+    /// Makes the signatures in a .cms, a PDF or an XML document long-term (B-LT, or B-LTA with an archive
+    /// timestamp); see [`sign::extend`], [`pdf::extend`] and [`xml::ltv::extend`]. `original`: a detached .cms's
     /// document.
     pub fn extend(
         &self,
@@ -242,6 +242,9 @@ impl Engine {
         }
         if pdf::is_pdf(input) {
             return pdf::extend(input, archive, tsa_url, ocsp_url, &self.trust);
+        }
+        if xml::is_xml(input) {
+            return xml::ltv::extend(input, archive, tsa_url, ocsp_url, &self.trust, None);
         }
         sign::extend(
             input,
@@ -267,6 +270,15 @@ impl Engine {
     ) -> SignResult {
         let x = if pdf::is_pdf(&r.cms) {
             self.extend(&r.cms, original, level, tsa_url, ocsp_url)
+        } else if xml::is_xml(&r.cms) {
+            xml::ltv::extend(
+                &r.cms,
+                level == ltv::Level::Lta,
+                tsa_url,
+                ocsp_url,
+                &self.trust,
+                Some(&r.signature),
+            )
         } else {
             sign::extend(
                 &r.cms,

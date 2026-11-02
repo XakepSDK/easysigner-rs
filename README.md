@@ -29,18 +29,27 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
 
 * **Inside an XML document** (XAdES, `--xml`): an enveloped XAdES signature (Order 500 p.10:
   SignedInfo, SignatureValue, the certificate in KeyInfo, and signed properties with the
-  signing time and the signer's certificate), B-B, or B-T with `--tsa`, using the algorithm
-  names NCA's Kalkan uses (`urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:…`). Checking
-  reads XAdES and plain XMLDSig (inclusive or exclusive canonicalization, enveloped
-  signatures). A signature inside an XML document covers the whole document, so a second one
-  inside it would break the first: a signed XML document is co-signed into a .cms instead.
+  signing time and the signer's certificate), B-B, B-T with `--tsa`, or B-LT/B-LTA with
+  `--level`, using the algorithm names NCA's Kalkan uses
+  (`urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:…`). Each signature leaves the other
+  signatures out of what it covers (an XPath Filter 2.0 transform), so a signed XML document
+  takes more signatures inside it; one whose signature covers everything (as some other tools
+  make) is co-signed into a .cms instead. Documents in UTF-8, windows-1251, KZ-1048 and
+  ISO-8859-1 stay in their encoding. Checking reads XAdES and plain XMLDSig (inclusive or
+  exclusive canonicalization, enveloped signatures).
+
+* **Signing a hash** (`sign --hash=HEX|BASE64 -o OUT`, like NCALayer's
+  `createCAdESFromBase64Hash`): a detached .cms made from the document's hash alone, for
+  documents that stay on a server. `kzsigner hash --alg …` computes the hash to send. B-T and
+  B-LT work; B-LTA needs the document itself.
 
 * **Long-term signatures** (ETSI B-LT and B-LTA, `--level LT|LTA`, or `kzsigner extend` on an
   existing file): the CA certificates and NCA's revocation answers go into the signature (a
   .cms's certificates and `crls`, plus the revocationValues and certValues attributes Order
   500 p.8 names; a PDF's document security store), so it can still be checked after the
-  certificate expires. LTA adds an archive timestamp over everything (CAdES
-  archive-time-stamp-v3, or a PDF document timestamp); running `kzsigner extend` again later
+  certificate expires; XAdES keeps them in CertificateValues and RevocationValues. LTA adds an
+  archive timestamp over everything (CAdES archive-time-stamp-v3, a PDF document timestamp, or
+  a XAdES ArchiveTimeStamp); running `kzsigner extend` again later
   renews it before the timestamp's own certificate expires. The window makes long-term
   signatures by default when it adds the NCA time.
 
@@ -115,6 +124,10 @@ kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to th
 kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
 kzsigner sign request.xml -k key.p12 --xml --tsa        # -> request-signed.xml, XAdES B-T
 kzsigner verify request-signed.xml                      # checks the XML signature
+kzsigner sign request-signed.xml -k key2.p12 --xml      # a second signature inside it
+kzsigner extend request-signed.xml                      # XAdES B-LTA, or renew it
+kzsigner hash --alg gost2015 document.pdf               # -> the hash to sign
+kzsigner sign --hash=… -k key.p12 -o document.pdf.cms   # a detached .cms from the hash alone
 kzsigner extract contract.docx.card.pdf                 # -> contract.docx, from inside the card
 kzsigner verify --qr scans.txt --data contract.docx     # signatures read back from QR codes
 ```
@@ -182,7 +195,8 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
 * `ltv.rs`: long-term validation data (fetching it, keeping it, reading it back) and CAdES
   archive-time-stamp-v3 with its ats-hash-index-v3 (ETSI EN 319 122-1 5.5). PDF document
   timestamps and the DSS are in `pdf/mod.rs`.
-* `xml/`: XAdES signing and checking (`mod.rs`) and C14N 1.0 inclusive and exclusive
+* `xml/`: XAdES signing and checking (`mod.rs`), B-LT/B-LTA (`ltv.rs`, ETSI EN 319 132-1
+  5.5), single-byte encodings (`encoding.rs`) and C14N 1.0 inclusive and exclusive
   canonicalization (`c14n.rs`, checked against the W3C recommendation's examples), on
   [roxmltree](https://github.com/RazrFalcon/roxmltree). The signature goes in by splicing
   text, so the rest of the document stays byte for byte as it was.
@@ -230,7 +244,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * XML signatures pass `xmlsec1` (RSA; it does not know KZ GOST), and kzsigner checks
   signatures `xmlsec1` makes. The GOST ones use the same signature and hash bytes as Kalkan's
   CMS (NCALayer's XML bundle passes them through unchanged), but have not been checked
-  against NCALayer itself. XAdES has no LT/LTA level yet.
+  against NCALayer itself. XAdES B-LT/B-LTA were checked by kzsigner's own tests only.
 * The GOST curve arithmetic is on `num-bigint`, which is not constant-time (no maintained Rust
   crate implements KZ GOST 34.10). Keys never leave the computer. RSA uses the `rsa` crate.
 
@@ -256,9 +270,11 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   signatures alone keep earlier ones valid, and a no-changes certified PDF is not signed.
 * `tests/e2e.rs` `long_term`: B-LTA .cms and PDFs signed, renewed, co-signed and checked
   offline from the kept answers; removed validation data and changed files are caught; a
-  detached signature's archive timestamp needs its document.
+  detached signature's archive timestamp needs its document; XAdES B-LTA in windows-1251,
+  renewed, cut and co-signed; a hash signed as B-LT.
 * `tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
-  a duplicated signed part, broken XML.
+  a duplicated signed part, broken XML, encodings, several signatures in one document.
+* `tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).
 * `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges

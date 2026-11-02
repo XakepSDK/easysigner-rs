@@ -26,7 +26,7 @@ Commands:
   sign     Sign FILE into FILE.cms (or inside a PDF, or into a document card).
   verify   Check every signature in a .cms, signed PDF or document card.
            Exit code 0 only if all are valid.
-  extend   Make the signatures in a .cms or signed PDF long-term (B-LT/B-LTA).
+  extend   Make the signatures in a .cms, signed PDF or XML long-term (B-LT/B-LTA).
   extract  Write out the document embedded in a .cms or document card.
   hash     Print a document's hash, for signing it by its hash (sign --hash).
   info     Show the certificate inside a key file.
@@ -101,13 +101,14 @@ are valid. A card's signatures are checked against the document inside it, and w
 const HELP_EXTEND: &str = "\
 Usage: kzsigner extend [-hV] [--level=LT|LTA] [--data=ORIGINAL] [-o=OUT] [--tsa[=URL]]
                        [--ocsp[=URL]] [--trust=CA.cer]... FILE
-Make the signatures in a .cms or a signed PDF long-term, so that they can be checked after
-their certificates expire: the CA certificates and revocation answers (OCSP, or the CAs'
-revocation lists) go into the .cms (CAdES B-LT) or the PDF's document security store
-(PAdES B-LT). LTA (the default) also adds an archive timestamp over everything (CAdES
-archive-time-stamp-v3, or a PDF document timestamp); run it again before that timestamp's
-certificate expires to renew it. Signatures need a timestamp already (sign with --tsa).
-      FILE              .cms or signed PDF.
+Make the signatures in a .cms, a signed PDF or a signed XML long-term, so that they can be
+checked after their certificates expire: the CA certificates and revocation answers (OCSP,
+or the CAs' revocation lists) go into the .cms (CAdES B-LT), the PDF's document security
+store (PAdES B-LT) or the XAdES signature (XAdES B-LT). LTA (the default) also adds an
+archive timestamp over everything (CAdES archive-time-stamp-v3, a PDF document timestamp,
+or a XAdES ArchiveTimeStamp); run it again before that timestamp's certificate expires to
+renew it. Signatures need a timestamp already (sign with --tsa).
+      FILE              .cms, signed PDF or signed XML.
       --level=LT|LTA    LTA (default) or LT.
       --data=ORIGINAL   Original document of a detached .cms (needed for LTA).
   -o, --out=OUT         Output file (default: FILE itself; the old one is kept as FILE.bak).
@@ -400,12 +401,6 @@ fn sign(o: Opts) -> R<u8> {
     if o.level.is_some() && o.card {
         return Err(Fail::Usage(
             "--level is not for --card (a card keeps its revocation answers already)".into(),
-            HELP_SIGN,
-        ));
-    }
-    if o.level.is_some() && o.xml {
-        return Err(Fail::Usage(
-            "--level is not supported for --xml yet (use --tsa for a timestamped XAdES B-T)".into(),
             HELP_SIGN,
         ));
     }

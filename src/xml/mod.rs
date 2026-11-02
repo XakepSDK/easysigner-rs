@@ -4,6 +4,7 @@
 
 pub mod c14n;
 pub mod encoding;
+pub mod ltv;
 
 use roxmltree::{Document, Node, NodeId};
 
@@ -576,12 +577,7 @@ fn check_one(
     cert::describe(&mut sr, &c);
 
     // the XAdES properties
-    let sig_id = sig.attribute("Id");
-    let qp = children(sig, DS, "Object")
-        .flat_map(|o| children(o, XADES, "QualifyingProperties"))
-        .find(|q| {
-            sig_id.is_none() || q.attribute("Target").and_then(|t| t.strip_prefix('#')) == sig_id
-        });
+    let qp = qualifying(sig);
     let sp = qp.and_then(|q| child(q, XADES, "SignedProperties"));
     let ssp = sp.and_then(|s| child(s, XADES, "SignedSignatureProperties"));
     match check_signed_info(text, doc, sig, &c, &mut sr) {
@@ -647,14 +643,31 @@ fn check_one(
     }
 
     let check = verify::check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
-    sr.level = Some(verify::level(&sr, false));
+    let mut ocsp_good = check.ocsp_good;
+    let kept = ltv::kept(sig);
+    let kept_found =
+        verify::apply_kept(&mut sr, &c, &kept, trust, &check, ocsp_url, &mut ocsp_good);
+    sr.archive_timestamps = ltv::check_archives(text, doc, sig, trust);
+    let archives_ok = verify::report_archives(&mut sr);
+    sr.level = Some(verify::level(&sr, kept_found));
     sr.valid = sr.signature_ok
         && sr.chain_ok
         && sr.usage_error.is_none()
         && check.valid_at
         && sr.timestamp_ok != Some(false)
-        && check.ocsp_good;
+        && ocsp_good
+        && archives_ok;
     sr
+}
+
+/// The signature's QualifyingProperties.
+fn qualifying<'a, 'i>(sig: Node<'a, 'i>) -> Option<Node<'a, 'i>> {
+    let sig_id = sig.attribute("Id");
+    children(sig, DS, "Object")
+        .flat_map(|o| children(o, XADES, "QualifyingProperties"))
+        .find(|q| {
+            sig_id.is_none() || q.attribute("Target").and_then(|t| t.strip_prefix('#')) == sig_id
+        })
 }
 
 /// Checks the references and the signature over SignedInfo; returns the nodes signed.
