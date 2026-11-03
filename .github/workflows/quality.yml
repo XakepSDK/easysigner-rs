@@ -106,6 +106,8 @@ jobs:
           FILES: ${{ github.event.inputs.files }}
           BASE: ${{ github.event.pull_request.base.sha }}
           TOTAL: ${{ inputs.total || '16' }}
+          # a mutant that allocates without end aborts instead of starving the runner
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/scripts/memory-limit.sh
         run: |
           set +e
           args="--no-shuffle -j 2 --timeout 180 --output ."
