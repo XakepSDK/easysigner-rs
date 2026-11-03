@@ -138,3 +138,349 @@ fn a_cms_holding_a_pdf_is_checked_as_a_cms() {
     );
     assert_eq!(e.extract(&cms).unwrap(), pdf);
 }
+
+/// Appends an update made by `change`, which gets the document as it is and the update's objects
+/// (each object put there replaces the one with its id), and returns the next free id.
+fn update(data: &[u8], change: impl FnOnce(&Document, &mut Document, u32) -> u32) -> Vec<u8> {
+    let prev = Document::load_mem(data).unwrap();
+    let max = prev.max_id;
+    let snapshot = prev.clone();
+    let mut inc = IncrementalDocument::create_from(data.to_vec(), prev);
+    let last = change(&snapshot, &mut inc.new_document, max + 1);
+    inc.new_document.max_id = last.max(max);
+    let mut out = Vec::new();
+    inc.save_to(&mut out).unwrap();
+    out
+}
+
+fn first_page(d: &Document) -> (u32, u16) {
+    *d.get_pages().values().next().unwrap()
+}
+
+fn root(d: &Document) -> (u32, u16) {
+    d.trailer.get(b"Root").unwrap().as_reference().unwrap()
+}
+
+/// The signature errors of each signer, after `evil`.
+fn errors(e: &Engine, evil: &[u8], what: &str) -> Vec<String> {
+    let r = e.verify(evil, None, None).unwrap();
+    assert_eq!(r.signers.len(), 2, "{what}");
+    r.signers
+        .iter()
+        .map(|s| {
+            assert!(!s.valid && !s.signature_ok, "{what} passed");
+            s.signature_error.clone().unwrap_or_default()
+        })
+        .collect()
+}
+
+/// A PDF whose page annotations, AcroForm and its fields are separate objects, as many tools
+/// write them; signing adds to each in place.
+fn indirect_form(plain: &[u8]) -> Vec<u8> {
+    let mut doc = Document::load_mem(plain).unwrap();
+    let annots = doc.add_object(Object::Array(vec![]));
+    let fields = doc.add_object(Object::Array(vec![]));
+    let form = doc.add_object(Dictionary::from_iter([(
+        "Fields",
+        Object::Reference(fields),
+    )]));
+    let page = first_page(&doc);
+    doc.get_dictionary_mut(page)
+        .unwrap()
+        .set("Annots", Object::Reference(annots));
+    doc.catalog_mut()
+        .unwrap()
+        .set("AcroForm", Object::Reference(form));
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+/// What an update may add after a signature, and what it may not: other annotations or form
+/// fields, removed signatures, a replaced form, changes to the catalog, the page tree or any other
+/// object. Information dictionary changes are allowed.
+#[test]
+fn what_updates_may_change() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = engine();
+    let (rsa, gost) = (key(&e, "alice_rsa.p12"), key(&e, "alice_gost2015.p12"));
+    let plain = std::fs::read(fx.join("plain.pdf")).unwrap();
+    for (form, pdf) in [
+        ("inline", plain.clone()),
+        ("indirect", indirect_form(&plain)),
+    ] {
+        let one = e.sign_pdf(&pdf, &rsa, None, None).unwrap().cms;
+        let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
+        let r = e.verify(&two, None, None).unwrap();
+        assert!(r.valid, "{form}: {:?}", r.signers);
+        assert!(r.is_pdf && r.has_content);
+        assert_eq!(r.content_size, two.len() as u64);
+        assert_eq!(
+            r.content_sha256.as_deref(),
+            Some(kzsigner::hex(&kzsigner::gost::sha256(&two)).as_str())
+        );
+        let names: Vec<_> = r.signers.iter().map(|s| s.kind.clone().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "PDF signature \"Signature1\"",
+                "PDF signature \"Signature2\""
+            ],
+            "{form}"
+        );
+        assert_eq!(r.signers[1].index, 2);
+
+        let doc = Document::load_mem(&two).unwrap();
+        let page = first_page(&doc);
+        let annot = |n: &mut Document, id: u32, ft: Option<&str>| {
+            let mut d = Dictionary::from_iter([
+                ("Type", Object::from("Annot")),
+                ("Subtype", "Text".into()),
+                (
+                    "Rect",
+                    Object::Array(vec![0.into(), 0.into(), 9.into(), 9.into()]),
+                ),
+                ("T", Object::string_literal("note")),
+            ]);
+            if let Some(ft) = ft {
+                d.set("FT", Object::Name(ft.as_bytes().to_vec()));
+            }
+            n.objects.insert((id, 0), Object::Dictionary(d));
+            Object::Reference((id, 0))
+        };
+        // where the page's annotations and the form's fields are: in their own objects, or in
+        // the page and form dictionaries
+        let annots_of = |d: &Document| match d.get_dictionary(page).unwrap().get(b"Annots").unwrap()
+        {
+            Object::Reference(id) => (
+                Some(*id),
+                d.get_object(*id).unwrap().as_array().unwrap().clone(),
+            ),
+            o => (None, o.as_array().unwrap().clone()),
+        };
+        let set_annots = |old: &Document, n: &mut Document, a: Vec<Object>| match annots_of(old).0 {
+            Some(id) => {
+                n.objects.insert(id, Object::Array(a));
+            }
+            None => {
+                let mut p = old.get_dictionary(page).unwrap().clone();
+                p.set("Annots", Object::Array(a));
+                n.objects.insert(page, Object::Dictionary(p));
+            }
+        };
+        let form_of = |d: &Document| match d.catalog().unwrap().get(b"AcroForm").unwrap() {
+            Object::Reference(id) => (Some(*id), d.get_dictionary(*id).unwrap().clone()),
+            o => (None, o.as_dict().unwrap().clone()),
+        };
+        let set_fields = |old: &Document, n: &mut Document, f: Vec<Object>| {
+            let (form_id, mut form) = form_of(old);
+            match form.get(b"Fields").unwrap() {
+                Object::Reference(id) => {
+                    n.objects.insert(*id, Object::Array(f));
+                }
+                _ => {
+                    form.set("Fields", Object::Array(f));
+                    match form_id {
+                        Some(id) => {
+                            n.objects.insert(id, Object::Dictionary(form));
+                        }
+                        None => {
+                            let mut c = old.catalog().unwrap().clone();
+                            c.set("AcroForm", Object::Dictionary(form));
+                            n.objects.insert(root(old), Object::Dictionary(c));
+                        }
+                    }
+                }
+            }
+        };
+
+        // allowed: the information dictionary
+        let info = update(&two, |_, n, next| {
+            let mut i = Dictionary::new();
+            i.set("Producer", Object::string_literal("someone else"));
+            n.objects.insert((next, 0), Object::Dictionary(i));
+            n.trailer.set("Info", Object::Reference((next, 0)));
+            next
+        });
+        let r = e.verify(&info, None, None).unwrap();
+        assert!(
+            r.valid,
+            "{form}: info: {:?}",
+            r.signers
+                .iter()
+                .map(|s| &s.signature_error)
+                .collect::<Vec<_>>()
+        );
+
+        let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+            (
+                "a note on the page",
+                update(&two, |old, n, next| {
+                    let mut a = annots_of(old).1;
+                    a.push(annot(n, next, None));
+                    set_annots(old, n, a);
+                    next
+                }),
+                "changed",
+            ),
+            (
+                "a signature removed from the page",
+                update(&two, |old, n, next| {
+                    let mut a = annots_of(old).1;
+                    a.remove(0);
+                    set_annots(old, n, a);
+                    next
+                }),
+                "changed",
+            ),
+            (
+                "a text field",
+                update(&two, |old, n, next| {
+                    let mut f = form_of(old)
+                        .1
+                        .get(b"Fields")
+                        .map(|o| old.dereference(o).unwrap().1.as_array().unwrap().clone())
+                        .unwrap();
+                    f.push(annot(n, next, Some("Tx")));
+                    set_fields(old, n, f);
+                    next
+                }),
+                "changed",
+            ),
+            (
+                "the catalog's form replaced",
+                update(&two, |old, n, next| {
+                    let mut f = form_of(old).1;
+                    f.set("NeedAppearances", true);
+                    n.objects.insert((next, 0), Object::Dictionary(f));
+                    let mut c = old.catalog().unwrap().clone();
+                    c.set("AcroForm", Object::Reference((next, 0)));
+                    n.objects.insert(root(old), Object::Dictionary(c));
+                    next
+                }),
+                "the document catalog (object",
+            ),
+            (
+                "the catalog",
+                update(&two, |old, n, next| {
+                    let mut c = old.catalog().unwrap().clone();
+                    c.set("PageMode", Object::from("FullScreen"));
+                    n.objects.insert(root(old), Object::Dictionary(c));
+                    next
+                }),
+                "the document catalog (object",
+            ),
+            (
+                "the page tree",
+                update(&two, |old, n, next| {
+                    let pages = old
+                        .catalog()
+                        .unwrap()
+                        .get(b"Pages")
+                        .unwrap()
+                        .as_reference()
+                        .unwrap();
+                    let mut p = old.get_dictionary(pages).unwrap().clone();
+                    p.set("Rotate", 90);
+                    n.objects.insert(pages, Object::Dictionary(p));
+                    next
+                }),
+                "the page tree (object",
+            ),
+            (
+                "a signature's widget",
+                update(&two, |old, n, next| {
+                    let id = annots_of(old).1[0].as_reference().unwrap();
+                    let mut w = old.get_dictionary(id).unwrap().clone();
+                    w.set(
+                        "Rect",
+                        Object::Array(vec![0.into(), 0.into(), 500.into(), 500.into()]),
+                    );
+                    n.objects.insert(id, Object::Dictionary(w));
+                    next
+                }),
+                "an annotation (object",
+            ),
+        ];
+        for (what, evil, says) in cases {
+            for err in errors(&e, &evil, &format!("{form}, {what}")) {
+                assert!(
+                    err.contains("changed after this signature") && err.contains(says),
+                    "{form}, {what}: {err}"
+                );
+            }
+        }
+    }
+}
+
+/// A new signature field gets the first free name, and fields inside others are found by their
+/// full names.
+#[test]
+fn signature_field_names() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = engine();
+    let rsa = key(&e, "alice_rsa.p12");
+    let plain = std::fs::read(fx.join("plain.pdf")).unwrap();
+    // a text field already named Signature1
+    let mut doc = Document::load_mem(&plain).unwrap();
+    let tx = doc.add_object(Dictionary::from_iter([
+        ("FT", Object::from("Tx")),
+        ("T", Object::string_literal("Signature1")),
+    ]));
+    doc.catalog_mut().unwrap().set(
+        "AcroForm",
+        Dictionary::from_iter([("Fields", Object::Array(vec![Object::Reference(tx)]))]),
+    );
+    let mut taken = Vec::new();
+    doc.save_to(&mut taken).unwrap();
+    let signed = e.sign_pdf(&taken, &rsa, None, None).unwrap().cms;
+    let r = e.verify(&signed, None, None).unwrap();
+    assert!(r.valid);
+    assert_eq!(
+        r.signers[0].kind.as_deref(),
+        Some("PDF signature \"Signature2\"")
+    );
+
+    // the signature's field moved under a parent field "form" that gives its type
+    let mut doc = Document::load_mem(&e.sign_pdf(&plain, &rsa, None, None).unwrap().cms).unwrap();
+    let widget = doc
+        .catalog()
+        .unwrap()
+        .get(b"AcroForm")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Fields")
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .as_reference()
+        .unwrap();
+    let parent = doc.add_object(Dictionary::from_iter([
+        ("FT", Object::from("Sig")),
+        ("T", Object::string_literal("form")),
+        ("Kids", Object::Array(vec![Object::Reference(widget)])),
+    ]));
+    let w = doc.get_dictionary_mut(widget).unwrap();
+    w.remove(b"FT");
+    w.set("Parent", Object::Reference(parent));
+    let mut form = doc
+        .catalog()
+        .unwrap()
+        .get(b"AcroForm")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .clone();
+    // listed twice: still one field
+    form.set(
+        "Fields",
+        Object::Array(vec![Object::Reference(parent), Object::Reference(parent)]),
+    );
+    doc.catalog_mut().unwrap().set("AcroForm", form);
+    let mut nested = Vec::new();
+    doc.save_to(&mut nested).unwrap();
+    let r = e.verify(&nested, None, None).unwrap();
+    let kinds: Vec<_> = r.signers.iter().map(|s| s.kind.clone().unwrap()).collect();
+    assert_eq!(kinds, ["PDF signature \"form.Signature1\""]);
+}

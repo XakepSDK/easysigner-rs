@@ -392,4 +392,341 @@ mod tests {
             .is_err()
         );
     }
+
+    fn key(p: &str) -> crate::p12::Key {
+        let d =
+            std::fs::read(format!("{}/tests/fixtures/{p}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        crate::p12::open(&d, "Qwerty12", None).unwrap()
+    }
+
+    /// A certificate for `subject`'s key issued by `by`, with the OCSP signing purpose when
+    /// `ocsp`.
+    fn issue(by: &crate::p12::Key, subject: &Cert, ocsp: bool) -> Cert {
+        let alg = der::alg_null(by.private_key.sig_oid());
+        let validity = der::seq(&[
+            &time::encode_generalized(by.cert.not_before),
+            &time::encode_generalized(by.cert.not_after),
+        ]);
+        let mut tbs = vec![
+            der::tlv(der::ctx(0), &der::small_int(2)),
+            der::small_int(99),
+            alg.clone(),
+            by.cert.subject.clone(),
+            validity,
+            der::seq(&[&der::set_of(vec![der::seq(&[
+                &der::oid("2.5.4.3"),
+                &der::tlv(0x0c, b"TEST OCSP RESPONDER"),
+            ])])]),
+            subject.spki.clone(),
+        ];
+        if ocsp {
+            let eku = der::seq(&[&der::oid(cert::EKU_OCSP_SIGNING)]);
+            let ext = der::seq(&[&der::oid("2.5.29.37"), &der::octets(&eku)]);
+            tbs.push(der::tlv(der::ctx(3), &der::seq(&[&ext])));
+        }
+        let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
+        let tbs = der::seq(&refs);
+        let sig = by.private_key.sign(&tbs).unwrap();
+        Cert::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
+    }
+
+    /// An answer about `c`.
+    struct Reply<'a> {
+        signer: &'a crate::p12::Key,
+        certs: Vec<Cert>,
+        issuer: &'a Cert,
+        serial: Vec<u8>,
+        status: Vec<u8>,
+        this_update: i64,
+        next_update: Option<i64>,
+        nonce: Option<Vec<u8>>,
+        version: bool,
+    }
+
+    impl Reply<'_> {
+        fn encode(&self) -> Vec<u8> {
+            let alg = gost::H_SHA256;
+            let (nh, kh) = issuer_hashes(self.issuer, alg).unwrap();
+            let cert_id = der::seq(&[
+                &der::alg_null(alg),
+                &der::octets(&nh),
+                &der::octets(&kh),
+                &der::uint(&self.serial),
+            ]);
+            let mut single = vec![
+                cert_id,
+                self.status.clone(),
+                time::encode_generalized(self.this_update),
+            ];
+            if let Some(n) = self.next_update {
+                single.push(der::tlv(der::ctx(0), &time::encode_generalized(n)));
+            }
+            let refs: Vec<&[u8]> = single.iter().map(Vec::as_slice).collect();
+            let mut rd = vec![];
+            if self.version {
+                rd.push(der::tlv(der::ctx(0), &der::small_int(0)));
+            }
+            rd.push(der::tlv(der::ctx(1), &self.signer.cert.subject));
+            rd.push(time::encode_generalized(self.this_update));
+            rd.push(der::seq(&[&der::seq(&refs)]));
+            if let Some(n) = &self.nonce {
+                let ext = der::seq(&[&der::oid(NONCE), &der::octets(n)]);
+                rd.push(der::tlv(der::ctx(1), &der::seq(&[&ext])));
+            }
+            let refs: Vec<&[u8]> = rd.iter().map(Vec::as_slice).collect();
+            let rd = der::seq(&refs);
+            let sig = self.signer.private_key.sign(&rd).unwrap();
+            let mut basic = vec![
+                rd,
+                der::alg_null(self.signer.private_key.sig_oid()),
+                der::bit_string(&sig),
+            ];
+            if !self.certs.is_empty() {
+                let c: Vec<&[u8]> = self.certs.iter().map(|c| c.der.as_slice()).collect();
+                basic.push(der::tlv(der::ctx(0), &der::seq(&c)));
+            }
+            let refs: Vec<&[u8]> = basic.iter().map(Vec::as_slice).collect();
+            wrap_basic(&der::seq(&refs))
+        }
+    }
+
+    const GOOD: [u8; 2] = [0x80, 0];
+
+    #[test]
+    fn answers() {
+        let ca = key("ocsp/ca.p12");
+        let carol = key("ocsp/carol.p12").cert;
+        let trust = TrustStore::new(vec![ca.cert.clone()]);
+        let now = time::now_ms();
+        let reply = || Reply {
+            signer: &ca,
+            certs: vec![],
+            issuer: &ca.cert,
+            serial: carol.serial.clone(),
+            status: GOOD.to_vec(),
+            this_update: now,
+            next_update: Some(now + 3_600_000),
+            nonce: None,
+            version: false,
+        };
+        let stored = |r: &Reply| read_embedded(&r.encode(), &carol, &ca.cert, &trust).unwrap();
+
+        let a = stored(&reply());
+        assert!(a.good && a.cert_status == "good", "{}", a.status);
+        assert!(a.status.starts_with("GOOD"));
+        assert_eq!(a.this_update, Some(now / 1000 * 1000));
+        assert_eq!(a.responder.as_ref(), Some(&ca.cert));
+        assert!(!a.basic.is_empty());
+        let a = stored(&Reply {
+            version: true,
+            ..reply()
+        });
+        assert!(a.good, "{}", a.status);
+
+        let revoked = der::tlv(der::ctx(1), &time::encode_generalized(now - 86_400_000));
+        let a = stored(&Reply {
+            status: revoked,
+            ..reply()
+        });
+        assert!(!a.good && a.cert_status == "revoked", "{}", a.status);
+        assert_eq!(a.revoked_at, Some((now - 86_400_000) / 1000 * 1000));
+        let a = stored(&Reply {
+            status: vec![0x82, 0],
+            ..reply()
+        });
+        assert!(!a.good && a.cert_status == "unknown", "{}", a.status);
+
+        // about another certificate, or from a CA in trouble
+        let a = stored(&Reply {
+            serial: vec![1, 2, 3],
+            ..reply()
+        });
+        assert!(
+            !a.good && a.status.contains("no answer for this certificate"),
+            "{}",
+            a.status
+        );
+        let mut r = reply().encode();
+        let at = r.iter().position(|&b| b == der::ENUMERATED).unwrap();
+        r[at + 2] = 3;
+        let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
+        assert!(!a.good && a.status.contains("status 3"), "{}", a.status);
+    }
+
+    #[test]
+    fn who_may_answer() {
+        let ca = key("ocsp/ca.p12");
+        let carol_key = key("ocsp/carol.p12");
+        let carol = carol_key.cert.clone();
+        let other = key("keys/alice_rsa.p12");
+        let trust = TrustStore::new(vec![ca.cert.clone()]);
+        let now = time::now_ms();
+        let responder = |cert: Cert| crate::p12::Key {
+            alias: String::new(),
+            private_key: key("keys/alice_rsa.p12").private_key,
+            cert,
+            chain: vec![],
+            other_aliases: vec![],
+        };
+        let check = |signer: &crate::p12::Key| {
+            let r = Reply {
+                signer,
+                certs: vec![signer.cert.clone()],
+                issuer: &ca.cert,
+                serial: carol.serial.clone(),
+                status: GOOD.to_vec(),
+                this_update: now,
+                next_update: None,
+                nonce: None,
+                version: false,
+            };
+            read_embedded(&r.encode(), &carol, &ca.cert, &trust).unwrap()
+        };
+        // a responder the CA certified for OCSP signing
+        let delegated = responder(issue(&ca, &other.cert, true));
+        let a = check(&delegated);
+        assert!(a.good, "{}", a.status);
+        assert_eq!(a.responder.as_ref(), Some(&delegated.cert));
+        // ... not for OCSP signing
+        let a = check(&responder(issue(&ca, &other.cert, false)));
+        assert!(
+            !a.good && a.status.contains("not issued for OCSP signing"),
+            "{}",
+            a.status
+        );
+        // ... certified by someone else
+        let a = check(&responder(issue(&carol_key, &other.cert, true)));
+        assert!(
+            !a.good && a.status.contains("not issued by the certificate's CA"),
+            "{}",
+            a.status
+        );
+        // ... any key at all
+        let a = check(&other);
+        assert!(!a.good, "{}", a.status);
+        // a signature that does not hold
+        let mut r = Reply {
+            signer: &ca,
+            certs: vec![],
+            issuer: &ca.cert,
+            serial: carol.serial.clone(),
+            status: GOOD.to_vec(),
+            this_update: now,
+            next_update: None,
+            nonce: None,
+            version: false,
+        }
+        .encode();
+        let n = r.len();
+        r[n - 1] ^= 1;
+        let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
+        assert!(
+            !a.good && a.status.contains("signature is invalid"),
+            "{}",
+            a.status
+        );
+    }
+
+    /// A fresh answer must echo the nonce, or be fresh by its own dates.
+    #[test]
+    fn fresh_answers() {
+        let ca = key("ocsp/ca.p12");
+        let carol = key("ocsp/carol.p12").cert;
+        let trust = TrustStore::new(vec![ca.cert.clone()]);
+        let now = time::now_ms();
+        let sent = [7u8; 16];
+        let minute = 60_000;
+        let fresh = |this_update: i64, next_update: Option<i64>, echo: Option<Vec<u8>>| {
+            let r = Reply {
+                signer: &ca,
+                certs: vec![],
+                issuer: &ca.cert,
+                serial: carol.serial.clone(),
+                status: GOOD.to_vec(),
+                this_update,
+                next_update,
+                nonce: echo,
+                version: false,
+            };
+            evaluate(&r.encode(), &carol, &ca.cert, Some(&sent), &trust).unwrap()
+        };
+        let nested = der::octets(&sent);
+        for (name, a, ok) in [
+            (
+                "echoed",
+                fresh(now - 120 * minute, None, Some(nested.clone())),
+                true,
+            ),
+            (
+                "echoed bare",
+                fresh(now - 120 * minute, None, Some(sent.to_vec())),
+                true,
+            ),
+            (
+                "other nonce",
+                fresh(now, None, Some(der::octets(&[8; 16]))),
+                false,
+            ),
+            (
+                "valid until later",
+                fresh(now - 120 * minute, Some(now + minute), None),
+                true,
+            ),
+            (
+                "expired",
+                fresh(now - 120 * minute, Some(now - minute), None),
+                false,
+            ),
+            (
+                "made 50 minutes ago",
+                fresh(now - 50 * minute, None, None),
+                true,
+            ),
+            (
+                "made 70 minutes ago",
+                fresh(now - 70 * minute, None, None),
+                false,
+            ),
+            (
+                "made 4 minutes ahead",
+                fresh(now + 4 * minute, Some(now + 60 * minute), None),
+                true,
+            ),
+            (
+                "made 6 minutes ahead",
+                fresh(now + 6 * minute, Some(now + 60 * minute), None),
+                false,
+            ),
+        ] {
+            assert_eq!(a.good, ok, "{name}: {}", a.status);
+            if !ok && name != "other nonce" {
+                assert!(a.status.contains("out of date"), "{name}: {}", a.status);
+            }
+        }
+        let a = fresh(now, None, Some(der::octets(&[8; 16])));
+        assert!(a.status.contains("nonce mismatch"), "{}", a.status);
+        // a fresh answer is dated when it was checked
+        let a = fresh(now - 120 * minute, None, Some(nested));
+        assert!(
+            a.status
+                .contains(&time::fmt(Some(now)).chars().take(10).collect::<String>())
+        );
+    }
+
+    #[test]
+    fn certificate_id_hashes() {
+        let ca = |a: &str| {
+            Cert::parse(
+                &std::fs::read(format!(
+                    "{}/tests/fixtures/keys/ca_{a}.cer",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(cert_id_hash(&ca("gost2004")), gost::H_GOST34311);
+        assert_eq!(cert_id_hash(&ca("gost2015")), gost::H_GOST2015_512);
+        assert_eq!(cert_id_hash(&ca("rsa")), gost::H_SHA256);
+    }
 }

@@ -385,4 +385,166 @@ mod tests {
         let e = read_response(&rejected).unwrap_err();
         assert!(e.0.contains("Missing certificate or key error"), "{e}");
     }
+
+    fn live(case: &str, n: &str) -> Vec<u8> {
+        std::fs::read(format!(
+            "{}/tests/fixtures/nca-live/{case}/{n}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    }
+
+    /// A TSA's answer is only taken when it answers this request: its nonce, policy, hash and
+    /// certificate.
+    #[test]
+    fn answers_must_match_the_request() {
+        let case = "sha256-policy-6.2";
+        let resp = live(case, "tsr.der");
+        let token = read_response(&resp).unwrap();
+        let req = || Request::parse(&live(case, "tsq.der")).unwrap();
+        assert!(req().cert_req && req().nonce.is_some() && req().policy.is_some());
+        validate(&req(), token).unwrap();
+
+        // the nonce compares as a number: a leading zero byte does not matter
+        let mut r = req();
+        r.nonce.as_mut().unwrap().insert(0, 0);
+        validate(&r, token).unwrap();
+        let mut r = req();
+        *r.nonce.as_mut().unwrap().last_mut().unwrap() ^= 1;
+        let e = validate(&r, token).unwrap_err();
+        assert!(e.0.contains("nonce"), "{e}");
+        // no nonce asked: none checked
+        let mut r = req();
+        r.nonce = None;
+        validate(&r, token).unwrap();
+
+        let mut r = req();
+        r.policy = Some("1.2.398.3.3.2.6.4".into());
+        let e = validate(&r, token).unwrap_err();
+        assert!(e.0.contains("policy"), "{e}");
+        let mut r = req();
+        r.policy = None;
+        validate(&r, token).unwrap();
+
+        let mut r = req();
+        r.hash[0] ^= 1;
+        let e = validate(&r, token).unwrap_err();
+        assert!(e.0.contains("imprint"), "{e}");
+        let mut r = req();
+        r.hash_oid = gost::H_SHA1.into();
+        let e = validate(&r, token).unwrap_err();
+        assert!(e.0.contains("imprint"), "{e}");
+
+        // a token without the TSA's certificate, when the request asked for it
+        let mut sd = SignedData::parse_inner(token).unwrap();
+        sd.certs.clear();
+        let bare = sd.encode();
+        let e = validate(&req(), &bare).unwrap_err();
+        assert!(e.0.contains("Certificate requested"), "{e}");
+        let mut r = req();
+        r.cert_req = false;
+        validate(&r, &bare).unwrap();
+    }
+
+    #[test]
+    fn requests_and_responses() {
+        let r = Request {
+            hash_oid: gost::H_SHA256.into(),
+            hash: vec![7; 32],
+            policy: Some("1.2.398.3.3.2.6.2".into()),
+            nonce: Some(vec![0x41, 2, 3]),
+            cert_req: true,
+        };
+        let back = Request::parse(&r.encode()).unwrap();
+        assert_eq!(back.hash_oid, r.hash_oid);
+        assert_eq!(back.hash, r.hash);
+        assert_eq!(back.policy, r.policy);
+        assert_eq!(back.nonce, r.nonce);
+        assert!(back.cert_req);
+        let r = Request {
+            cert_req: false,
+            policy: None,
+            nonce: None,
+            ..r
+        };
+        let back = Request::parse(&r.encode()).unwrap();
+        assert!(!back.cert_req && back.policy.is_none() && back.nonce.is_none());
+
+        // granted (0) and granted with modifications (1) give the token; anything else is a
+        // refusal, even with a token
+        let token = der::seq(&[&der::small_int(5)]);
+        for (code, ok) in [(0, true), (1, true), (2, false), (5, false)] {
+            let resp = der::seq(&[&der::seq(&[&der::small_int(code)]), &token]);
+            assert_eq!(read_response(&resp).is_ok(), ok, "status {code}");
+        }
+        let resp = der::seq(&[&der::seq(&[&der::small_int(0)])]);
+        assert!(read_response(&resp).is_err());
+
+        assert_eq!(
+            hash_and_policy_for(gost::KEY_GOST2004),
+            (gost::H_GOST34311, "1.2.398.3.3.2.6.1")
+        );
+        assert_eq!(
+            hash_and_policy_for(gost::KEY_GOST2015_512),
+            (gost::H_GOST2015_512, "1.2.398.3.3.2.6.4")
+        );
+        assert_eq!(
+            hash_and_policy_for(gost::RSA_ENCRYPTION),
+            (gost::H_SHA256, "1.2.398.3.3.2.6.2")
+        );
+    }
+
+    #[test]
+    fn tst_info_fields() {
+        let body = |nonce: bool| {
+            let mut b = der::small_int(1);
+            b.extend(der::oid("1.2.398.3.3.2.6.2"));
+            b.extend(der::seq(&[
+                &der::seq(&[&der::oid(gost::H_SHA256)]),
+                &der::octets(&[9; 32]),
+            ]));
+            b.extend(der::small_int(77));
+            b.extend(crate::time::encode_generalized(1_700_000_000_000));
+            if nonce {
+                b.extend(der::uint(&[0x42, 1]));
+            }
+            der::tlv(der::SEQUENCE, &b)
+        };
+        // the five required fields are enough
+        let t = TstInfo::parse(&body(false)).unwrap();
+        assert_eq!(t.policy, "1.2.398.3.3.2.6.2");
+        assert_eq!(t.imprint_alg, gost::H_SHA256);
+        assert_eq!(t.imprint, vec![9; 32]);
+        assert_eq!(t.gen_time, 1_700_000_000_000);
+        assert!(t.nonce.is_none());
+        assert_eq!(
+            TstInfo::parse(&body(true)).unwrap().nonce,
+            Some(vec![0x42, 1])
+        );
+        let short = der::seq(&[&der::small_int(1), &der::oid("1.2.3")]);
+        assert!(TstInfo::parse(&short).is_err());
+    }
+
+    /// The token must cover the stamped bytes and be signed by its TSA.
+    #[test]
+    fn tokens_over_other_data() {
+        let trust = TrustStore::new(vec![]);
+        let case = "gost2015-policy-6.4";
+        let resp = live(case, "tsr.der");
+        let token = read_response(&resp).unwrap();
+        let mut data = live(case, "data.bin");
+        let mut sr = SignerReport::default();
+        check_token(&mut sr, &data, token, &trust).unwrap();
+        assert_eq!(sr.timestamp_ok, Some(true));
+        data[0] ^= 1;
+        let mut sr = SignerReport::default();
+        check_token(&mut sr, &data, token, &trust).unwrap();
+        assert_eq!(sr.timestamp_ok, Some(false));
+        // the TSA's signature broken
+        let mut sd = SignedData::parse_inner(token).unwrap();
+        sd.signers[0].signature[5] ^= 1;
+        let mut sr = SignerReport::default();
+        check_token(&mut sr, &live(case, "data.bin"), &sd.encode(), &trust).unwrap();
+        assert_eq!(sr.timestamp_ok, Some(false));
+    }
 }

@@ -231,3 +231,52 @@ fn signing_time_and_signed_files() {
     assert!(kzsigner::crypto_version().contains("GOST"));
     assert!(kzsigner::version().contains('.'));
 }
+
+/// A certificate for `subject`'s public key, issued and signed by `issuer` (any key, CA or
+/// not), valid as long as the issuer's certificate.
+fn issue(issuer: &p12::Key, subject: &Cert) -> Cert {
+    let alg = der::seq(&[
+        &der::oid(issuer.private_key.sig_oid()),
+        &der::tlv(der::NULL, &[]),
+    ]);
+    let validity = der::seq(&[
+        &kzsigner::time::encode_generalized(issuer.cert.not_before),
+        &kzsigner::time::encode_generalized(issuer.cert.not_after),
+    ]);
+    let tbs = der::seq(&[
+        &der::tlv(der::ctx(0), &der::small_int(2)),
+        &der::small_int(4242),
+        &alg,
+        &issuer.cert.subject,
+        &validity,
+        &subject.subject,
+        &subject.spki,
+    ]);
+    let sig = issuer.private_key.sign(&tbs).unwrap();
+    Cert::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
+}
+
+/// Only a CA's certificate may issue others: one issued by a person's key is not trusted, even
+/// when that person's certificate is.
+#[test]
+fn issuers_must_be_cas() {
+    let ca = ca("keys/ca_rsa.cer");
+    let alice = key("keys/alice_rsa.p12");
+    let bob = key("keys/bob_rsa.p12").cert;
+    let now = kzsigner::time::now_ms();
+    let by_alice = issue(&alice, &bob);
+    assert!(by_alice.signed_by(&alice.cert));
+    let store = TrustStore::new(vec![ca.clone(), alice.cert.clone()]);
+    let chain = store.check(&by_alice, now);
+    assert!(!chain.ok, "{}", chain.status);
+    assert!(chain.status.contains("is not a CA"), "{}", chain.status);
+
+    // a trusted certificate that is not a root still needs its own issuer
+    let chain = TrustStore::new(vec![alice.cert.clone()]).check(&alice.cert, now);
+    assert!(!chain.ok && chain.issuer.is_none(), "{}", chain.status);
+    assert!(
+        chain.status.contains("Issuer not found"),
+        "{}",
+        chain.status
+    );
+}
