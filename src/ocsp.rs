@@ -546,9 +546,7 @@ mod tests {
             "{}",
             a.status
         );
-        let mut r = reply().encode();
-        let at = r.iter().position(|&b| b == der::ENUMERATED).unwrap();
-        r[at + 2] = 3;
+        let r = der::seq(&[&der::tlv(der::ENUMERATED, &[3])]);
         let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
         assert!(!a.good && a.status.contains("status 3"), "{}", a.status);
     }
@@ -603,7 +601,11 @@ mod tests {
         );
         // ... any key at all
         let a = check(&other);
-        assert!(!a.good, "{}", a.status);
+        assert!(
+            !a.good && a.status.contains("not issued by the certificate's CA"),
+            "{}",
+            a.status
+        );
         // a signature that does not hold
         let mut r = Reply {
             signer: &ca,
@@ -705,8 +707,8 @@ mod tests {
         }
         let a = fresh(now, None, Some(der::octets(&[8; 16])));
         assert!(a.status.contains("nonce mismatch"), "{}", a.status);
-        // a fresh answer is dated when it was checked
-        let a = fresh(now - 120 * minute, None, Some(nested));
+        // a fresh answer is dated when it was checked, not when it was made
+        let a = fresh(now - 2 * 1440 * minute, None, Some(nested));
         assert!(
             a.status
                 .contains(&time::fmt(Some(now)).chars().take(10).collect::<String>())

@@ -93,7 +93,7 @@ fn other_pkcs12_forms() {
             "{f}"
         );
     }
-    for f in ["aes128", "des3", "plain"] {
+    for f in ["aes128", "aes192", "des3", "plain", "nomac"] {
         let e = p12::open(&read(&format!("p12/{f}.p12")), "Qwerty13", None)
             .err()
             .unwrap();

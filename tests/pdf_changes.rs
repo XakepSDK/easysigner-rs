@@ -175,9 +175,14 @@ fn errors(e: &Engine, evil: &[u8], what: &str) -> Vec<String> {
 }
 
 /// A PDF whose page annotations, AcroForm and its fields are separate objects, as many tools
-/// write them; signing adds to each in place.
+/// write them, with an information dictionary; signing adds to each in place.
 fn indirect_form(plain: &[u8]) -> Vec<u8> {
     let mut doc = Document::load_mem(plain).unwrap();
+    let info = doc.add_object(Dictionary::from_iter([(
+        "Producer",
+        Object::string_literal("a test"),
+    )]));
+    doc.trailer.set("Info", Object::Reference(info));
     let annots = doc.add_object(Object::Array(vec![]));
     let fields = doc.add_object(Object::Array(vec![]));
     let form = doc.add_object(Dictionary::from_iter([(
@@ -295,11 +300,19 @@ fn what_updates_may_change() {
         };
 
         // allowed: the information dictionary
-        let info = update(&two, |_, n, next| {
+        // (the indirect form's file has one, changed in place; the other gets a new one)
+        let info = update(&two, |old, n, next| {
             let mut i = Dictionary::new();
             i.set("Producer", Object::string_literal("someone else"));
-            n.objects.insert((next, 0), Object::Dictionary(i));
-            n.trailer.set("Info", Object::Reference((next, 0)));
+            match old.trailer.get(b"Info").and_then(Object::as_reference) {
+                Ok(id) => {
+                    n.objects.insert(id, Object::Dictionary(i));
+                }
+                Err(_) => {
+                    n.objects.insert((next, 0), Object::Dictionary(i));
+                    n.trailer.set("Info", Object::Reference((next, 0)));
+                }
+            }
             next
         });
         let r = e.verify(&info, None, None).unwrap();
@@ -480,6 +493,7 @@ fn signature_field_names() {
     doc.catalog_mut().unwrap().set("AcroForm", form);
     let mut nested = Vec::new();
     doc.save_to(&mut nested).unwrap();
+    // (rewritten whole, so the signature itself no longer holds: only the names are checked)
     let r = e.verify(&nested, None, None).unwrap();
     let kinds: Vec<_> = r.signers.iter().map(|s| s.kind.clone().unwrap()).collect();
     assert_eq!(kinds, ["PDF signature \"form.Signature1\""]);

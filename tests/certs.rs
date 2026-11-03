@@ -235,10 +235,7 @@ fn signing_time_and_signed_files() {
 /// A certificate for `subject`'s public key, issued and signed by `issuer` (any key, CA or
 /// not), valid as long as the issuer's certificate.
 fn issue(issuer: &p12::Key, subject: &Cert) -> Cert {
-    let alg = der::seq(&[
-        &der::oid(issuer.private_key.sig_oid()),
-        &der::tlv(der::NULL, &[]),
-    ]);
+    let alg = der::alg_null(issuer.private_key.sig_oid());
     let validity = der::seq(&[
         &kzsigner::time::encode_generalized(issuer.cert.not_before),
         &kzsigner::time::encode_generalized(issuer.cert.not_after),
