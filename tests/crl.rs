@@ -245,7 +245,7 @@ fn which_lists_are_current() {
         .2
     };
     // made a little ahead (clock skew up to 5 minutes), or due for renewal this very moment
-    assert_eq!(eval(now + 4 * MINUTE, now + DAY), "good");
+    assert_eq!(eval(now + 5 * MINUTE, now + DAY), "good");
     assert_eq!(eval(now + 6 * MINUTE, now + DAY), "");
     assert_eq!(eval(now - DAY, now), "good");
     assert_eq!(eval(now - DAY, now - 1000), "");
@@ -341,11 +341,12 @@ fn fetched_lists() {
     assert_eq!(crl::urls(&c), std::slice::from_ref(&url));
     assert!(crl::urls(&carol.cert).iter().all(|u| *u != url));
 
+    let (base, delta, due) = crl::lists(&c, now).unwrap();
+    assert!(base.next_update.is_some() && delta.is_none() && !due);
+    // (check reads the clock itself, a little after `now`: the list is still kept)
     let (good, status, answer) = crl::check(&c, Some(&ca.cert));
     assert!(good && answer == "good", "{status}");
     assert_eq!(crl::check(&c, None).2, "");
-    let (base, delta, due) = crl::lists(&c, now).unwrap();
-    assert!(base.next_update.is_some() && delta.is_none() && !due);
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept");
     crl::lists(&c, now + 59 * MINUTE).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept for the hour");
