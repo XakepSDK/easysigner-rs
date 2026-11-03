@@ -183,10 +183,8 @@ mod tests {
 
     #[test]
     fn codes_are_filled() {
-        let cms = vec![0x5au8; 1 << 14];
         let mut x = 1u32;
-        let cms: Vec<u8> = cms
-            .iter()
+        let cms: Vec<u8> = (0..1 << 14)
             .map(|_| {
                 x = x.wrapping_mul(1103515245).wrapping_add(12345);
                 (x >> 16) as u8
@@ -194,6 +192,8 @@ mod tests {
             .collect();
         let p = payloads(1, &cms).unwrap();
         let cap = capacity();
+        // each part but the last is as long as a code holds, less the room left for the
+        // part numbers
         for s in &p[..p.len() - 1] {
             assert!(s.len() <= cap && s.len() + 16 > cap, "{} of {cap}", s.len());
         }

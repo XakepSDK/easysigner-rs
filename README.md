@@ -268,6 +268,10 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
   a duplicated signed part, broken XML, encodings, several signatures in one document.
 * `tests/xml_room.rs`: when another XML signature can go inside a signed document.
+* `tests/xml_signatures.rs`: which certificate an XML signature names, transforms that leave
+  other signatures out, and the document shapes signing accepts.
+* `tests/signatures.rs`: the signed reference to the signer's certificate, checking a signature
+  without its document, what a report says about each signer, and signing warnings.
 * `tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
 * `tests/long_term_file.rs`: a B-LTA .cms made by an earlier build (`tests/fixtures/ltv`) still
   verifies, and without its kept data the archive timestamps catch it.
@@ -278,7 +282,8 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   file options, `info`, and the names `extract` gives.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).
-* `tests/p12.rs` and unit tests: key files, curves, hashes, ASN.1, times, and real exchanges
+* `tests/p12.rs` and unit tests: key files (also the PKCS#12 forms OpenSSL writes,
+  `tests/fixtures/p12`), curves, hashes, ASN.1, times, and real exchanges
   with NCA's timestamp server (`tests/fixtures/nca-live`, RSA and GOST 2015 TSA signatures).
 
 None of the test keys or certificates is a real NCA certificate. The Kalkan fixtures expire on

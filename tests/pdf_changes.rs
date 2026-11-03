@@ -695,6 +695,11 @@ fn metadata_dss_and_other_objects() {
     let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
     let r = e.verify(&two, None, None).unwrap();
     assert!(r.valid, "{:?}", r.signers);
+    let signed = Document::load_mem(&two).unwrap();
+    let c = signed.catalog().unwrap();
+    assert_eq!(c.get(b"AcroForm").unwrap().as_reference().unwrap(), form);
+    let fields = signed.get_dictionary(form).unwrap().get(b"Fields").unwrap();
+    assert_eq!(fields.as_array().unwrap().len(), 2);
 
     let allowed = [
         update(&two, |old, n, next| {

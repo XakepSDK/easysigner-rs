@@ -74,7 +74,14 @@ fn request(
         .with_config()
         .limit(limit)
         .read_to_vec()
-        .map_err(|e| fail(&e))
+        .map_err(|e| match e {
+            // the server answered, with more than any real answer holds
+            ureq::Error::BodyExceedsLimit(n) => Error::new(trf(
+                "The {} at {} sent an answer larger than {} bytes",
+                &[&tr_what(what), &url, &n],
+            )),
+            e => fail(&e),
+        })
 }
 
 fn tr_what(what: &str) -> &str {
@@ -114,8 +121,12 @@ mod tests {
             super::get(&serve("200 OK", b"list"), 100, "x").unwrap(),
             b"list"
         );
-        let e = super::get(&serve("200 OK", b"too long"), 4, "x").unwrap_err();
-        assert!(e.0.contains("Could not reach the x"), "{}", e.0);
+        let big = serve("200 OK", b"too long");
+        let e = super::get(&big, 4, "x").unwrap_err();
+        assert_eq!(
+            e.0,
+            format!("The x at {big} sent an answer larger than 4 bytes")
+        );
         let e = super::get(&serve("404 Not Found", b""), 100, "OCSP server").unwrap_err();
         assert!(
             e.0.starts_with("The OCSP server answered HTTP 404"),

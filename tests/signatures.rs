@@ -244,7 +244,8 @@ fn signing_without_a_revocation_answer() {
     assert_eq!(r.signer_count, 1);
 }
 
-/// Signing with a key whose certificate has expired works, and says so.
+/// Signing with a key whose certificate has expired works, and says so. The warning comes from
+/// the parsed certificate: only its end date is moved, the signature still carries the real one.
 #[test]
 fn warnings_and_counts_from_signing() {
     let trust = TrustStore::new(vec![ca("keys/ca_gost2015.cer")]);

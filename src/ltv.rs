@@ -885,14 +885,17 @@ mod tests {
         add(&mut list, b"x");
         assert_eq!(list, vec![b"x".to_vec()]);
 
-        let mut sd = crate::cms::sign_once(
-            b"doc",
-            crate::cms::ID_DATA,
-            true,
-            &carol.private_key,
-            &carol.cert,
-        )
-        .unwrap();
+        let fresh = || {
+            crate::cms::sign_once(
+                b"doc",
+                crate::cms::ID_DATA,
+                true,
+                &carol.private_key,
+                &carol.cert,
+            )
+            .unwrap()
+        };
+        let mut sd = fresh();
         embed(&mut sd, 0, &kept);
         assert_eq!(sd.crl_items().len(), 2);
         let back = Kept::from_cms(&sd, None);
@@ -930,14 +933,7 @@ mod tests {
         )
         .unwrap()
         .encode();
-        let mut sd = crate::cms::sign_once(
-            b"doc",
-            crate::cms::ID_DATA,
-            true,
-            &carol.private_key,
-            &carol.cert,
-        )
-        .unwrap();
+        let mut sd = fresh();
         sd.signers[0].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token);
         embed(&mut sd, 0, &kept);
         assert_eq!(sd.signers[0].unsigned_attrs.len(), 1);
@@ -952,14 +948,7 @@ mod tests {
             vec![f.ca.cert.der.clone()]
         );
         // only certificates: no revocation values
-        let mut sd = crate::cms::sign_once(
-            b"doc",
-            crate::cms::ID_DATA,
-            true,
-            &carol.private_key,
-            &carol.cert,
-        )
-        .unwrap();
+        let mut sd = fresh();
         embed(
             &mut sd,
             0,
