@@ -298,8 +298,8 @@ how well they check it, apart from the build:
   HTML report and `lcov.info`; the job summary lists the least covered files. Locally:
   `cargo llvm-cov --release --html`.
 * **Mutation testing** (cargo-mutants): small changes are made to the code, one at a time, and
-  some test must fail for each. A full run (about 3500 mutants; the icons' geometry, the
-  window's layout and the Android glue are left out, see `.cargo/mutants.toml`) runs weekly
-  and by hand (Actions > quality > Run workflow, optionally for some files), split over 8
-  shards; a pull request runs only the mutants in lines it changes. Missed mutants are listed
+  some test must fail for each. A full run (about 2500 mutants; the icons' geometry, the
+  window's layout, the stamp and card drawing and the Android glue are left out, see
+  `.cargo/mutants.toml`) runs weekly and by hand (Actions > quality > Run workflow, optionally
+  for some files or shards), split over 16 shards; a pull request runs only the mutants in lines it changes. Missed mutants are listed
   in the job summary and the `mutants-N` artifacts. Locally: `cargo mutants -f src/xml/mod.rs`.

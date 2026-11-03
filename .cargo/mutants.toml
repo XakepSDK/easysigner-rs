@@ -1,4 +1,12 @@
 # cargo-mutants (see .github/workflows/quality.yml). Left out: the drawn icons' geometry, the
-# window's layout code and the Android glue, which tests can only look at, not check.
-exclude_globs = ["src/icons.rs", "src/gui/**", "src/android.rs"]
+# window's layout code, the stamp and document card drawing (coordinates, sizes and text
+# placement) and the Android glue, which tests can only look at, not check.
+exclude_globs = [
+    "src/icons.rs",
+    "src/gui/**",
+    "src/pdf/card.rs",
+    "src/pdf/stamp.rs",
+    "src/pdf/layout.rs",
+    "src/android.rs",
+]
 profile = "mutants"

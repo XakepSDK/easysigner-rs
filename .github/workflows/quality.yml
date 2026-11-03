@@ -6,7 +6,7 @@
 #
 # mutants: cargo-mutants changes the code in small ways (a condition flipped, a function
 # returning a default) and checks that some test fails. A mutant that survives is code no
-# test really checks. A full run is long (over 4000 mutants), so it runs weekly and by hand,
+# test really checks. A full run is long (about 2500 mutants), so it runs weekly and by hand,
 # split over 16 shards (up to 1.5 hours each); a pull request runs it only on the lines it changes. Survivors are
 # reported, not failed on, while the existing ones are worked down: see mutants.out in the
 # artifact (missed.txt).
