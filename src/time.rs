@@ -147,4 +147,43 @@ mod tests {
         assert_eq!(&encode_generalized(g)[2..], b"20261031000029Z");
         assert_eq!(&encode(iso_ms(2051))[..1], &[crate::der::GENERALIZED_TIME]);
     }
+
+    #[test]
+    fn time_forms() {
+        let utc = |t: &[u8]| iso(parse_asn1(crate::der::UTC_TIME, t).unwrap());
+        let generalized = |t: &[u8]| iso(parse_asn1(crate::der::GENERALIZED_TIME, t).unwrap());
+        // two-digit years: 50 and later are the 1900s
+        assert_eq!(utc(b"491231235959Z"), "2049-12-31T23:59:59Z");
+        assert_eq!(utc(b"500101000000Z"), "1950-01-01T00:00:00Z");
+        // without seconds, without Z, with a fraction at the very end
+        assert_eq!(utc(b"2602031200"), "2026-02-03T12:00:00Z");
+        assert_eq!(
+            generalized(b"20261031000029.25"),
+            "2026-10-31T00:00:29.250Z"
+        );
+        // offsets east and west, with and without minutes
+        assert_eq!(utc(b"2602031200+0530"), "2026-02-03T06:30:00Z");
+        assert_eq!(utc(b"2602031200-0130"), "2026-02-03T13:30:00Z");
+        assert_eq!(utc(b"2602031200+05"), "2026-02-03T07:00:00Z");
+        assert!(parse_asn1(crate::der::UTC_TIME, b"2602031200X").is_err());
+        assert!(parse_asn1(crate::der::OCTET_STRING, b"2602031200Z").is_err());
+    }
+
+    #[test]
+    fn times_for_people() {
+        use chrono::{Local, Offset, TimeZone};
+        assert_eq!(fmt(None), "-");
+        let s = fmt(Some(0));
+        let local_offset = Local
+            .timestamp_millis_opt(0)
+            .single()
+            .unwrap()
+            .offset()
+            .fix();
+        if local_offset.local_minus_utc() == 0 {
+            assert_eq!(s, "1970-01-01 00:00:00 UTC");
+        } else {
+            assert!(!s.ends_with("UTC") && s.contains(':'), "{s}");
+        }
+    }
 }

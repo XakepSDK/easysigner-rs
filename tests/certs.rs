@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use kzsigner::cert::{self, Cert};
+use kzsigner::der::Tlv;
 use kzsigner::trust::TrustStore;
 use kzsigner::{Engine, cms, der, p12};
 
@@ -235,20 +236,35 @@ fn signing_time_and_signed_files() {
 /// A certificate for `subject`'s public key, issued and signed by `issuer` (any key, CA or
 /// not), valid as long as the issuer's certificate.
 fn issue(issuer: &p12::Key, subject: &Cert) -> Cert {
+    issue_with(issuer, subject, &[])
+}
+
+/// [`issue`], with these extensions (OID, value).
+fn issue_with(issuer: &p12::Key, subject: &Cert, exts: &[(&str, Vec<u8>)]) -> Cert {
     let alg = der::alg_null(issuer.private_key.sig_oid());
     let validity = der::seq(&[
         &kzsigner::time::encode_generalized(issuer.cert.not_before),
         &kzsigner::time::encode_generalized(issuer.cert.not_after),
     ]);
-    let tbs = der::seq(&[
-        &der::tlv(der::ctx(0), &der::small_int(2)),
-        &der::small_int(4242),
-        &alg,
-        &issuer.cert.subject,
-        &validity,
-        &subject.subject,
-        &subject.spki,
-    ]);
+    let mut tbs = vec![
+        der::tlv(der::ctx(0), &der::small_int(2)),
+        der::small_int(4242),
+        alg.clone(),
+        issuer.cert.subject.clone(),
+        validity,
+        subject.subject.clone(),
+        subject.spki.clone(),
+    ];
+    if !exts.is_empty() {
+        let e: Vec<Vec<u8>> = exts
+            .iter()
+            .map(|(oid, v)| der::seq(&[&der::oid(oid), &der::octets(v)]))
+            .collect();
+        let refs: Vec<&[u8]> = e.iter().map(Vec::as_slice).collect();
+        tbs.push(der::tlv(der::ctx(3), &der::seq(&refs)));
+    }
+    let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
+    let tbs = der::seq(&refs);
     let sig = issuer.private_key.sign(&tbs).unwrap();
     Cert::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
 }
@@ -276,4 +292,93 @@ fn issuers_must_be_cas() {
         "{}",
         chain.status
     );
+}
+
+/// Extensions as certificates carry them.
+#[test]
+fn extensions() {
+    let alice = key("keys/alice_rsa.p12");
+    let bob = key("keys/bob_rsa.p12").cert;
+    let with = |exts: &[(&str, Vec<u8>)]| issue_with(&alice, &bob, exts);
+
+    let ski = with(&[("2.5.29.14", der::octets(&[1, 2, 3]))]);
+    assert_eq!(ski.subject_key_id(), Some(vec![1, 2, 3]));
+    assert_eq!(with(&[]).subject_key_id(), None);
+
+    // basic constraints: cA written out as FALSE, or a path length alone, is no CA
+    let bc = |inner: &[&[u8]]| with(&[("2.5.29.19", der::seq(inner))]);
+    assert!(bc(&[&der::boolean(true)]).is_ca());
+    assert!(!bc(&[&der::boolean(false)]).is_ca());
+    assert!(!bc(&[&der::small_int(0)]).is_ca());
+    assert!(!bc(&[]).is_ca());
+
+    // purposes: only those named
+    let eku = |oids: &[&str]| {
+        let o: Vec<Vec<u8>> = oids.iter().map(|o| der::oid(o)).collect();
+        let refs: Vec<&[u8]> = o.iter().map(Vec::as_slice).collect();
+        with(&[("2.5.29.37", der::seq(&refs))])
+    };
+    assert_eq!(
+        cert::types(&eku(&[cert::EKU_CLIENT_AUTH])),
+        ["AUTHENTICATION"]
+    );
+    assert_eq!(
+        cert::types(&eku(&[cert::EKU_TIME_STAMPING, cert::EKU_OCSP_SIGNING])),
+        ["OCSP_RESPONSE_SIGNING", "TSP_SIGNING"]
+    );
+
+    // policies: a CA that issues under 1.2.3 and a certificate with none, or another
+    let policies = |oids: &[&str]| {
+        let o: Vec<Vec<u8>> = oids.iter().map(|o| der::seq(&[&der::oid(o)])).collect();
+        let refs: Vec<&[u8]> = o.iter().map(Vec::as_slice).collect();
+        ("2.5.29.32", der::seq(&refs))
+    };
+    let ca = with(&[policies(&["1.2.3"])]);
+    assert_eq!(
+        cert::usage_problem(&with(&[policies(&["1.2.3.4"])]), Some(&ca)),
+        None
+    );
+    let none = cert::usage_problem(&with(&[policies(&[])]), Some(&ca)).unwrap();
+    assert!(none.contains("names no certificate policy"), "{none}");
+    let other = cert::usage_problem(&with(&[policies(&["1.2.30"])]), Some(&ca)).unwrap();
+    assert!(other.contains("is not one of its CA's policies"), "{other}");
+}
+
+/// The parts every certificate has, with and without its version field.
+#[test]
+fn certificate_structure() {
+    let alice = key("keys/alice_rsa.p12").cert;
+    let top = der::parse(&alice.der)
+        .unwrap()
+        .items(der::SEQUENCE)
+        .unwrap();
+    let tbs: Vec<Tlv> = top[0]
+        .items(der::SEQUENCE)
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(tbs[0].tag, der::ctx(0));
+    let cert = |tbs: &[Tlv]| {
+        let parts: Vec<&[u8]> = tbs.iter().map(|t| t.raw).collect();
+        der::seq(&[&der::seq(&parts), top[1].raw, top[2].raw])
+    };
+    // the six required fields, after a version or without one
+    let with_version = Cert::parse(&cert(&tbs[..7])).unwrap();
+    assert_eq!(with_version.serial, alice.serial);
+    assert!(with_version.extensions.is_empty());
+    let without = Cert::parse(&cert(&tbs[1..7])).unwrap();
+    assert_eq!(without.subject, alice.subject);
+    assert_eq!(without.not_after, alice.not_after);
+    for short in [&tbs[..6], &tbs[1..6]] {
+        assert!(Cert::parse(&cert(short)).is_err());
+    }
+    // missing the signature
+    assert!(Cert::parse(&der::seq(&[top[0].raw, top[1].raw])).is_err());
+    // a validity with one date
+    let mut t: Vec<Vec<u8>> = tbs.iter().map(|t| t.raw.to_vec()).collect();
+    let v = tbs[4].items(der::SEQUENCE).unwrap();
+    t[4] = der::seq(&[v[0].raw]);
+    let refs: Vec<&[u8]> = t.iter().map(Vec::as_slice).collect();
+    assert!(Cert::parse(&der::seq(&[&der::seq(&refs), top[1].raw, top[2].raw])).is_err());
 }

@@ -220,3 +220,26 @@ fn what_a_report_says() {
         s.warnings
     );
 }
+
+/// When the revocation check before signing gets no answer, signing goes ahead with a warning.
+#[test]
+fn signing_without_a_revocation_answer() {
+    let e = Engine::new(vec![ca("keys/ca_gost2015.cer")]);
+    let k = key("keys/alice_gost2015.p12");
+    let dead = "http://127.0.0.1:1/";
+    let r = e
+        .sign(b"hello", &k, false, None, Some(dead), false, None)
+        .unwrap();
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.contains("Could not check that your key is not revoked")),
+        "{:?}",
+        r.warnings
+    );
+    let r = e
+        .sign(b"hello", &k, false, None, None, false, None)
+        .unwrap();
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert_eq!(r.signer_count, 1);
+}

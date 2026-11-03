@@ -469,3 +469,131 @@ pub fn sign_digest(
         signers: vec![si],
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key() -> crate::p12::Key {
+        let d = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/keys/alice_gost2015.p12"
+        ))
+        .unwrap();
+        crate::p12::open(&d, "Qwerty12", None).unwrap()
+    }
+
+    fn signed(content_type: &str) -> SignedData {
+        let k = key();
+        sign_once(b"hello", content_type, true, &k.private_key, &k.cert).unwrap()
+    }
+
+    /// The SignedData version (RFC 5652 5.1): 3 for other content than data, or a signer named
+    /// by its key identifier; 1 otherwise.
+    fn version(d: &SignedData) -> i64 {
+        let enc = d.encode();
+        let ci = der::parse(&enc).unwrap().items(der::SEQUENCE).unwrap();
+        let sd = ci[1].inner().unwrap().items(der::SEQUENCE).unwrap();
+        sd[0].small_int().unwrap()
+    }
+
+    #[test]
+    fn versions_and_signer_ids() {
+        let k = key();
+        let d = signed(ID_DATA);
+        assert_eq!(version(&d), 1);
+        assert_eq!(version(&signed(crate::tsp::TST_INFO)), 3);
+        // named by subject key identifier
+        let mut ski = d.clone();
+        ski.signers[0].sid = der::tlv(der::ctx_prim(0), &[1, 2, 3]);
+        assert_eq!(version(&ski), 3);
+        let mut c = k.cert.clone();
+        assert!(!ski.signers[0].identifies(&c));
+        c.extensions
+            .push(("2.5.29.14".into(), der::octets(&[1, 2, 3])));
+        assert!(ski.signers[0].identifies(&c));
+        c.extensions.last_mut().unwrap().1 = der::octets(&[1, 2, 4]);
+        assert!(!ski.signers[0].identifies(&c));
+        assert!(d.signers[0].identifies(&k.cert));
+    }
+
+    #[test]
+    fn structure() {
+        // without certificates: the four required fields
+        let mut d = signed(ID_DATA);
+        d.certs.clear();
+        let back = SignedData::parse_inner(&d.encode()).unwrap();
+        assert_eq!(back.signers.len(), 1);
+        assert_eq!(back.content.as_deref(), Some(&b"hello"[..]));
+        // a signer without signed attributes: its five fields
+        let mut d = signed(ID_DATA);
+        d.signers[0].signed_attrs = None;
+        let back = SignedData::parse_inner(&d.encode()).unwrap();
+        assert!(back.signers[0].signed_attrs.is_none());
+        assert_eq!(back.signers[0].signature, d.signers[0].signature);
+
+        // not SignedData
+        let data = der::seq(&[
+            &der::oid(ID_DATA),
+            &der::tlv(der::ctx(0), &der::octets(b"x")),
+        ]);
+        let e = SignedData::parse_inner(&data).err().unwrap();
+        assert_eq!(e.0, "not SignedData");
+        let bare = der::seq(&[&der::oid(SIGNED_DATA)]);
+        assert_eq!(
+            SignedData::parse_inner(&bare).err().unwrap().0,
+            "not SignedData"
+        );
+
+        // unsigned attribute values, by type
+        let mut d = signed(ID_DATA);
+        d.signers[0].add_unsigned("1.2.3", &der::null());
+        let v = d.signers[0].unsigned_values();
+        assert_eq!(v, vec![(der::oid("1.2.3"), der::null())]);
+    }
+
+    #[test]
+    fn revocation_items_and_merging() {
+        let mut d = signed(ID_DATA);
+        d.add_crl_items(&[]);
+        assert!(d.crls.is_none());
+        let (a, b) = (der::seq(&[&der::null()]), der::seq(&[&der::boolean(true)]));
+        d.add_crl_items(std::slice::from_ref(&a));
+        assert_eq!(d.crl_items(), vec![a.clone()]);
+        let before = d.crls.clone();
+        d.add_crl_items(std::slice::from_ref(&a));
+        assert_eq!(d.crls, before);
+        d.add_crl_items(&[b.clone(), a.clone()]);
+        assert_eq!(d.crl_items().len(), 2);
+        assert!(d.crl_items().contains(&b));
+
+        // merged signers keep each digest algorithm once
+        let m = d.merge(&signed(ID_DATA));
+        assert_eq!(m.signers.len(), 2);
+        assert_eq!(m.digest_algs.len(), 1);
+        let mut other = signed(ID_DATA);
+        other.signers[0].digest_alg_raw = der::alg_null(crate::gost::H_SHA256);
+        assert_eq!(d.merge(&other).digest_algs.len(), 2);
+    }
+
+    #[test]
+    fn base64_and_pem() {
+        let der = signed(ID_DATA).encode();
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &der);
+        assert_eq!(normalize(&der), der);
+        let wrapped: String = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| format!("{}\n", std::str::from_utf8(c).unwrap()))
+            .collect();
+        assert_eq!(normalize(wrapped.as_bytes()), der);
+        let pem = format!("-----BEGIN CMS-----\n{wrapped}-----END CMS-----\n");
+        assert_eq!(normalize(pem.as_bytes()), der);
+        // a dashed line that is not a PEM header is kept, and spoils the Base64
+        let odd = format!("-----BEGIN CMS\n{wrapped}");
+        assert_eq!(normalize(odd.as_bytes()), odd.as_bytes());
+        // Base64 of something that is not DER is left as it was
+        let text = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"hello");
+        assert_eq!(normalize(text.as_bytes()), text.as_bytes());
+    }
+}

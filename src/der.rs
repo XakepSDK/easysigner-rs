@@ -536,6 +536,54 @@ mod tests {
         assert_eq!(k[2].retagged(0x81), vec![0x81, 1, 0]);
     }
 
+    /// Nesting is limited, but not below the limit: indefinite lengths (each a parsing level)
+    /// and constructed strings (each a joining level).
+    #[test]
+    fn nesting_limits() {
+        let indefinite = |n: usize| {
+            let mut d = [0x30, 0x80].repeat(n);
+            d.extend(null());
+            d.extend([0, 0].repeat(n));
+            d
+        };
+        // the innermost element is read at depth n
+        assert!(parse(&indefinite(MAX_DEPTH)).is_ok());
+        assert!(parse(&indefinite(MAX_DEPTH + 1)).is_err());
+        let constructed = |n: usize| {
+            let mut d = octets(b"x");
+            for _ in 0..n {
+                d = tlv(0x24, &d);
+            }
+            d
+        };
+        assert_eq!(
+            parse(&constructed(MAX_DEPTH + 1))
+                .unwrap()
+                .octets()
+                .unwrap(),
+            b"x"
+        );
+        assert!(
+            parse(&constructed(MAX_DEPTH + 2))
+                .unwrap()
+                .octets()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn length_forms() {
+        // four length bytes are allowed, five are not, even for a short value
+        let (t, _) = read(&[0x04, 0x84, 0, 0, 0, 1, 7]).unwrap();
+        assert_eq!(t.content, &[7]);
+        assert!(read(&[0x04, 0x85, 0, 0, 0, 0, 1, 7]).is_err());
+        // a long-form length of zero, with nothing after it
+        let (t, rest) = read(&[0x04, 0x81, 0]).unwrap();
+        assert!(t.content.is_empty() && rest.is_empty());
+        assert!(read(&[0x04, 0x81]).is_err());
+        assert!(read(&[0x04, 0x82, 0]).is_err());
+    }
+
     #[test]
     fn integer_values() {
         let int = |c: &[u8]| tlv(INTEGER, c);
