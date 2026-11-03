@@ -31,7 +31,11 @@ fn an_older_lta_file_verifies() {
     assert_eq!(s.ocsp_answer, Some("good"), "{s:#?}");
     assert_eq!(s.archive_timestamps.len(), 3);
     for a in &s.archive_timestamps {
-        assert!(a.checked && a.valid && a.trusted, "{a:?}");
+        assert!(
+            a.checked && a.valid && a.trusted && a.error.is_none(),
+            "{a:?}"
+        );
+        assert_eq!(a.tsa.as_deref(), Some("FAKE TEST TSA"));
     }
     assert!(
         s.archive_timestamps
@@ -52,4 +56,20 @@ fn an_older_lta_file_verifies() {
                 .is_some_and(|e| e.contains("no longer in the signature"))),
         "{s:#?}"
     );
+    // still saying when and by whom
+    for a in &s.archive_timestamps {
+        assert!(a.checked && a.time.is_some(), "{a:?}");
+        assert_eq!(a.tsa.as_deref(), Some("FAKE TEST TSA"));
+    }
+
+    // without the document the timestamps are not checked, but their times are known
+    let sd = kzsigner::cms::SignedData::parse(&data).unwrap();
+    let si = &sd.signers[0];
+    let trust = kzsigner::trust::TrustStore::new(vec![]);
+    let stamps = kzsigner::ltv::check_archives(&sd, si, None, &trust);
+    assert_eq!(stamps.len(), 3);
+    for a in &stamps {
+        assert!(!a.checked && !a.valid && a.time.is_some(), "{a:?}");
+        assert!(a.error.as_deref().unwrap().contains("not checked"), "{a:?}");
+    }
 }

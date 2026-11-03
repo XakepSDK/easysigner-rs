@@ -624,3 +624,609 @@ fn check_archive(
         }),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ocsp::tests::{GOOD, Reply, key};
+    use crate::time::encode_generalized;
+
+    const DAY: i64 = 86_400_000;
+
+    struct Fx {
+        ca: crate::p12::Key,
+        carol: Cert,
+        trust: TrustStore,
+    }
+
+    fn fx() -> Fx {
+        let ca = key("ocsp/ca.p12");
+        let carol = key("ocsp/carol.p12").cert;
+        let trust = TrustStore::new(vec![ca.cert.clone()]);
+        Fx { ca, carol, trust }
+    }
+
+    impl Fx {
+        /// An OCSP answer about carol made at `made`, revoked at `revoked`.
+        fn ocsp(&self, made: i64, revoked: Option<i64>) -> Vec<u8> {
+            Reply {
+                signer: &self.ca,
+                certs: vec![],
+                issuer: &self.ca.cert,
+                serial: self.carol.serial.clone(),
+                status: match revoked {
+                    Some(t) => der::tlv(der::ctx(1), &encode_generalized(t)),
+                    None => GOOD.to_vec(),
+                },
+                this_update: made,
+                next_update: None,
+                nonce: None,
+                version: false,
+            }
+            .encode()
+        }
+
+        /// A CRL under `issuer`'s name, current from `this` to `next`, listing carol as revoked
+        /// at `revoked`; a delta list when `delta`.
+        fn crl(
+            &self,
+            issuer: &[u8],
+            this: i64,
+            next: i64,
+            revoked: Option<i64>,
+            delta: bool,
+        ) -> Vec<u8> {
+            let mut tbs = vec![
+                der::small_int(1),
+                der::alg_null(self.ca.private_key.sig_oid()),
+                issuer.to_vec(),
+                encode_generalized(this),
+                encode_generalized(next),
+            ];
+            if let Some(t) = revoked {
+                tbs.push(der::seq(&[&der::seq(&[
+                    &der::uint(&self.carol.serial),
+                    &encode_generalized(t),
+                ])]));
+            }
+            if delta {
+                let ext = der::seq(&[
+                    &der::oid("2.5.29.27"),
+                    &der::boolean(true),
+                    &der::octets(&der::small_int(1)),
+                ]);
+                tbs.push(der::tlv(der::ctx(0), &der::seq(&[&ext])));
+            }
+            let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
+            let tbs = der::seq(&refs);
+            let sig = self.ca.private_key.sign(&tbs).unwrap();
+            der::seq(&[
+                &tbs,
+                &der::alg_null(self.ca.private_key.sig_oid()),
+                &der::bit_string(&sig),
+            ])
+        }
+
+        fn status(&self, k: &Kept, at: i64) -> Option<KeptStatus> {
+            k.status(&self.carol, &self.ca.cert, &self.trust, at)
+        }
+    }
+
+    fn ocsps(o: Vec<Vec<u8>>) -> Kept {
+        Kept {
+            ocsps: o,
+            ..Default::default()
+        }
+    }
+
+    /// Kept OCSP answers: fresh when made no more than five minutes before the time checked at;
+    /// a revocation after that time is good then; a stale answer only when nothing better.
+    #[test]
+    fn kept_ocsp_answers() {
+        let f = fx();
+        let at = crate::time::now_ms() / 1000 * 1000 - 10 * DAY;
+        let minute = 60_000;
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at - 5 * minute, None)]), at)
+            .unwrap();
+        assert!(s.fresh && s.answer == "good" && s.source == "ocsp");
+        assert_eq!(s.this_update, Some(at - 5 * minute));
+        assert!(s.responder.is_some());
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at - 6 * minute, None)]), at)
+            .unwrap();
+        assert!(!s.fresh && s.answer == "good");
+
+        // revoked before the time checked at, or after it
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at, Some(at - DAY))]), at)
+            .unwrap();
+        assert_eq!(s.answer, "revoked");
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at + DAY, Some(at + 1000))]), at)
+            .unwrap();
+        assert_eq!(s.answer, "good");
+        assert!(s.status.contains("revoked later"), "{}", s.status);
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at + DAY, Some(at))]), at)
+            .unwrap();
+        assert_eq!(s.answer, "revoked", "revoked at that very time");
+
+        // a stale revocation still says revoked; a stale good answer gives way to a fresh one
+        let s = f
+            .status(
+                &ocsps(vec![f.ocsp(at - DAY, Some(at - 2 * DAY)), f.ocsp(at, None)]),
+                at,
+            )
+            .unwrap();
+        assert_eq!(s.answer, "revoked");
+        let s = f
+            .status(&ocsps(vec![f.ocsp(at - DAY, None), f.ocsp(at, None)]), at)
+            .unwrap();
+        assert!(s.fresh && s.this_update == Some(at));
+        // ... and to a current list
+        let k = Kept {
+            ocsps: vec![f.ocsp(at - DAY, None)],
+            crls: vec![f.crl(&f.ca.cert.subject, at - DAY, at + DAY, None, false)],
+            ..Default::default()
+        };
+        assert_eq!(f.status(&k, at).unwrap().source, "crl");
+        // answers that can't be read count for nothing
+        assert!(f.status(&ocsps(vec![b"junk".to_vec()]), at).is_none());
+        assert!(f.status(&Kept::default(), at).is_none());
+    }
+
+    #[test]
+    fn kept_lists() {
+        let f = fx();
+        let at = crate::time::now_ms() / 1000 * 1000 - 10 * DAY;
+        let name = f.ca.cert.subject.clone();
+        let lists = |l: Vec<Vec<u8>>| Kept {
+            crls: l,
+            ..Default::default()
+        };
+        let full = |revoked| f.crl(&name, at - DAY, at + DAY, revoked, false);
+        let s = f.status(&lists(vec![full(None)]), at).unwrap();
+        assert!(s.answer == "good" && s.fresh && s.source == "crl");
+        assert_eq!(s.this_update, Some(at - DAY));
+        assert!(s.responder.is_none());
+        assert_eq!(
+            f.status(&lists(vec![full(Some(at - 1000))]), at)
+                .unwrap()
+                .answer,
+            "revoked"
+        );
+        // listed, but revoked after the time checked at
+        let s = f.status(&lists(vec![full(Some(at + 1000))]), at).unwrap();
+        assert!(
+            s.answer == "good" && s.status.contains("revoked later"),
+            "{}",
+            s.status
+        );
+
+        // a delta list current then decides, the latest of them
+        let delta = |this: i64, revoked| f.crl(&name, this, at + DAY, revoked, true);
+        let s = f
+            .status(
+                &lists(vec![full(None), delta(at - DAY, Some(at - 1000))]),
+                at,
+            )
+            .unwrap();
+        assert_eq!(s.answer, "revoked");
+        assert_eq!(s.this_update, Some(at - DAY));
+        let s = f
+            .status(
+                &lists(vec![full(None), delta(at - DAY, Some(at + 1000))]),
+                at,
+            )
+            .unwrap();
+        assert!(s.status.contains("revoked later"), "{}", s.status);
+        let s = f
+            .status(
+                &lists(vec![
+                    delta(at - DAY, None),
+                    full(None),
+                    delta(at - 1000, None),
+                ]),
+                at,
+            )
+            .unwrap();
+        assert_eq!(s.this_update, Some(at - 1000));
+        // one that was not current then is left out
+        let stale = f.crl(&name, at - 3 * DAY, at - 2 * DAY, Some(at - 1000), true);
+        assert_eq!(
+            f.status(&lists(vec![full(None), stale]), at)
+                .unwrap()
+                .answer,
+            "good"
+        );
+        // a list under another CA's name, or only a delta: nothing
+        let other = f.crl(&f.carol.subject, at - DAY, at + DAY, None, false);
+        assert!(f.status(&lists(vec![other]), at).is_none());
+        assert!(f.status(&lists(vec![delta(at - DAY, None)]), at).is_none());
+    }
+
+    /// Kept data goes into a CMS in both places (SignedData's fields and the signer's
+    /// attributes), and reads back from either.
+    #[test]
+    fn keeping_and_reading_back() {
+        let f = fx();
+        let carol = key("ocsp/carol.p12");
+        let now = crate::time::now_ms();
+        let kept = Kept {
+            certs: vec![f.ca.cert.der.clone()],
+            ocsps: vec![f.ocsp(now, None)],
+            crls: vec![f.crl(&f.ca.cert.subject, now - DAY, now + DAY, None, false)],
+        };
+        assert!(!kept.is_empty() && Kept::default().is_empty());
+        for one in [
+            Kept {
+                certs: vec![],
+                ocsps: vec![],
+                ..kept.clone()
+            },
+            Kept {
+                certs: vec![],
+                crls: vec![],
+                ..kept.clone()
+            },
+            Kept {
+                ocsps: vec![],
+                crls: vec![],
+                ..kept.clone()
+            },
+        ] {
+            assert!(!one.is_empty());
+        }
+        assert_eq!(kept.certificates(), vec![f.ca.cert.clone()]);
+        let mut list = vec![];
+        add(&mut list, b"");
+        add(&mut list, b"x");
+        add(&mut list, b"x");
+        assert_eq!(list, vec![b"x".to_vec()]);
+
+        let mut sd = crate::cms::sign_once(
+            b"doc",
+            crate::cms::ID_DATA,
+            true,
+            &carol.private_key,
+            &carol.cert,
+        )
+        .unwrap();
+        embed(&mut sd, 0, &kept);
+        assert_eq!(sd.crl_items().len(), 2);
+        let back = Kept::from_cms(&sd, None);
+        assert_eq!(back.ocsps, kept.ocsps);
+        assert_eq!(back.crls, kept.crls);
+        assert!(back.certs.contains(&f.ca.cert.der) && back.certs.contains(&carol.cert.der));
+        // from the attributes alone
+        let si = sd.signers[0].clone();
+        let bare = SignedData {
+            certs: vec![],
+            crls: None,
+            ..sd.clone()
+        };
+        let back = Kept::from_cms(&bare, Some(&si));
+        assert_eq!(
+            back,
+            Kept {
+                certs: vec![f.ca.cert.der.clone()],
+                ..kept.clone()
+            }
+        );
+        // embedding again adds no second set of attributes
+        let n = sd.signers[0].unsigned_attrs.len();
+        embed(&mut sd, 0, &kept);
+        assert_eq!(sd.signers[0].unsigned_attrs.len(), n);
+
+        // with an archive timestamp, the data goes only into SignedData's fields, and what the
+        // timestamp token carries counts as kept
+        let token = crate::cms::sign_once(
+            b"x",
+            crate::tsp::TST_INFO,
+            true,
+            &f.ca.private_key,
+            &f.ca.cert,
+        )
+        .unwrap()
+        .encode();
+        let mut sd = crate::cms::sign_once(
+            b"doc",
+            crate::cms::ID_DATA,
+            true,
+            &carol.private_key,
+            &carol.cert,
+        )
+        .unwrap();
+        sd.signers[0].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token);
+        embed(&mut sd, 0, &kept);
+        assert_eq!(sd.signers[0].unsigned_attrs.len(), 1);
+        let si = sd.signers[0].clone();
+        let bare = SignedData {
+            certs: vec![],
+            crls: None,
+            ..sd.clone()
+        };
+        assert_eq!(
+            Kept::from_cms(&bare, Some(&si)).certs,
+            vec![f.ca.cert.der.clone()]
+        );
+        // only certificates: no revocation values
+        let mut sd = crate::cms::sign_once(
+            b"doc",
+            crate::cms::ID_DATA,
+            true,
+            &carol.private_key,
+            &carol.cert,
+        )
+        .unwrap();
+        embed(
+            &mut sd,
+            0,
+            &Kept {
+                certs: kept.certs.clone(),
+                ..Default::default()
+            },
+        );
+        let types: Vec<String> = sd.signers[0]
+            .unsigned()
+            .into_iter()
+            .map(|(o, _)| o)
+            .collect();
+        assert_eq!(types, [ATTR_CERT_VALUES]);
+
+        // the TSAs of a signer's timestamps, signature and archive ones
+        let mut si = sd.signers[0].clone();
+        si.add_unsigned(crate::cms::ATTR_TIMESTAMP_TOKEN, &token);
+        si.add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token);
+        assert_eq!(tsa_certs(&si), vec![f.ca.cert.clone(), f.ca.cert.clone()]);
+    }
+
+    /// A local server answering every request with `body` (200), or 500 when None.
+    fn serve(body: Option<Vec<u8>>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { continue };
+                let mut buf: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // the headers, and a POST's body by its length
+                loop {
+                    match s.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend(&chunk[..n]),
+                    }
+                    if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0);
+                        if buf.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let _ = match &body {
+                    Some(b) => s
+                        .write_all(
+                            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", b.len())
+                                .as_bytes(),
+                        )
+                        .and_then(|_| s.write_all(b)),
+                    None => s.write_all(b"HTTP/1.1 500 Error\r\nContent-Length: 0\r\n\r\n"),
+                };
+            }
+        });
+        url
+    }
+
+    /// Gathering validation data for a new signature: an OCSP answer, or else the CA's list;
+    /// a revoked certificate is refused.
+    #[test]
+    fn gathering() {
+        let f = fx();
+        let now = crate::time::now_ms();
+        let with_list = |list: Option<Vec<u8>>| {
+            let uri = der::tlv(der::ctx_prim(6), serve(list).as_bytes());
+            let dp = der::seq(&[&der::seq(&[&der::tlv(
+                der::ctx(0),
+                &der::tlv(der::ctx(0), &uri),
+            )])]);
+            let mut c = f.carol.clone();
+            c.extensions.push(("2.5.29.31".into(), dp));
+            c
+        };
+        let good_list = f.crl(&f.ca.cert.subject, now - DAY, now + DAY, None, false);
+        let revoked_list = f.crl(
+            &f.ca.cert.subject,
+            now - DAY,
+            now + DAY,
+            Some(now - DAY),
+            false,
+        );
+        // the OCSP server fails, or answers with an error status: the list decides
+        let failing = serve(None);
+        let refusing = serve(Some(der::seq(&[&der::tlv(der::ENUMERATED, &[3])])));
+        for ocsp_url in [&failing, &refusing] {
+            let c = with_list(Some(good_list.clone()));
+            let g = gather(&[(c.clone(), true)], ocsp_url, &f.trust, now);
+            assert!(
+                g.refused.is_empty() && g.warnings.is_empty(),
+                "{:?} {:?}",
+                g.refused,
+                g.warnings
+            );
+            assert_eq!(g.kept.crls, vec![good_list.clone()]);
+            assert!(g.kept.certs.contains(&c.der) && g.kept.certs.contains(&f.ca.cert.der));
+
+            let c = with_list(Some(revoked_list.clone()));
+            let g = gather(&[(c, true)], ocsp_url, &f.trust, now);
+            assert_eq!(g.refused.len(), 1, "{:?}", g.warnings);
+            assert!(g.refused[0].contains("not usable"), "{:?}", g.refused);
+            assert!(g.kept.crls.is_empty());
+
+            // neither answers
+            let c = with_list(None);
+            let g = gather(&[(c, true)], ocsp_url, &f.trust, now);
+            assert!(g.refused.is_empty());
+            assert!(
+                g.warnings
+                    .iter()
+                    .any(|w| w.contains("No revocation data could be kept")),
+                "{:?}",
+                g.warnings
+            );
+        }
+    }
+
+    /// What kept data does to a report: it stands in for an online check that is off or got no
+    /// answer, and with an online check asked for, only a fresh good answer at a trusted time
+    /// counts as good.
+    #[test]
+    fn kept_data_in_a_report() {
+        use crate::verify::{CertCheck, apply_kept};
+        let f = fx();
+        let at = crate::time::now_ms() / 1000 * 1000 - 10 * DAY;
+        let check = |trusted_time| CertCheck {
+            at,
+            trusted_time,
+            valid_at: true,
+            issuer: Some(f.ca.cert.clone()),
+            ocsp_good: true,
+        };
+        let run = |k: &Kept, online: Option<&'static str>, trusted: bool| {
+            let mut sr = SignerReport {
+                ocsp_answer: online,
+                ..Default::default()
+            };
+            let mut good = true;
+            let had = apply_kept(
+                &mut sr,
+                &f.carol,
+                k,
+                &f.trust,
+                &check(trusted),
+                online.map(|_| "http://ocsp"),
+                &mut good,
+            );
+            (had, good, sr)
+        };
+        let fresh = ocsps(vec![f.ocsp(at, None)]);
+        let stale = ocsps(vec![f.ocsp(at - DAY, None)]);
+        let revoked = ocsps(vec![f.ocsp(at, Some(at - DAY))]);
+
+        // no online check
+        let (had, good, sr) = run(&fresh, None, false);
+        assert!(had && good);
+        assert_eq!(sr.ocsp_answer, Some("good"));
+        assert_eq!(sr.revocation_source, Some("kept-ocsp"));
+        assert!(
+            sr.ocsp_status
+                .unwrap()
+                .contains("(answer kept in the signature)")
+        );
+        assert!(sr.warnings.is_empty());
+        let (_, good, _) = run(&revoked, None, false);
+        assert!(!good);
+        let (_, good, sr) = run(&stale, None, false);
+        assert!(good);
+        assert!(
+            sr.warnings.iter().any(|w| w.contains("older than")),
+            "{:?}",
+            sr.warnings
+        );
+        let list = Kept {
+            crls: vec![f.crl(&f.ca.cert.subject, at - DAY, at + DAY, None, false)],
+            ..Default::default()
+        };
+        assert_eq!(
+            run(&list, None, false).2.revocation_source,
+            Some("kept-crl")
+        );
+
+        // an online check that got no answer
+        assert!(run(&fresh, Some(""), true).1);
+        assert!(!run(&fresh, Some(""), false).1, "not at a trusted time");
+        assert!(!run(&stale, Some(""), true).1, "not fresh");
+        assert!(!run(&revoked, Some(""), true).1);
+        // one that did answer stands
+        let (had, good, sr) = run(&revoked, Some("good"), true);
+        assert!(had && good);
+        assert_eq!(sr.ocsp_answer, Some("good"));
+        assert!(sr.revocation_source.is_none());
+        // nothing kept
+        let (had, good, sr) = run(&Kept::default(), None, false);
+        assert!(!had && good && sr.ocsp_answer.is_none());
+    }
+
+    #[test]
+    fn archive_timestamps_in_a_report() {
+        use crate::verify::report_archives;
+        let stamp = |checked, valid, trusted| ArchiveStamp {
+            checked,
+            valid,
+            trusted,
+            time: Some(0),
+            tsa: Some("T".into()),
+            error: Some("why".into()),
+        };
+        let run = |a: Vec<ArchiveStamp>| {
+            let mut sr = SignerReport {
+                archive_timestamps: a,
+                ..Default::default()
+            };
+            let ok = report_archives(&mut sr);
+            (ok, sr)
+        };
+        let (ok, sr) = run(vec![stamp(true, true, true)]);
+        assert!(ok && sr.warnings.is_empty() && sr.notes.is_empty());
+        assert_eq!(sr.archive_timestamps.len(), 1);
+        let (ok, sr) = run(vec![stamp(false, false, false)]);
+        assert!(ok && sr.warnings.is_empty());
+        assert!(sr.notes[0].contains("why"), "{:?}", sr.notes);
+        let (ok, sr) = run(vec![stamp(true, false, true)]);
+        assert!(
+            !ok && sr.warnings[0].contains("not valid: why"),
+            "{:?}",
+            sr.warnings
+        );
+        let (ok, sr) = run(vec![stamp(true, true, false)]);
+        assert!(
+            ok && sr.warnings[0].contains("'T' is not a trusted"),
+            "{:?}",
+            sr.warnings
+        );
+    }
+
+    /// The online check falls back to the CA's list when OCSP gives no answer.
+    #[test]
+    fn online_revocation_check() {
+        use crate::verify::revocation;
+        let f = fx();
+        let now = crate::time::now_ms();
+        let list = f.crl(&f.ca.cert.subject, now - DAY, now + DAY, None, false);
+        let uri = der::tlv(der::ctx_prim(6), serve(Some(list)).as_bytes());
+        let dp = der::seq(&[&der::seq(&[&der::tlv(
+            der::ctx(0),
+            &der::tlv(der::ctx(0), &uri),
+        )])]);
+        let mut c = f.carol.clone();
+        c.extensions.push(("2.5.29.31".into(), dp));
+        let dead = serve(None);
+        let (good, status, answer, source) = revocation(&c, Some(&f.ca.cert), &dead, &f.trust);
+        assert!(
+            good && answer == "good" && source == Some("crl"),
+            "{status}"
+        );
+        assert!(status.contains("(OCSP: "), "{status}");
+        // no list either
+        let (good, _, answer, source) = revocation(&f.carol, Some(&f.ca.cert), &dead, &f.trust);
+        assert!(!good && answer.is_empty() && source.is_none());
+        let (_, _, _, source) = revocation(&c, None, &dead, &f.trust);
+        assert!(source.is_none());
+    }
+}

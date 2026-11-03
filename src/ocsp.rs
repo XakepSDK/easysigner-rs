@@ -368,7 +368,7 @@ fn check_responder(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Short or empty pieces in a stored answer are errors, not crashes.
@@ -393,7 +393,7 @@ mod tests {
         );
     }
 
-    fn key(p: &str) -> crate::p12::Key {
+    pub(crate) fn key(p: &str) -> crate::p12::Key {
         let d =
             std::fs::read(format!("{}/tests/fixtures/{p}", env!("CARGO_MANIFEST_DIR"))).unwrap();
         crate::p12::open(&d, "Qwerty12", None).unwrap()
@@ -401,7 +401,7 @@ mod tests {
 
     /// A certificate for `subject`'s key issued by `by`, with the OCSP signing purpose when
     /// `ocsp`.
-    fn issue(by: &crate::p12::Key, subject: &Cert, ocsp: bool) -> Cert {
+    pub(crate) fn issue(by: &crate::p12::Key, subject: &Cert, ocsp: bool) -> Cert {
         let alg = der::alg_null(by.private_key.sig_oid());
         let validity = der::seq(&[
             &time::encode_generalized(by.cert.not_before),
@@ -431,20 +431,20 @@ mod tests {
     }
 
     /// An answer about `c`.
-    struct Reply<'a> {
-        signer: &'a crate::p12::Key,
-        certs: Vec<Cert>,
-        issuer: &'a Cert,
-        serial: Vec<u8>,
-        status: Vec<u8>,
-        this_update: i64,
-        next_update: Option<i64>,
-        nonce: Option<Vec<u8>>,
-        version: bool,
+    pub(crate) struct Reply<'a> {
+        pub signer: &'a crate::p12::Key,
+        pub certs: Vec<Cert>,
+        pub issuer: &'a Cert,
+        pub serial: Vec<u8>,
+        pub status: Vec<u8>,
+        pub this_update: i64,
+        pub next_update: Option<i64>,
+        pub nonce: Option<Vec<u8>>,
+        pub version: bool,
     }
 
     impl Reply<'_> {
-        fn encode(&self) -> Vec<u8> {
+        pub(crate) fn encode(&self) -> Vec<u8> {
             let alg = gost::H_SHA256;
             let (nh, kh) = issuer_hashes(self.issuer, alg).unwrap();
             let cert_id = der::seq(&[
@@ -490,7 +490,7 @@ mod tests {
         }
     }
 
-    const GOOD: [u8; 2] = [0x80, 0];
+    pub(crate) const GOOD: [u8; 2] = [0x80, 0];
 
     #[test]
     fn answers() {
