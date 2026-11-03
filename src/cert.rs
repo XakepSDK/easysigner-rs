@@ -120,7 +120,7 @@ impl Cert {
     }
 
     pub fn valid_on(&self, ms: i64) -> bool {
-        // Java's Date.before/after: valid from notBefore through notAfter inclusive
+        // from notBefore through notAfter, inclusive (RFC 5280 4.1.2.5)
         ms >= self.not_before && ms <= self.not_after
     }
 

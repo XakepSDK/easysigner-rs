@@ -1,14 +1,8 @@
-# kzsigner (Rust)
+# kzsigner
 
-Sign and verify `.cms` files, signed PDFs, signed XML and document cards with Kazakhstan NCA RK keys, locally, without NCALayer. A port of
-[kzsigner](https://github.com/XakepSDK/easysigner) (Java) to Rust: the same commands, messages,
-checks and window, in one small executable with no runtime.
-
-| | Java native (GraalVM) | Rust |
-|---|---|---|
-| Linux | 17 MB download (executable + `lib/`) | **5.5 MB** single file (1.7 MB tar.xz) |
-| Windows | 20 MB download, 51 MB `.exe` + `lib/` | **6.4 MB** single `.exe` (2.7 MB zip) |
-| Without the window (`--no-default-features`) | | 0.8 MB |
+Sign and verify `.cms` files, signed PDFs, signed XML and document cards with Kazakhstan NCA RK keys, locally, without NCALayer.
+One small executable with no runtime: 5.5 MB on Linux (1.7 MB tar.xz), 6.4 MB on Windows
+(2.7 MB zip), 0.8 MB without the window (`--no-default-features`).
 
 It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256),
 GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also sign without the
@@ -226,7 +220,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `build.rs` puts it
   and the version into the Windows `.exe`. `packaging/linux/`: the menu entry and installer.
 
-## Differences from the Java version
+## Notes and limitations
 
 * Timestamp and OCSP URLs must be `http://`. NCA's servers take requests only over http (over
   https they answer POST with 405, checked 2026-11-01), as NCALayer uses them; the answers are
@@ -252,10 +246,9 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 
 `cargo test` runs:
 
-* `tests/e2e.rs`: the end-to-end checks of the Java version's `test/run-tests.sh`, against the
-  built executable. It uses throwaway test keys (`tests/fixtures/keys`, made by the Java
-  version's `MkKeys`), a fake local timestamp server, and files and keys made by NCA's own Kalkan
-  library (`tests/fixtures/kalkan`).
+* `tests/e2e.rs`: end-to-end checks against the built executable. It uses throwaway test keys
+  (`tests/fixtures/keys`), a fake local timestamp server, and files and keys made by NCA's own
+  Kalkan library (`tests/fixtures/kalkan`).
 * `tests/e2e.rs` also signs PDFs (RSA, GOST 2015, GOST 2004; co-signing; changed files) and makes,
   co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate

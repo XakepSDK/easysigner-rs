@@ -325,7 +325,7 @@ fn signer(x: &SignerReport) -> J {
     ])
 }
 
-/// The escaping of org.json's JSONObject.quote, which the Java version used.
+/// JSON string escaping as org.json's JSONObject.quote does it (`</` as `<\/`).
 fn quote(out: &mut String, v: &str) {
     out.push('"');
     let mut prev = '\0';

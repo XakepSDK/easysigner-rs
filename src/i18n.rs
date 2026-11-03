@@ -3,7 +3,7 @@
 //! Texts are written in English in the code as `tr("...")`, or `trf("... {} ...", &[..])` with
 //! `{}` placeholders filled in order; [`TABLE`] holds the Kazakh and Russian for each. A test
 //! checks that every `tr`/`trf` text in src/ is in the table with matching placeholders.
-//! The command line stays in English: its output matches the Java kzsigner and scripts read it.
+//! The command line stays in English: scripts read its output.
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicU8, Ordering};

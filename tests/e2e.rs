@@ -1,5 +1,4 @@
-//! End-to-end checks of the kzsigner executable, the same ones the Java version ran in
-//! test/run-tests.sh: throwaway test keys (GOST 2015-512, GOST 2015-256, GOST 2004, RSA), a fake
+//! End-to-end checks of the kzsigner executable: throwaway test keys (GOST 2015-512, GOST 2015-256, GOST 2004, RSA), a fake
 //! local TSA, and files and keys made by NCA's own Kalkan library (tests/fixtures/kalkan).
 
 use std::io::{Read, Write};
