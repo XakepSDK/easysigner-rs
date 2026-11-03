@@ -394,8 +394,13 @@ pub fn revocation(
         let (good, status, answer) = ocsp::check(c, None, url, trust);
         return (good, status, answer, None);
     };
-    let (good, status, answer, revoked_at) = match ocsp::fetch(c, issuer, url, trust) {
-        Ok(a) => (a.good, a.status, a.cert_status, a.revoked_at),
+    let (good, status, answer, revoked) = match ocsp::fetch(c, issuer, url, trust) {
+        Ok(a) => (
+            a.good,
+            a.status,
+            a.cert_status,
+            a.revoked_at.zip(a.untrusted_from),
+        ),
         Err(e) => (
             false,
             trf("ERROR: could not check OCSP ({})", &[&e]),
@@ -403,32 +408,37 @@ pub fn revocation(
             None,
         ),
     };
-    let (good, status, answer, source, revoked_at) = if !answer.is_empty() {
-        (good, status, answer, Some("ocsp"), revoked_at)
+    let (good, status, answer, source, revoked) = if !answer.is_empty() {
+        (good, status, answer, Some("ocsp"), revoked)
     } else {
-        let (good, crl_status, answer) = crate::crl::check(c, Some(issuer));
-        let status = trf("{} (OCSP: {})", &[&crl_status, &status]);
-        let source = (!answer.is_empty()).then_some("crl");
-        let revoked_at = (answer == "revoked")
-            .then(|| crate::crl::lists(c, time::now_ms()).ok())
-            .flatten()
-            .and_then(|(base, delta, _)| {
-                delta
-                    .and_then(|d| d.revocation_of(c))
-                    .or_else(|| base.revocation_of(c))
-            });
-        (good, status, answer, source, revoked_at)
-    };
-    match (answer, revoked_at, trusted_at) {
-        ("revoked", Some(r), Some(t)) if r > t => (
-            true,
-            trf(
-                "GOOD at the timestamp's time {} ({})",
-                &[&time::fmt(Some(t)), &status],
+        let now = time::now_ms();
+        let (good, crl_status, answer, revoked) = match crate::crl::lists(c, now) {
+            Ok((base, delta, due)) => {
+                let (good, s, a) =
+                    crate::crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);
+                (good, s, a, ltv::crl_revocation(&base, delta.as_deref(), c))
+            }
+            Err(e) => (
+                false,
+                trf("ERROR: could not check the revocation list ({})", &[&e]),
+                "",
+                None,
             ),
+        };
+        let status = trf("{} (OCSP: {})", &[&crl_status, &status]);
+        (
+            good,
+            status,
             answer,
-            source,
-        ),
+            (!answer.is_empty()).then_some("crl"),
+            revoked,
+        )
+    };
+    match trusted_at {
+        Some(t) if answer == "revoked" => {
+            let (answer, status) = ltv::good_if_later(answer, status, revoked, t);
+            (answer == "good", status, answer, source)
+        }
         _ => (good, status, answer, source),
     }
 }

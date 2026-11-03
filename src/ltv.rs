@@ -186,13 +186,12 @@ impl Kept {
                 continue;
             }
             let fresh = a.this_update.is_some_and(|u| u + 5 * MINUTE >= at);
-            // revoked only after the time the signature is checked at: good then
-            let (answer, status) = match a.revoked_at {
-                Some(when) if a.cert_status == "revoked" && when > at => {
-                    ("good", revoked_later(when))
-                }
-                _ => (a.cert_status, a.status),
-            };
+            let (answer, status) = good_if_later(
+                a.cert_status,
+                a.status,
+                a.revoked_at.zip(a.untrusted_from),
+                at,
+            );
             let s = KeptStatus {
                 answer,
                 status,
@@ -217,15 +216,9 @@ impl Kept {
                 .iter()
                 .filter(|l| l.is_delta && l.unusable(c, issuer, at).is_none())
                 .max_by_key(|l| l.this_update);
-            let (_, mut status, mut answer) = crl::evaluate(base, delta, false, c, issuer, at);
-            if answer == "revoked"
-                && let Some(when) = delta
-                    .and_then(|d| d.revocation_of(c))
-                    .or_else(|| base.revocation_of(c))
-                && when > at
-            {
-                (answer, status) = ("good", revoked_later(when));
-            }
+            let (_, status, answer) = crl::evaluate(base, delta, false, c, issuer, at);
+            let (answer, status) =
+                good_if_later(answer, status, crl_revocation(base, delta, c), at);
             if !answer.is_empty() {
                 return Some(KeptStatus {
                     answer,
@@ -241,11 +234,35 @@ impl Kept {
     }
 }
 
-fn revoked_later(when: i64) -> String {
-    trf(
-        "GOOD at the signing time (revoked later, on {})",
-        &[&crate::time::fmt(Some(when))],
-    )
+/// A "revoked" answer for a certificate revoked only after `at`, the time the signature is
+/// checked at, is good there (Order 500/НҚ p.14), unless its key was compromised before.
+/// `revoked`: (revocation date, untrusted from), as [`ocsp::Answer`] and [`crl::Crl`] give them.
+pub(crate) fn good_if_later(
+    answer: &'static str,
+    status: String,
+    revoked: Option<(i64, i64)>,
+    at: i64,
+) -> (&'static str, String) {
+    match revoked {
+        Some((when, from)) if answer == "revoked" && from > at => (
+            "good",
+            trf(
+                "GOOD at the signing time (revoked later, on {})",
+                &[&crate::time::fmt(Some(when))],
+            ),
+        ),
+        _ => (answer, status),
+    }
+}
+
+/// `c`'s (revocation date, untrusted from) in a full list and its delta list.
+pub(crate) fn crl_revocation(
+    base: &crl::Crl,
+    delta: Option<&crl::Crl>,
+    c: &Cert,
+) -> Option<(i64, i64)> {
+    let of = |l: &crl::Crl| l.revocation_of(c).zip(l.untrusted_from(c));
+    delta.and_then(of).or_else(|| of(base))
 }
 
 /// A revocation answer found in kept validation data.
@@ -1237,14 +1254,29 @@ mod tests {
         c.extensions.push(("2.5.29.31".into(), dp));
         let check = |at| revocation(&c, Some(&f.ca.cert), &dead, &f.trust, at);
         let (good, status, answer, _) = check(Some(now - 2 * DAY));
-        assert!(good && answer == "revoked", "{status}");
+        assert!(good && answer == "good", "{status}");
         assert!(
-            status.starts_with("GOOD at the timestamp's time"),
+            status.starts_with("GOOD at the signing time (revoked later"),
             "{status}"
         );
         for at in [None, Some(now - DAY), Some(now)] {
             let (good, status, answer, _) = check(at);
             assert!(!good && answer == "revoked", "{at:?}: {status}");
         }
+    }
+
+    #[test]
+    fn revoked_later_unless_compromised() {
+        let at = 1_000;
+        let g = |r| good_if_later("revoked", "REVOKED".into(), r, at).0;
+        assert_eq!(g(Some((2_000, 2_000))), "good");
+        assert_eq!(g(Some((1_000, 1_000))), "revoked", "at the same moment");
+        assert_eq!(g(Some((2_000, 500))), "revoked", "invalid since before");
+        assert_eq!(g(Some((2_000, i64::MIN))), "revoked", "key compromise");
+        assert_eq!(g(None), "revoked");
+        assert_eq!(
+            good_if_later("unknown", "?".into(), Some((2_000, 2_000)), at).0,
+            "unknown"
+        );
     }
 }

@@ -6,6 +6,9 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::offline_unless_asked;
+
 use kzsigner::cms;
 use kzsigner::der;
 use kzsigner::tsp::{Request, TST_INFO};
@@ -210,23 +213,6 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
         .ok()?
         .encode();
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
-}
-
-/// Signing and checking go online by default; the tests stay offline unless a test names a
-/// server (its fake one) or needs it (--card, --level).
-fn offline_unless_asked(args: &mut Vec<String>) {
-    let Some(cmd) = args.first().cloned() else {
-        return;
-    };
-    let given: Vec<String> = args.clone();
-    let has = |p: &str| given.iter().any(|a| a.starts_with(p));
-    let online = has("--card") || has("--level") || has("--offline");
-    if cmd == "sign" && !online && !has("--tsa") && !has("--no-tsa") {
-        args.push("--no-tsa".into());
-    }
-    if (cmd == "sign" || cmd == "verify") && !online && !has("--ocsp") && !has("--no-ocsp") {
-        args.push("--no-ocsp".into());
-    }
 }
 
 struct Run {

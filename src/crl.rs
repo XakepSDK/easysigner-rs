@@ -37,6 +37,9 @@ pub struct Crl {
     pub next_update: Option<i64>,
     /// Serial numbers (as in [`Cert::serial`]) with their revocation dates.
     pub revoked: Vec<(Vec<u8>, i64)>,
+    /// The same serials, with the moment their key stopped being trustworthy: the revocation
+    /// date, an earlier invalidityDate, or never for a compromised key ([`i64::MIN`]).
+    pub revoked_from: Vec<(Vec<u8>, i64)>,
     /// A delta list (deltaCRLIndicator).
     pub is_delta: bool,
     /// Delta lists this one names (freshestCRL), http only.
@@ -72,6 +75,7 @@ impl Crl {
             _ => None,
         };
         let mut revoked = Vec::new();
+        let mut revoked_from = Vec::new();
         if let Some(list) = tbs.get(j).filter(|t| t.tag == der::SEQUENCE) {
             j += 1;
             for e in list.children()?.iter() {
@@ -79,7 +83,13 @@ impl Crl {
                 if k.len() < 2 {
                     return Err(bad());
                 }
-                revoked.push((k[0].uint()?.to_vec(), k[1].time()?));
+                let (serial, when) = (k[0].uint()?.to_vec(), k[1].time()?);
+                let from = match k.get(2) {
+                    Some(x) => untrusted_from(x, when)?,
+                    None => when,
+                };
+                revoked_from.push((serial.clone(), from));
+                revoked.push((serial, when));
             }
         }
         let (mut is_delta, mut freshest, mut unknown_critical) = (false, vec![], None);
@@ -102,6 +112,7 @@ impl Crl {
             this_update,
             next_update,
             revoked,
+            revoked_from,
             is_delta,
             freshest,
             unknown_critical,
@@ -138,6 +149,14 @@ impl Crl {
         Some(tr(why).into())
     }
 
+    /// From when `c`'s key is not to be trusted, if `c` is listed (see [`Crl::revoked_from`]).
+    pub fn untrusted_from(&self, c: &Cert) -> Option<i64> {
+        self.revoked_from
+            .iter()
+            .find(|(s, _)| *s == c.serial)
+            .map(|(_, when)| *when)
+    }
+
     pub fn revocation_of(&self, c: &Cert) -> Option<i64> {
         self.revoked
             .iter()
@@ -145,6 +164,33 @@ impl Crl {
             .map(|(_, when)| *when)
     }
 }
+
+/// A list entry's extensions: an invalidityDate before `when` moves the moment back, and a
+/// compromise reason means the key was never to be trusted ([`i64::MIN`]).
+fn untrusted_from(exts: &der::Tlv, when: i64) -> Result<i64> {
+    let mut from = when;
+    for e in exts.items(der::SEQUENCE)?.iter() {
+        let k = e.items(der::SEQUENCE)?;
+        let (Some(oid), Some(value)) = (k.first(), k.last()) else {
+            continue;
+        };
+        let value = der::parse(value.expect(der::OCTET_STRING)?.content)?;
+        match oid.oid()?.as_str() {
+            REASON_CODE if is_compromise(&value) => return Ok(i64::MIN),
+            INVALIDITY_DATE => from = from.min(value.time()?),
+            _ => {}
+        }
+    }
+    Ok(from)
+}
+
+/// CRLReason keyCompromise (1), cACompromise (2) or aACompromise (10).
+pub fn is_compromise(reason: &der::Tlv) -> bool {
+    reason.tag == der::ENUMERATED && matches!(reason.content, [1] | [2] | [10])
+}
+
+const REASON_CODE: &str = "2.5.29.21";
+const INVALIDITY_DATE: &str = "2.5.29.24";
 
 /// The http addresses in a certificate's CRL distribution points extension.
 pub fn urls(c: &Cert) -> Vec<String> {
@@ -311,5 +357,35 @@ pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
             trf("ERROR: could not check the revocation list ({})", &[&e]),
             "",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ext(oid: &str, value: &[u8]) -> Vec<u8> {
+        der::seq(&[&der::oid(oid), &der::tlv(der::OCTET_STRING, value)])
+    }
+
+    /// A list entry's reason and invalidity date decide from when its key is not trusted.
+    #[test]
+    fn untrusted_from_entry_extensions() {
+        let when = 1_800_000_000_000;
+        let from = |exts: &[&[u8]]| {
+            let e = der::seq(exts);
+            untrusted_from(&der::parse(&e).unwrap(), when).unwrap()
+        };
+        let reason = |r: u8| ext(REASON_CODE, &der::tlv(der::ENUMERATED, &[r]));
+        let invalid = |t: i64| ext(INVALIDITY_DATE, &time::encode_generalized(t));
+        assert_eq!(from(&[]), when);
+        assert_eq!(from(&[&reason(4)]), when, "superseded");
+        for r in [1, 2, 10] {
+            assert_eq!(from(&[&reason(r)]), i64::MIN, "reason {r}");
+        }
+        assert_eq!(from(&[&invalid(when - 5000)]), when - 5000);
+        assert_eq!(from(&[&invalid(when + 5000)]), when, "never later");
+        assert_eq!(from(&[&invalid(when - 5000), &reason(1)]), i64::MIN);
+        assert!(!is_compromise(&der::parse(&der::small_int(1)).unwrap()));
     }
 }

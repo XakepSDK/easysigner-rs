@@ -584,19 +584,19 @@ impl App {
             return;
         };
         let det = self.sign.detached && !self.sign.doc_is_cms;
-        let tsa = self.sign.timestamp.then(|| DEFAULT_TSA_URL.to_string());
+        // NCA's timestamp server no longer serves GOST 34.310-2004 keys
+        let gost2004 = key.cert.key_alg() == crate::gost::KEY_GOST2004;
+        let skip_tsa = self.sign.timestamp && gost2004 && self.sign.sign_as != SignAs::Card;
+        let tsa = (self.sign.timestamp && !skip_tsa).then(|| DEFAULT_TSA_URL.to_string());
         // the long-term data comes from NCA's OCSP server: not when online checks are off
-        let long_term = self.sign.timestamp
-            && self.ocsp
-            && self.sign.long_term
-            && self.sign.sign_as != SignAs::Card;
+        let long_term =
+            tsa.is_some() && self.ocsp && self.sign.long_term && self.sign.sign_as != SignAs::Card;
         let stamp = self.sign.stamp.then(|| crate::pdf::stamp::Stamp {
             lang: Some(crate::i18n::lang()),
             ..Default::default()
         });
-        // online anyway for the timestamp: check that the key is not revoked too (p.4),
-        // unless online checks are turned off
-        let ocsp = (self.sign.timestamp && self.ocsp).then(|| DEFAULT_OCSP_URL.to_string());
+        // check that the key is not revoked (Order 500/НҚ p.4.3), unless online checks are off
+        let ocsp = self.ocsp.then(|| DEFAULT_OCSP_URL.to_string());
         let sign_as = self.sign.sign_as;
         let (qr, lang) = (self.sign.card_qr, self.sign.card_lang);
         let card_cosign = self.sign.doc_kind == DocKind::Card;
@@ -654,6 +654,10 @@ impl App {
                     }
                 }
                 .map_err(|x| x.0)?;
+                let mut r = r;
+                if skip_tsa {
+                    r.warnings.push(tr("No timestamp: NCA's timestamp server no longer serves GOST 34.310-2004 keys.").into());
+                }
                 if !long_term {
                     return Ok(r);
                 }

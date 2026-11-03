@@ -44,6 +44,9 @@ pub struct Answer {
     pub this_update: Option<i64>,
     /// When the certificate was revoked, for a "revoked" answer.
     pub revoked_at: Option<i64>,
+    /// From when its key is not to be trusted: `revoked_at`, or never ([`i64::MIN`]) when the
+    /// reason given is a key compromise.
+    pub untrusted_from: Option<i64>,
     /// The certificate that signed the response.
     pub responder: Option<Cert>,
     /// The OCSPResponse, as received.
@@ -60,6 +63,7 @@ impl Answer {
             cert_status: "",
             this_update: None,
             revoked_at: None,
+            untrusted_from: None,
             responder: None,
             raw: raw.to_vec(),
             basic: vec![],
@@ -275,7 +279,7 @@ fn evaluate(
         } else {
             this_update
         };
-        let mut revoked_at = None;
+        let (mut revoked_at, mut untrusted_from) = (None, None);
         let (good, cert_status, status) = match at(&k, 1)?.tag {
             0x80 => (
                 true,
@@ -283,12 +287,15 @@ fn evaluate(
                 trf("GOOD (not revoked, checked {})", &[&time::fmt(checked)]),
             ),
             0xa1 => {
-                let when = at(&k, 1)?
-                    .children()?
-                    .first()
-                    .map(|t| t.time())
-                    .transpose()?;
+                let info = at(&k, 1)?.children()?;
+                let when = info.first().map(|t| t.time()).transpose()?;
+                let compromised = info
+                    .iter()
+                    .find(|t| t.tag == der::ctx(0))
+                    .and_then(|t| t.inner().ok())
+                    .is_some_and(|r| crate::crl::is_compromise(&r));
                 revoked_at = when;
+                untrusted_from = if compromised { Some(i64::MIN) } else { when };
                 (false, "revoked", trf("REVOKED on {}", &[&time::fmt(when)]))
             }
             _ => (
@@ -303,6 +310,7 @@ fn evaluate(
             cert_status,
             this_update,
             revoked_at,
+            untrusted_from,
             responder: Some(responder),
             raw: body.to_vec(),
             basic: basic_der,

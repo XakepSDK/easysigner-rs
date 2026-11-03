@@ -4,33 +4,15 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::offline_unless_asked;
+
 fn fixture(p: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(p)
         .display()
         .to_string()
-}
-
-/// Signing and checking go online by default; the tests stay offline unless a test names a
-/// server or needs one (--card, --level), or says `--network` (dropped here).
-fn offline_unless_asked(args: &mut Vec<String>) {
-    let Some(cmd) = args.first().cloned() else {
-        return;
-    };
-    let keep = args.iter().any(|a| a == "--network");
-    args.retain(|a| a != "--network");
-    let given: Vec<String> = args.clone();
-    let has = |p: &str| given.iter().any(|a| a.starts_with(p));
-    if keep || has("--card") || has("--level") || has("--offline") || has("--help") {
-        return;
-    }
-    if cmd == "sign" && !has("--tsa") && !has("--no-tsa") {
-        args.push("--no-tsa".into());
-    }
-    if (cmd == "sign" || cmd == "verify") && !has("--ocsp") && !has("--no-ocsp") {
-        args.push("--no-ocsp".into());
-    }
 }
 
 /// Runs kzsigner in `dir`; returns (success, stdout + stderr).
@@ -239,7 +221,7 @@ fn network_by_default() {
     assert!(!ok && out.contains("ERROR: could not check OCSP"), "{out}");
     let (ok, out) = run(&["verify", "--trust", &c, "--offline", "doc.txt.cms"]);
     assert!(
-        ok && out.contains("but revocation was not checked (offline)"),
+        ok && out.contains("but revocation was not checked"),
         "{out}"
     );
     let (ok, out) = run(&[

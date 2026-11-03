@@ -342,7 +342,7 @@ fn optional_url(p: &mut lexopt::Parser, default: &str) -> R<String> {
 /// The network defaults Order 500/НҚ asks for: signing checks that the key is not revoked (p.4.3)
 /// and gets NCA's timestamp, the proof of when it was signed (Digital Code Art. 50 p.3.4);
 /// checking looks up revocation (p.16). `--no-tsa`, `--no-ocsp` and `--offline` turn them off.
-fn network_defaults(o: &mut Opts, help: &'static str) -> R<()> {
+fn network_defaults(o: &mut Opts, signing: bool, help: &'static str) -> R<()> {
     let needs_network = if o.card {
         Some("--card")
     } else if o.level.is_some() {
@@ -376,7 +376,7 @@ fn network_defaults(o: &mut Opts, help: &'static str) -> R<()> {
     if !o.no_ocsp && o.ocsp.is_none() {
         o.ocsp = Some(kzsigner::DEFAULT_OCSP_URL.into());
     }
-    if !o.no_tsa && o.tsa.is_none() && help != HELP_VERIFY {
+    if signing && !o.no_tsa && o.tsa.is_none() {
         o.tsa = Some(kzsigner::DEFAULT_TSA_URL.into());
         o.tsa_default = needs_network.is_none();
     }
@@ -386,7 +386,10 @@ fn network_defaults(o: &mut Opts, help: &'static str) -> R<()> {
 /// A failed default timestamp says how to sign without one.
 fn tsa_hint(o: &Opts) -> impl Fn(kzsigner::Error) -> Fail + '_ {
     move |e| {
-        if o.tsa_default && o.tsa.as_deref().is_some_and(|u| e.0.contains(u)) {
+        // every timestamp error names the server, or its URL
+        let about_tsa = o.tsa.as_deref().is_some_and(|u| e.0.contains(u))
+            || e.0.contains(kzsigner::i18n::tr("timestamp server"));
+        if o.tsa_default && about_tsa {
             Fail::User(format!(
                 "{}\nA timestamp is added by default; --no-tsa (or --offline) signs without one.",
                 e.0
@@ -452,15 +455,13 @@ fn open_key(e: &Engine, o: &Opts, help: &'static str) -> R<kzsigner::p12::Key> {
 }
 
 fn sign(mut o: Opts) -> R<u8> {
-    network_defaults(&mut o, HELP_SIGN)?;
+    network_defaults(&mut o, true, HELP_SIGN)?;
     if o.hash.is_some() {
         return sign_hash(o);
     }
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
-    skip_tsa_for_gost2004(&mut o, &k);
-    let hint = tsa_hint(&o);
     if o.qr && !o.card {
         return Err(Fail::Usage("--qr needs --card".into(), HELP_SIGN));
     }
@@ -511,6 +512,8 @@ fn sign(mut o: Opts) -> R<u8> {
         )));
     }
     let original = o.data.as_deref().map(read).transpose()?;
+    skip_tsa_for_gost2004(&mut o, &k);
+    let hint = tsa_hint(&o);
     // a long-term signature needs a timestamp
     let tsa = o
         .tsa
@@ -657,7 +660,7 @@ fn extend(o: Opts) -> R<u8> {
 }
 
 fn verify(mut o: Opts) -> R<u8> {
-    network_defaults(&mut o, HELP_VERIFY)?;
+    network_defaults(&mut o, false, HELP_VERIFY)?;
     let file = need(&o.file, "parameter: 'FILE'", HELP_VERIFY)?;
     let e = engine(&o)?;
     let cms = read(file)?;

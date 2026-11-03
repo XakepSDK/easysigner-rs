@@ -17,7 +17,7 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
                 r.signers.len(),
                 // Order 500/НҚ p.16: revocation is part of the check
                 if r.signers.iter().any(|s| s.ocsp_status.is_none()) {
-                    ", but revocation was not checked (offline)"
+                    ", but revocation was not checked"
                 } else {
                     ""
                 }
@@ -143,7 +143,9 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         line(
             &mut o,
             "Revocation",
-            s.ocsp_status.as_deref().unwrap_or("not checked (offline)"),
+            s.ocsp_status
+                .as_deref()
+                .unwrap_or("not checked (--offline or --no-ocsp)"),
         );
         for w in &s.warnings {
             line(&mut o, "Warning", w);
