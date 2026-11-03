@@ -212,6 +212,23 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
 }
 
+/// Signing and checking go online by default; the tests stay offline unless a test names a
+/// server (its fake one) or needs it (--card, --level).
+fn offline_unless_asked(args: &mut Vec<String>) {
+    let Some(cmd) = args.first().cloned() else {
+        return;
+    };
+    let given: Vec<String> = args.clone();
+    let has = |p: &str| given.iter().any(|a| a.starts_with(p));
+    let online = has("--card") || has("--level") || has("--offline");
+    if cmd == "sign" && !online && !has("--tsa") && !has("--no-tsa") {
+        args.push("--no-tsa".into());
+    }
+    if (cmd == "sign" || cmd == "verify") && !online && !has("--ocsp") && !has("--no-ocsp") {
+        args.push("--no-ocsp".into());
+    }
+}
+
 struct Run {
     dir: PathBuf,
     pass: usize,
@@ -241,6 +258,7 @@ impl Run {
             }
         }
         args.retain(|a| a != "--no-test-ca");
+        offline_unless_asked(&mut args);
         let o = Command::new(env!("CARGO_BIN_EXE_kzsigner"))
             .args(&args)
             .current_dir(&self.dir)

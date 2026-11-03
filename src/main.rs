@@ -18,7 +18,8 @@ Usage: kzsigner [-hV] [COMMAND | FILE]
 Sign and verify .cms files, signed PDFs and document cards with Kazakhstan NCA RK
 keys, locally, without NCALayer.
 Run without arguments, or with just a FILE, to open the desktop window.
-Network is used only with --tsa (NCA timestamp) and --ocsp (NCA revocation check).
+Signing and checking use NCA's timestamp and revocation services by default, as Order
+500/НҚ asks; --offline (sign, verify) works without the network.
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
@@ -36,6 +37,7 @@ Run 'kzsigner COMMAND --help' for a command's options.
 const HELP_SIGN: &str = "\
 Usage: kzsigner sign [-hV] [--detached | --pdf | --xml | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
+                     [--no-tsa] [--no-ocsp] [--offline]
                      [--level=LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
                      [--stamp-lang=LANG] [--stamp-logo=IMAGE]] [--data=ORIGINAL]
                      [--trust=CA.cer]... FILE
@@ -70,11 +72,16 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --qr                 With --card: also print each signature as QR codes.
       --lang=LANG          With --card: ru (default), kk, or kk/ru.
                            Adding a signature to a card keeps its language and QR codes.
-      --ocsp[=URL]         Check online that your key is not revoked before signing
-                           (default http://ocsp.pki.gov.kz; the CA's revocation list
-                           when OCSP gives no answer). A card always does, and keeps
-                           the OCSP answer in the signature.
-      --tsa[=URL]          Add a timestamp (default http://tsp.pki.gov.kz:80).
+      --ocsp[=URL]         Where to check that your key is not revoked before signing
+                           (always done; default http://ocsp.pki.gov.kz, and the CA's
+                           revocation list when OCSP gives no answer). A card keeps the
+                           OCSP answer in the signature.
+      --tsa[=URL]          Timestamp server (default http://tsp.pki.gov.kz:80). Every
+                           signature gets NCA's timestamp, the proof of when it was made
+                           (GOST 34.310-2004 keys excepted: NCA no longer serves them).
+      --no-tsa             No timestamp: the signing time is only your computer's clock.
+      --no-ocsp            Do not check that your key is not revoked.
+      --offline            Both: no network at all. Not for --card or --level.
       --level=LT|LTA       A long-term signature (ETSI B-LT): with a timestamp, and the
                            CA certificates and revocation answers (OCSP, or the CAs'
                            lists) needed to check it after the certificate expires,
@@ -85,15 +92,19 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
 ";
 
 const HELP_VERIFY: &str = "\
-Usage: kzsigner verify [-hV] [--json] [--qr] [--data=ORIGINAL] [--ocsp[=URL]] [--trust=CA.cer]... FILE
+Usage: kzsigner verify [-hV] [--json] [--qr] [--data=ORIGINAL] [--ocsp[=URL] | --offline]
+                       [--trust=CA.cer]... FILE
 Check every signature in a .cms, a signed PDF or a document card. Exit code 0 only if all
-are valid. A card's signatures are checked against the document inside it, and without
---ocsp the OCSP answers kept in them are reported.
+are valid. Revocation is checked online (Order 500/НҚ p.16); with --offline, the revocation
+answers kept in a signature are used, and otherwise the result says it was not checked.
+A card's signatures are checked against the document inside it.
       FILE              .cms, signed PDF, or document card.
       --data=ORIGINAL   Original document, for a detached .cms or with --qr.
       --qr              FILE is the text of scanned QR codes from a card's signature
                         pages, one code per line, in any order; needs --data.
-      --ocsp[=URL]      Check revocation online (default http://ocsp.pki.gov.kz).
+      --ocsp[=URL]      OCSP server (default http://ocsp.pki.gov.kz; the CA's revocation
+                        list when OCSP gives no answer).
+      --offline         No network (also --no-ocsp): no online revocation check.
       --json            Machine-readable output.
       --trust=CA.cer    Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
@@ -107,7 +118,7 @@ or the CAs' revocation lists) go into the .cms (CAdES B-LT), the PDF's document 
 store (PAdES B-LT) or the XAdES signature (XAdES B-LT). LTA (the default) also adds an
 archive timestamp over everything (CAdES archive-time-stamp-v3, a PDF document timestamp,
 or a XAdES ArchiveTimeStamp); run it again before that timestamp's certificate expires to
-renew it. Signatures need a timestamp already (sign with --tsa).
+renew it. Signatures need a timestamp already (not signed with --no-tsa).
       FILE              .cms, signed PDF or signed XML.
       --level=LT|LTA    LTA (default) or LT.
       --data=ORIGINAL   Original document of a detached .cms (needed for LTA).
@@ -198,6 +209,12 @@ struct Opts {
     json: bool,
     tsa: Option<String>,
     ocsp: Option<String>,
+    /// --no-tsa / --offline: no timestamp.
+    no_tsa: bool,
+    /// --no-ocsp / --offline: no online revocation check.
+    no_ocsp: bool,
+    /// The timestamp server is the default one, not asked for.
+    tsa_default: bool,
     level: Option<kzsigner::ltv::Level>,
     stamp: Option<kzsigner::pdf::stamp::Stamp>,
     stamp_logo: Option<PathBuf>,
@@ -288,6 +305,12 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             Long("ocsp") if allowed(&["verify", "sign", "extend"]) => {
                 o.ocsp = Some(optional_url(&mut p, kzsigner::DEFAULT_OCSP_URL)?)
             }
+            Long("no-tsa") if allowed(&["sign"]) => o.no_tsa = true,
+            Long("no-ocsp") if allowed(&["sign", "verify"]) => o.no_ocsp = true,
+            Long("offline") if allowed(&["sign", "verify"]) => {
+                o.no_ocsp = true;
+                o.no_tsa = cmd == "sign";
+            }
             Value(v)
                 if o.file.is_none()
                     && allowed(&["sign", "verify", "extract", "gui", "extend", "hash"]) =>
@@ -314,6 +337,76 @@ fn optional_url(p: &mut lexopt::Parser, default: &str) -> R<String> {
         })
     });
     Ok(next.unwrap_or_else(|| default.to_string()))
+}
+
+/// The network defaults Order 500/НҚ asks for: signing checks that the key is not revoked (p.4.3)
+/// and gets NCA's timestamp, the proof of when it was signed (Digital Code Art. 50 p.3.4);
+/// checking looks up revocation (p.16). `--no-tsa`, `--no-ocsp` and `--offline` turn them off.
+fn network_defaults(o: &mut Opts, help: &'static str) -> R<()> {
+    let needs_network = if o.card {
+        Some("--card")
+    } else if o.level.is_some() {
+        Some("--level")
+    } else {
+        None
+    };
+    for (off, given, name) in [
+        (o.no_tsa, o.tsa.is_some(), "--tsa"),
+        (o.no_ocsp, o.ocsp.is_some(), "--ocsp"),
+    ] {
+        if off && given {
+            return Err(Fail::Usage(
+                format!(
+                    "{name} and --no-{} (or --offline) contradict each other",
+                    &name[2..]
+                ),
+                help,
+            ));
+        }
+        if let (true, Some(why)) = (off, needs_network) {
+            return Err(Fail::Usage(
+                format!(
+                    "{why} needs the network (no --no-{} or --offline)",
+                    &name[2..]
+                ),
+                help,
+            ));
+        }
+    }
+    if !o.no_ocsp && o.ocsp.is_none() {
+        o.ocsp = Some(kzsigner::DEFAULT_OCSP_URL.into());
+    }
+    if !o.no_tsa && o.tsa.is_none() && help != HELP_VERIFY {
+        o.tsa = Some(kzsigner::DEFAULT_TSA_URL.into());
+        o.tsa_default = needs_network.is_none();
+    }
+    Ok(())
+}
+
+/// A failed default timestamp says how to sign without one.
+fn tsa_hint(o: &Opts) -> impl Fn(kzsigner::Error) -> Fail + '_ {
+    move |e| {
+        if o.tsa_default && o.tsa.as_deref().is_some_and(|u| e.0.contains(u)) {
+            Fail::User(format!(
+                "{}\nA timestamp is added by default; --no-tsa (or --offline) signs without one.",
+                e.0
+            ))
+        } else {
+            e.into()
+        }
+    }
+}
+
+/// NCA's timestamp server no longer serves GOST 34.310-2004 keys: the default timestamp is left
+/// out for them, with a note.
+fn skip_tsa_for_gost2004(o: &mut Opts, k: &kzsigner::p12::Key) {
+    if o.tsa_default && k.cert.key_alg() == kzsigner::gost::KEY_GOST2004 {
+        o.tsa = None;
+        o.tsa_default = false;
+        println!(
+            "Note: no timestamp: NCA's timestamp server no longer serves GOST 34.310-2004 keys."
+        );
+    }
 }
 
 fn print_version() {
@@ -358,13 +451,16 @@ fn open_key(e: &Engine, o: &Opts, help: &'static str) -> R<kzsigner::p12::Key> {
     Ok(e.open_key(&k, &password(o)?, o.alias.as_deref())?)
 }
 
-fn sign(o: Opts) -> R<u8> {
+fn sign(mut o: Opts) -> R<u8> {
+    network_defaults(&mut o, HELP_SIGN)?;
     if o.hash.is_some() {
         return sign_hash(o);
     }
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
+    skip_tsa_for_gost2004(&mut o, &k);
+    let hint = tsa_hint(&o);
     if o.qr && !o.card {
         return Err(Fail::Usage("--qr needs --card".into(), HELP_SIGN));
     }
@@ -435,7 +531,8 @@ fn sign(o: Opts) -> R<u8> {
             o.qr.then_some(true),
         )?
     } else if o.xml {
-        e.sign_xml(&input, &k, tsa.as_deref(), o.ocsp.as_deref())?
+        e.sign_xml(&input, &k, tsa.as_deref(), o.ocsp.as_deref())
+            .map_err(&hint)?
     } else if o.pdf {
         e.sign_pdf_with(
             &input,
@@ -443,7 +540,8 @@ fn sign(o: Opts) -> R<u8> {
             tsa.as_deref(),
             o.ocsp.as_deref(),
             stamp.as_ref(),
-        )?
+        )
+        .map_err(&hint)?
     } else {
         e.sign(
             &input,
@@ -453,7 +551,8 @@ fn sign(o: Opts) -> R<u8> {
             o.ocsp.as_deref(),
             true,
             original.as_deref(),
-        )?
+        )
+        .map_err(&hint)?
     };
     let r = match (o.level, &tsa) {
         (Some(level), Some(tsa)) => {
@@ -557,7 +656,8 @@ fn extend(o: Opts) -> R<u8> {
     Ok(0)
 }
 
-fn verify(o: Opts) -> R<u8> {
+fn verify(mut o: Opts) -> R<u8> {
+    network_defaults(&mut o, HELP_VERIFY)?;
     let file = need(&o.file, "parameter: 'FILE'", HELP_VERIFY)?;
     let e = engine(&o)?;
     let cms = read(file)?;
@@ -582,7 +682,7 @@ fn verify(o: Opts) -> R<u8> {
 }
 
 /// sign --hash: a detached .cms from a document's hash.
-fn sign_hash(o: Opts) -> R<u8> {
+fn sign_hash(mut o: Opts) -> R<u8> {
     let value = o.hash.as_deref().unwrap_or_default();
     // (--detached is allowed: the .cms is detached anyway)
     if o.file.is_some()
@@ -600,7 +700,7 @@ fn sign_hash(o: Opts) -> R<u8> {
             HELP_SIGN,
         ));
     }
-    let out = need(&o.out, "option: '--out=OUT' (with --hash)", HELP_SIGN)?;
+    let out = need(&o.out, "option: '--out=OUT' (with --hash)", HELP_SIGN)?.clone();
     let hash = parse_hash(value).ok_or_else(|| {
         Fail::Usage(
             format!("--hash {value} is neither base64 nor hex"),
@@ -615,11 +715,14 @@ fn sign_hash(o: Opts) -> R<u8> {
     }
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
+    skip_tsa_for_gost2004(&mut o, &k);
     let tsa = o
         .tsa
         .clone()
         .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
-    let mut r = e.sign_hash(&hash, &k, tsa.as_deref(), o.ocsp.as_deref())?;
+    let mut r = e
+        .sign_hash(&hash, &k, tsa.as_deref(), o.ocsp.as_deref())
+        .map_err(tsa_hint(&o))?;
     if let (Some(level), Some(tsa)) = (o.level, &tsa) {
         r = e.extend_new(
             r,
@@ -629,7 +732,7 @@ fn sign_hash(o: Opts) -> R<u8> {
             o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
         );
     }
-    write(out, &r.cms)?;
+    write(&out, &r.cms)?;
     for w in &r.warnings {
         println!("Warning: {w}");
     }

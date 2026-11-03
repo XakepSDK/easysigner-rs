@@ -13,8 +13,14 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         "{}",
         if r.valid {
             format!(
-                "RESULT: VALID - all {} signature(s) check out",
-                r.signers.len()
+                "RESULT: VALID - all {} signature(s) check out{}",
+                r.signers.len(),
+                // Order 500/НҚ p.16: revocation is part of the check
+                if r.signers.iter().any(|s| s.ocsp_status.is_none()) {
+                    ", but revocation was not checked (offline)"
+                } else {
+                    ""
+                }
             )
         } else {
             "RESULT: NOT VALID (see details below)".into()
@@ -137,9 +143,7 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
         line(
             &mut o,
             "Revocation",
-            s.ocsp_status
-                .as_deref()
-                .unwrap_or("not checked (use --ocsp, needs internet)"),
+            s.ocsp_status.as_deref().unwrap_or("not checked (offline)"),
         );
         for w in &s.warnings {
             line(&mut o, "Warning", w);

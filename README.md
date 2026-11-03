@@ -23,7 +23,7 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
 
 * **Inside an XML document** (XAdES, `--xml`): an enveloped XAdES signature (Order 500 p.10:
   SignedInfo, SignatureValue, the certificate in KeyInfo, and signed properties with the
-  signing time and the signer's certificate), B-B, B-T with `--tsa`, or B-LT/B-LTA with
+  signing time and the signer's certificate), B-T (B-B with `--no-tsa`), or B-LT/B-LTA with
   `--level`, using the algorithm names NCA's Kalkan uses
   (`urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:…`). Each signature leaves the other
   signatures out of what it covers (an XPath Filter 2.0 transform), so a signed XML document
@@ -47,16 +47,18 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
   renews it before the timestamp's own certificate expires. The window makes long-term
   signatures by default when it adds the NCA time.
 
-The network is used only for an NCA timestamp (`--tsa`, always for a card and a long-term
-signature), the NCA revocation check (`--ocsp`, always for a card and a long-term signature,
-whose signatures keep the answer), and the CAs' revocation lists when OCSP gives no answer.
+The network is used for an NCA timestamp and the NCA revocation check (and the CAs'
+revocation lists when OCSP gives no answer), as Order 500/НҚ asks: `sign` gets both by
+default, and `verify` checks revocation. `--no-tsa`, `--no-ocsp` or `--offline` (both) turn
+them off; a card and a long-term signature always need them. GOST 34.310-2004 keys get no
+default timestamp, since NCA no longer serves them.
 
 ### What is checked (Order 500/НҚ)
 
 * **Before signing**, the key's own certificate is checked (p.4): it must be in force, its chain
-  must lead to a trusted CA, and it must be meant for signing documents. With `--ocsp` (and
-  always for a card, and in the window when the revocation check is on) it must also not be
-  revoked; when NCA cannot be reached, signing goes ahead with a warning. kzsigner trusts NCA RK
+  must lead to a trusted CA, and it must be meant for signing documents, and it must not be
+  revoked (p.4.3; unless `--no-ocsp`/`--offline`, or the window's revocation check is off);
+  when NCA cannot be reached, signing goes ahead with a warning. kzsigner trusts NCA RK
   only, so test keys need their CA added with `--trust`.
 * **Purpose** (p.16.4): a CA certificate, a key whose usage allows neither digital signature nor
   non-repudiation, a timestamp or OCSP service key, or a certificate policy outside its CA's
@@ -66,7 +68,9 @@ whose signatures keep the answer), and the CAs' revocation lists when OCSP gives
   signing time and the online check is off or gets no answer. `revocationSource` in `--json`
   says which answered (`ocsp`, `crl`, `kept-ocsp`, `kept-crl`); `level` gives the ETSI level
   (B-B, B-T, B-LT, B-LTA), with `archiveTimestamps` and a PDF's `documentTimestamps`. Lists are cached until their
-  next update (at most an hour), failures for five minutes.
+  next update (at most an hour), failures for five minutes. With a trusted timestamp, a
+  certificate revoked after it still counts as good (p.14: checked as of the timestamp's
+  time). `verify --offline` says so when revocation was not checked.
 * **Timestamps** (p.17.2): a warning when the timestamp comes from a different CA than the
   signer's (NCA's own CAs count as one).
 * **Kept answers** (p.8): card signatures carry the OCSP answer in `crls` and in the
@@ -102,10 +106,10 @@ no root, and works the same on GNOME, KDE Plasma and other desktops.
 ```
 kzsigner sign document.pdf -k GOSTKNCA_xxx.p12          # -> document.pdf.cms
 kzsigner sign document.pdf.cms -k RSA_yyy.p12           # adds a second signature (co-signing)
-kzsigner sign document.pdf -k key.p12 --detached --tsa  # detached, with an NCA timestamp
+kzsigner sign document.pdf -k key.p12 --detached        # detached (with an NCA timestamp)
 kzsigner sign document.pdf -k key.p12 --pdf --level LTA # inside the PDF, long-term (B-LTA)
 kzsigner extend document.pdf.cms                        # make a .cms long-term, or renew it
-kzsigner verify document.pdf.cms [--ocsp] [--json]      # exit code 0 only if all signatures are valid
+kzsigner verify document.pdf.cms [--offline] [--json]   # exit code 0 only if all signatures are valid
 kzsigner verify detached.cms --data document.pdf
 kzsigner extract document.pdf.cms                       # -> document.pdf
 kzsigner info -k key.p12
@@ -116,7 +120,7 @@ kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # wit
 kzsigner sign contract.docx -k key.p12 --card --qr      # -> contract.docx.card.pdf
 kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to the card
 kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
-kzsigner sign request.xml -k key.p12 --xml --tsa        # -> request-signed.xml, XAdES B-T
+kzsigner sign request.xml -k key.p12 --xml              # -> request-signed.xml, XAdES B-T
 kzsigner verify request-signed.xml                      # checks the XML signature
 kzsigner sign request-signed.xml -k key2.p12 --xml      # a second signature inside it
 kzsigner extend request-signed.xml                      # XAdES B-LTA, or renew it

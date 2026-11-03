@@ -43,7 +43,7 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result
     let mut warnings = Vec::new();
     if let Some(url) = ocsp_url {
         let (_, status, answer, _) =
-            crate::verify::revocation(c, chain.issuer.as_ref(), url, trust);
+            crate::verify::revocation(c, chain.issuer.as_ref(), url, trust, None);
         match answer {
             "good" => {}
             "" => warnings.push(trf(

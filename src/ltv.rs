@@ -1206,16 +1206,45 @@ mod tests {
         let mut c = f.carol.clone();
         c.extensions.push(("2.5.29.31".into(), dp));
         let dead = serve(None);
-        let (good, status, answer, source) = revocation(&c, Some(&f.ca.cert), &dead, &f.trust);
+        let (good, status, answer, source) =
+            revocation(&c, Some(&f.ca.cert), &dead, &f.trust, None);
         assert!(
             good && answer == "good" && source == Some("crl"),
             "{status}"
         );
         assert!(status.contains("(OCSP: "), "{status}");
         // no list either
-        let (good, _, answer, source) = revocation(&f.carol, Some(&f.ca.cert), &dead, &f.trust);
+        let (good, _, answer, source) =
+            revocation(&f.carol, Some(&f.ca.cert), &dead, &f.trust, None);
         assert!(!good && answer.is_empty() && source.is_none());
-        let (_, _, _, source) = revocation(&c, None, &dead, &f.trust);
+        let (_, _, _, source) = revocation(&c, None, &dead, &f.trust, None);
         assert!(source.is_none());
+
+        // revoked a day ago: still good as of a trusted timestamp made before that
+        let list = f.crl(
+            &f.ca.cert.subject,
+            now - DAY,
+            now + DAY,
+            Some(now - DAY),
+            false,
+        );
+        let uri = der::tlv(der::ctx_prim(6), serve(Some(list)).as_bytes());
+        let dp = der::seq(&[&der::seq(&[&der::tlv(
+            der::ctx(0),
+            &der::tlv(der::ctx(0), &uri),
+        )])]);
+        let mut c = f.carol.clone();
+        c.extensions.push(("2.5.29.31".into(), dp));
+        let check = |at| revocation(&c, Some(&f.ca.cert), &dead, &f.trust, at);
+        let (good, status, answer, _) = check(Some(now - 2 * DAY));
+        assert!(good && answer == "revoked", "{status}");
+        assert!(
+            status.starts_with("GOOD at the timestamp's time"),
+            "{status}"
+        );
+        for at in [None, Some(now - DAY), Some(now)] {
+            let (good, status, answer, _) = check(at);
+            assert!(!good && answer == "revoked", "{at:?}: {status}");
+        }
     }
 }

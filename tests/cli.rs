@@ -12,10 +12,33 @@ fn fixture(p: &str) -> String {
         .to_string()
 }
 
+/// Signing and checking go online by default; the tests stay offline unless a test names a
+/// server or needs one (--card, --level), or says `--network` (dropped here).
+fn offline_unless_asked(args: &mut Vec<String>) {
+    let Some(cmd) = args.first().cloned() else {
+        return;
+    };
+    let keep = args.iter().any(|a| a == "--network");
+    args.retain(|a| a != "--network");
+    let given: Vec<String> = args.clone();
+    let has = |p: &str| given.iter().any(|a| a.starts_with(p));
+    if keep || has("--card") || has("--level") || has("--offline") || has("--help") {
+        return;
+    }
+    if cmd == "sign" && !has("--tsa") && !has("--no-tsa") {
+        args.push("--no-tsa".into());
+    }
+    if (cmd == "sign" || cmd == "verify") && !has("--ocsp") && !has("--no-ocsp") {
+        args.push("--no-ocsp".into());
+    }
+}
+
 /// Runs kzsigner in `dir`; returns (success, stdout + stderr).
 fn kz(dir: &Path, args: &[&str], password: Option<&str>) -> (bool, String) {
+    let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    offline_unless_asked(&mut args);
     let mut c = Command::new(env!("CARGO_BIN_EXE_kzsigner"));
-    c.args(args)
+    c.args(&args)
         .current_dir(dir)
         .env_remove("KZSIGNER_PASSWORD");
     if let Some(p) = password {
@@ -175,5 +198,92 @@ fn extracted_file_names() {
         let (ok, o) = kz(&d, &["extract", file], None);
         assert!(ok, "{file}: {o}");
         assert_eq!(std::fs::read(d.join(out)).unwrap(), b"hello", "{file}");
+    }
+}
+
+/// Signing gets NCA's timestamp and checks revocation, and checking checks revocation, unless
+/// turned off (Order 500/НҚ p.4.3 and p.16; Digital Code Art. 50 p.3.4).
+#[test]
+fn network_by_default() {
+    let d = work("network");
+    let ca = |a: &str| fixture(&format!("keys/ca_{a}.cer"));
+    let key = |a: &str| fixture(&format!("keys/alice_{a}.p12"));
+    // a proxy nobody answers on: every request fails at once
+    let run = |args: &[&str]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_kzsigner"))
+            .args(args)
+            .current_dir(&*d)
+            .env("KZSIGNER_PASSWORD", "Qwerty12")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("HTTP_PROXY", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .output()
+            .unwrap();
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        (o.status.success(), out)
+    };
+    let (k, c) = (key("gost2015"), ca("gost2015"));
+    let (ok, out) = run(&["sign", "-k", &k, "--trust", &c, "doc.txt"]);
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("tsp.pki.gov.kz") && out.contains("--no-tsa (or --offline)"),
+        "{out}"
+    );
+    let (ok, out) = run(&["sign", "-k", &k, "--trust", &c, "--no-tsa", "doc.txt"]);
+    assert!(ok && out.contains("Could not check that your key"), "{out}");
+    let (ok, out) = run(&["verify", "--trust", &c, "doc.txt.cms"]);
+    assert!(!ok && out.contains("ERROR: could not check OCSP"), "{out}");
+    let (ok, out) = run(&["verify", "--trust", &c, "--offline", "doc.txt.cms"]);
+    assert!(
+        ok && out.contains("but revocation was not checked (offline)"),
+        "{out}"
+    );
+    let (ok, out) = run(&[
+        "sign",
+        "-k",
+        &k,
+        "--trust",
+        &c,
+        "--offline",
+        "-o",
+        "b.cms",
+        "doc.txt",
+    ]);
+    assert!(ok && !out.contains("Warning"), "{out}");
+
+    // NCA's TSA no longer serves GOST 2004 keys: no default timestamp for them
+    let (ok, out) = run(&[
+        "sign",
+        "-k",
+        &key("gost2004"),
+        "--trust",
+        &ca("gost2004"),
+        "--no-ocsp",
+        "-o",
+        "c.cms",
+        "doc.txt",
+    ]);
+    assert!(ok && out.contains("Note: no timestamp"), "{out}");
+
+    for (args, says) in [
+        (&["sign", "--offline", "--tsa", "doc.txt"][..], "contradict"),
+        (&["sign", "--no-ocsp", "--ocsp", "doc.txt"], "contradict"),
+        (
+            &["sign", "--offline", "--card", "doc.txt"],
+            "--card needs the network",
+        ),
+        (
+            &["sign", "--no-tsa", "--level", "LT", "doc.txt"],
+            "--level needs the network",
+        ),
+        (&["verify", "--no-tsa", "doc.txt.cms"], "invalid option"),
+        (&["extend", "--offline", "doc.txt.cms"], "invalid option"),
+    ] {
+        let (ok, out) = run(args);
+        assert!(!ok && out.contains(says), "{args:?}: {out}");
     }
 }

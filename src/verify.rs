@@ -275,7 +275,13 @@ pub fn check_certificate(
     }
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
-        let (good, status, answer, source) = revocation(c, chain.issuer.as_ref(), url, trust);
+        let (good, status, answer, source) = revocation(
+            c,
+            chain.issuer.as_ref(),
+            url,
+            trust,
+            trusted_time.then_some(at),
+        );
         sr.revocation_source = source;
         ocsp_good = good;
         sr.ocsp_status = Some(status);
@@ -374,24 +380,57 @@ pub fn level(sr: &SignerReport, kept_revocation: bool) -> &'static str {
 /// Whether `c` is revoked, by OCSP at `url`, or, when OCSP gives no answer, by the CA's current
 /// revocation list (Order 500/НҚ p.18-19): (good, status for people, answer "good", "revoked",
 /// "unknown" or "" when there is none, where the answer came from: "ocsp" or "crl").
+/// `trusted_at`: the time of the signature's trusted timestamp. A certificate revoked after it
+/// still counts as good there (Order 500/НҚ p.14: checked as of the timestamp's time).
 pub fn revocation(
     c: &Cert,
     issuer: Option<&Cert>,
     url: &str,
     trust: &TrustStore,
+    trusted_at: Option<i64>,
 ) -> (bool, String, &'static str, Option<&'static str>) {
-    let (good, status, answer) = ocsp::check(c, issuer, url, trust);
-    if !answer.is_empty() {
-        return (good, status, answer, Some("ocsp"));
-    }
-    if issuer.is_none() {
+    let Some(issuer) = issuer else {
         // the revocation list can't be checked without the CA either: say it once
+        let (good, status, answer) = ocsp::check(c, None, url, trust);
         return (good, status, answer, None);
+    };
+    let (good, status, answer, revoked_at) = match ocsp::fetch(c, issuer, url, trust) {
+        Ok(a) => (a.good, a.status, a.cert_status, a.revoked_at),
+        Err(e) => (
+            false,
+            trf("ERROR: could not check OCSP ({})", &[&e]),
+            "",
+            None,
+        ),
+    };
+    let (good, status, answer, source, revoked_at) = if !answer.is_empty() {
+        (good, status, answer, Some("ocsp"), revoked_at)
+    } else {
+        let (good, crl_status, answer) = crate::crl::check(c, Some(issuer));
+        let status = trf("{} (OCSP: {})", &[&crl_status, &status]);
+        let source = (!answer.is_empty()).then_some("crl");
+        let revoked_at = (answer == "revoked")
+            .then(|| crate::crl::lists(c, time::now_ms()).ok())
+            .flatten()
+            .and_then(|(base, delta, _)| {
+                delta
+                    .and_then(|d| d.revocation_of(c))
+                    .or_else(|| base.revocation_of(c))
+            });
+        (good, status, answer, source, revoked_at)
+    };
+    match (answer, revoked_at, trusted_at) {
+        ("revoked", Some(r), Some(t)) if r > t => (
+            true,
+            trf(
+                "GOOD at the timestamp's time {} ({})",
+                &[&time::fmt(Some(t)), &status],
+            ),
+            answer,
+            source,
+        ),
+        _ => (good, status, answer, source),
     }
-    let (good, crl_status, answer) = crate::crl::check(c, issuer);
-    let status = trf("{} (OCSP: {})", &[&crl_status, &status]);
-    let source = (!answer.is_empty()).then_some("crl");
-    (good, status, answer, source)
 }
 
 /// Checks the signature over the signed attributes alone, and reports the signed hash.
