@@ -7,7 +7,7 @@
 # mutants: cargo-mutants changes the code in small ways (a condition flipped, a function
 # returning a default) and checks that some test fails. A mutant that survives is code no
 # test really checks. A full run is long (over 4000 mutants), so it runs weekly and by hand,
-# split over 8 shards (about an hour each); a pull request runs it only on the lines it changes. Survivors are
+# split over 16 shards (up to 1.5 hours each); a pull request runs it only on the lines it changes. Survivors are
 # reported, not failed on, while the existing ones are worked down: see mutants.out in the
 # artifact (missed.txt).
 name: quality
@@ -25,6 +25,14 @@ on:
         description: 'Only these source files (space-separated, e.g. src/xml/mod.rs); empty: all'
         required: false
         default: ''
+      shards:
+        description: 'Only these shards, as a JSON list (e.g. [4,5]); empty: all'
+        required: false
+        default: ''
+      total:
+        description: 'Split the mutants into this many shards'
+        required: false
+        default: '16'
 concurrency:
   group: quality-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -78,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ github.event_name == 'pull_request' && fromJSON('[0]') || fromJSON('[0,1,2,3,4,5,6,7]') }}
+        shard: ${{ github.event_name == 'pull_request' && fromJSON('[0]') || inputs.shards != '' && fromJSON(inputs.shards) || fromJSON('[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +105,7 @@ jobs:
         env:
           FILES: ${{ github.event.inputs.files }}
           BASE: ${{ github.event.pull_request.base.sha }}
+          TOTAL: ${{ inputs.total || '16' }}
         run: |
           set +e
           args="--no-shuffle -j 2 --timeout 180 --output ."
@@ -104,7 +113,7 @@ jobs:
             git diff "$BASE...HEAD" -- src > pr.diff
             args="$args --in-diff pr.diff"
           else
-            args="$args --shard ${{ matrix.shard }}/8"
+            args="$args --shard ${{ matrix.shard }}/$TOTAL"
             for f in $FILES; do args="$args -f $f"; done
           fi
           cargo mutants $args
