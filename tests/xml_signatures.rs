@@ -130,3 +130,34 @@ fn transforms_that_leave_signatures_out() {
         assert_eq!(e.xml_has_room(doc.as_bytes()), room, "{t}");
     }
 }
+
+/// Documents of other shapes: an empty root element written as `<r/>`, and a DTD with an
+/// entity.
+#[test]
+fn document_shapes() {
+    let e = Engine::new(vec![ca()]);
+    let alice = key("keys/alice_gost2015.p12");
+    for doc in [
+        "<r/>",
+        "<?xml version=\"1.0\"?>\n<r a=\"1\"/>\n",
+        "<r\n/>",
+        "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"x\">]>\n<r>&e;</r>\n",
+    ] {
+        let signed = e.sign_xml(doc.as_bytes(), &alice, None, None).unwrap().cms;
+        let text = String::from_utf8(signed.clone()).unwrap();
+        assert!(text.trim_end().ends_with("</r>"), "{doc}: {text}");
+        let r = e.verify(&signed, None, None).unwrap();
+        assert!(r.valid, "{doc}: {:?}", r.signers[0].signature_error);
+        assert_eq!(r.content_size, signed.len() as u64);
+        assert!(r.has_content);
+    }
+    // two signers, numbered in order
+    let one = e.sign_xml(b"<r/>", &alice, None, None).unwrap().cms;
+    let two = e
+        .sign_xml(&one, &key("keys/bob_gost2015.p12"), None, None)
+        .unwrap()
+        .cms;
+    let r = e.verify(&two, None, None).unwrap();
+    let idx: Vec<usize> = r.signers.iter().map(|s| s.index).collect();
+    assert_eq!(idx, [1, 2]);
+}

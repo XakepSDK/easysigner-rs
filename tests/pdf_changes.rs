@@ -498,3 +498,253 @@ fn signature_field_names() {
     let kinds: Vec<_> = r.signers.iter().map(|s| s.kind.clone().unwrap()).collect();
     assert_eq!(kinds, ["PDF signature \"form.Signature1\""]);
 }
+
+/// The signed PDF's byte range as written: where its four numbers start, and their values.
+fn byte_range(data: &[u8]) -> (usize, [usize; 4]) {
+    let at = data.windows(11).rposition(|w| w == b"/ByteRange[").unwrap() + 11;
+    let end = at + data[at..].iter().position(|&b| b == b']').unwrap();
+    let v: Vec<usize> = std::str::from_utf8(&data[at..end])
+        .unwrap()
+        .split_whitespace()
+        .map(|n| n.parse().unwrap())
+        .collect();
+    (at, [v[0], v[1], v[2], v[3]])
+}
+
+/// `data` with the byte range rewritten to `r` (same widths: "0 " then three ten-digit
+/// numbers).
+fn with_range(data: &[u8], r: [i64; 4]) -> Vec<u8> {
+    let (at, _) = byte_range(data);
+    let mut d = data.to_vec();
+    let text = format!("{} {:010} {:010} {:010}", r[0], r[1], r[2], r[3]);
+    d[at..at + text.len()].copy_from_slice(text.as_bytes());
+    d
+}
+
+/// A byte range must start at 0, leave out exactly the signature's <hex> value and stay within
+/// the file; the value must hold one signer; the signature type must be one kzsigner reads.
+#[test]
+fn signature_fields_that_do_not_hold() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = engine();
+    let rsa = key(&e, "alice_rsa.p12");
+    let gost = key(&e, "alice_gost2015.p12");
+    let signed = e
+        .sign_pdf(
+            &std::fs::read(fx.join("plain.pdf")).unwrap(),
+            &rsa,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(signed.signer_count, 1);
+    assert!(!signed.cosigned);
+    let two = e.sign_pdf(&signed.cms, &gost, None, None).unwrap();
+    assert!(two.cosigned && two.signer_count == 2);
+    let pdf = signed.cms;
+    assert!(e.verify(&pdf, None, None).unwrap().valid);
+    let (_, [_, a, b, c]) = byte_range(&pdf);
+    let (a, b, c) = (a as i64, b as i64, c as i64);
+    let error = |d: &[u8]| {
+        let r = e.verify(d, None, None).unwrap();
+        assert!(!r.valid && !r.signers[0].signature_ok);
+        r.signers[0].signature_error.clone().unwrap()
+    };
+    for (what, r, says) in [
+        (
+            "not from the start",
+            [1, a - 1, b, c],
+            "byte range is damaged",
+        ),
+        (
+            "an empty gap",
+            [0, a, a, c + b - a],
+            "byte range is damaged",
+        ),
+        ("past the end", [0, a, b, c + 1], "byte range is damaged"),
+        ("the gap without its <", [0, a + 1, b, c], "leaves out more"),
+        (
+            "the gap without its >",
+            [0, a, b - 1, c + 1],
+            "leaves out more",
+        ),
+        ("more than the value", [0, a - 1, b, c], "leaves out more"),
+    ] {
+        let err = error(&with_range(&pdf, r));
+        assert!(err.contains(says), "{what}: {err}");
+    }
+
+    // the value, within its room: two signers
+    let gap = &pdf[a as usize + 1..b as usize - 1];
+    let hex = std::str::from_utf8(gap).unwrap().trim_end_matches('0');
+    let hex = if hex.len() % 2 == 1 {
+        format!("{hex}0")
+    } else {
+        hex.to_string()
+    };
+    let der: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    let sd = kzsigner::cms::SignedData::parse(&der).unwrap();
+    let doubled = kzsigner::hex(&sd.merge(&sd).encode()).to_uppercase();
+    assert!(doubled.len() <= gap.len());
+    let mut d = pdf.clone();
+    d[a as usize + 1..a as usize + 1 + doubled.len()].copy_from_slice(doubled.as_bytes());
+    for x in &mut d[a as usize + 1 + doubled.len()..b as usize - 1] {
+        *x = b'0';
+    }
+    assert!(error(&d).contains("exactly one signer"));
+
+    // a signature type kzsigner does not read
+    let i = pdf
+        .windows(19)
+        .position(|w| w == b"ETSI.CAdES.detached")
+        .unwrap();
+    let mut d = pdf.clone();
+    d[i..i + 19].copy_from_slice(b"ETSI.CAdES.detacheX");
+    let err = error(&d);
+    assert!(
+        err.contains("Unsupported PDF signature type: ETSI.CAdES.detacheX"),
+        "{err}"
+    );
+}
+
+/// Signature fields are found down to 32 levels of nesting, and named by their full path.
+#[test]
+fn deeply_nested_fields() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = engine();
+    let found = |levels: usize| {
+        let mut doc = Document::load(fx.join("plain.pdf")).unwrap();
+        let v = doc.add_object(Dictionary::from_iter([
+            ("Type", Object::from("Sig")),
+            ("SubFilter", Object::from("ETSI.CAdES.detached")),
+        ]));
+        let mut field = doc.add_object(Dictionary::from_iter([
+            ("FT", Object::from("Sig")),
+            ("T", Object::string_literal("s")),
+            ("V", Object::Reference(v)),
+        ]));
+        for _ in 1..levels {
+            field = doc.add_object(Dictionary::from_iter([
+                ("T", Object::string_literal("p")),
+                ("Kids", Object::Array(vec![Object::Reference(field)])),
+            ]));
+        }
+        doc.catalog_mut().unwrap().set(
+            "AcroForm",
+            Dictionary::from_iter([("Fields", Object::Array(vec![Object::Reference(field)]))]),
+        );
+        let mut data = Vec::new();
+        doc.save_to(&mut data).unwrap();
+        let r = e.verify(&data, None, None).unwrap();
+        r.signers
+            .into_iter()
+            .map(|s| s.kind.unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found(2), ["PDF signature \"p.s\""]);
+    // the top field is at depth 0
+    assert_eq!(found(33).len(), 1);
+    assert!(found(34).is_empty());
+}
+
+/// More of what an update may change: the XMP metadata and the DSS may; an annotation known by
+/// its Subtype and Rect alone, or a page's content stream, may not. A form in its own object
+/// with its fields inline gains a field in place.
+#[test]
+fn metadata_dss_and_other_objects() {
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pdf");
+    let e = engine();
+    let (rsa, gost) = (key(&e, "alice_rsa.p12"), key(&e, "alice_gost2015.p12"));
+    let mut doc = Document::load(fx.join("plain.pdf")).unwrap();
+    let link = doc.add_object(Dictionary::from_iter([
+        ("Subtype", Object::from("Link")),
+        (
+            "Rect",
+            Object::Array(vec![0.into(), 0.into(), 9.into(), 9.into()]),
+        ),
+    ]));
+    let meta = doc.add_object(Stream::new(
+        Dictionary::from_iter([("Type", Object::from("Metadata"))]),
+        b"<x:xmpmeta/>".to_vec(),
+    ));
+    let dss = doc.add_object(Dictionary::from_iter([("Certs", Object::Array(vec![]))]));
+    let form = doc.add_object(Dictionary::from_iter([("Fields", Object::Array(vec![]))]));
+    let page = first_page(&doc);
+    doc.get_dictionary_mut(page)
+        .unwrap()
+        .set("Annots", Object::Array(vec![Object::Reference(link)]));
+    let c = doc.catalog_mut().unwrap();
+    c.set("Metadata", Object::Reference(meta));
+    c.set("DSS", Object::Reference(dss));
+    c.set("AcroForm", Object::Reference(form));
+    let mut pdf = Vec::new();
+    doc.save_to(&mut pdf).unwrap();
+
+    let one = e.sign_pdf(&pdf, &rsa, None, None).unwrap().cms;
+    let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
+    let r = e.verify(&two, None, None).unwrap();
+    assert!(r.valid, "{:?}", r.signers);
+
+    let allowed = [
+        update(&two, |old, n, next| {
+            let mut s = old.get_object(meta).unwrap().as_stream().unwrap().clone();
+            s.set_content(b"<x:xmpmeta>changed</x:xmpmeta>".to_vec());
+            n.objects.insert(meta, Object::Stream(s));
+            next
+        }),
+        update(&two, |old, n, next| {
+            let mut d = old.get_dictionary(dss).unwrap().clone();
+            d.set("OCSPs", Object::Array(vec![]));
+            n.objects.insert(dss, Object::Dictionary(d));
+            next
+        }),
+    ];
+    for d in allowed {
+        let r = e.verify(&d, None, None).unwrap();
+        assert!(
+            r.valid,
+            "{:?}",
+            r.signers
+                .iter()
+                .map(|s| &s.signature_error)
+                .collect::<Vec<_>>()
+        );
+    }
+    let refused = [
+        (
+            update(&two, |old, n, next| {
+                let mut d = old.get_dictionary(link).unwrap().clone();
+                d.set(
+                    "Rect",
+                    Object::Array(vec![0.into(), 0.into(), 99.into(), 99.into()]),
+                );
+                n.objects.insert(link, Object::Dictionary(d));
+                next
+            }),
+            "an annotation (object",
+        ),
+        (
+            update(&two, |old, n, next| {
+                let contents = old.get_dictionary(page).unwrap().get(b"Contents").unwrap();
+                let id = match contents {
+                    Object::Reference(id) => *id,
+                    Object::Array(a) => a[0].as_reference().unwrap(),
+                    _ => panic!("no contents"),
+                };
+                let mut s = old.get_object(id).unwrap().as_stream().unwrap().clone();
+                s.set_content(b"BT /F1 40 Tf 50 700 Td (CHANGED) Tj ET".to_vec());
+                n.objects.insert(id, Object::Stream(s));
+                next
+            }),
+            "an object (object",
+        ),
+    ];
+    for (d, says) in refused {
+        for err in errors(&e, &d, says) {
+            assert!(err.contains(says), "{err}");
+        }
+    }
+}

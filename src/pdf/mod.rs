@@ -1105,4 +1105,29 @@ mod tests {
         assert_eq!(text_from(&s), "Қ1");
         assert_eq!(revisions(b"%PDF-1.4\n%%EOF\nx%%EOF\r\n"), vec![15, 23]);
     }
+
+    #[test]
+    fn date_forms() {
+        // the milliseconds are dropped, not rounded
+        assert_eq!(pdf_date(1999), "D:19700101000001Z");
+        // a year alone, and too few digits
+        assert_eq!(
+            parse_pdf_date("D:2026").map(time::iso).as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(parse_pdf_date("D:202"), None);
+        assert_eq!(parse_pdf_date("D:20"), None);
+        // offsets with minutes, both ways
+        let at = |s: &str| parse_pdf_date(s).map(time::iso).unwrap();
+        assert_eq!(at("D:20261101103000+05'30'"), "2026-11-01T05:00:00Z");
+        assert_eq!(at("D:20261101103000-01'30'"), "2026-11-01T12:00:00Z");
+    }
+
+    #[test]
+    fn what_is_a_pdf() {
+        assert!(is_pdf(b"%PDF-1.7\n"));
+        // a text starting with "0" (0x30, as DER does) that is not a CMS
+        assert!(is_pdf(b"0 junk %PDF-1.7\n"));
+        assert!(!is_pdf(b"hello"));
+    }
 }

@@ -1145,6 +1145,71 @@ fn long_term() {
         json_ok(&json) && json.matches("\"authority\"").count() >= 2,
     );
 
+    // the document timestamps through the library: checked, valid and trusted, and what a
+    // broken or untrusted one does
+    {
+        let cert = |p: &str| kzsigner::cert::Cert::parse_any(&std::fs::read(p).unwrap()).unwrap();
+        let tsa_cert = s(&t.path("tsa.cer"));
+        let e = kzsigner::Engine::new(vec![cert(&ocsp_ca), cert(&tsa_cert)]);
+        let data = std::fs::read(t.path("plain-signed.pdf")).unwrap();
+        let r = e.verify(&data, None, None).unwrap();
+        let stamps_ok = r.document_timestamps.len() == 2
+            && r.document_timestamps.iter().all(|a| {
+                a.checked && a.valid && a.trusted && a.error.is_none() && a.time.is_some()
+            });
+        t.check(
+            "PAdES: document timestamps checked",
+            r.valid && stamps_ok && r.warnings.is_empty(),
+        );
+        // trusting only the signer's CA: valid, with a warning about each timestamp authority
+        let only_ca = kzsigner::Engine::new(vec![cert(&ocsp_ca)]);
+        let r = only_ca.verify(&data, None, None).unwrap();
+        t.check(
+            "PAdES: an untrusted document timestamp authority is a warning",
+            r.document_timestamps.iter().all(|a| a.valid && !a.trusted)
+                && r.warnings
+                    .iter()
+                    .any(|w| w.contains("document timestamp authority")),
+        );
+        // the last document timestamp's token with one changed digit, or none at all
+        // (its byte range leaves out "<hex>" from `open` to `close`)
+        let last = data.windows(11).rposition(|w| w == b"/ByteRange[").unwrap() + 11;
+        let end = last + data[last..].iter().position(|&b| b == b']').unwrap();
+        let range: Vec<usize> = String::from_utf8_lossy(&data[last..end])
+            .split_whitespace()
+            .map(|n| n.parse().unwrap())
+            .collect();
+        let (open, close) = (range[1], range[2] - 1);
+        let mut broken = data.clone();
+        let digit = open + 200;
+        broken[digit] = if broken[digit] == b'0' { b'1' } else { b'0' };
+        let r = e.verify(&broken, None, None).unwrap();
+        t.check(
+            "PAdES: a broken document timestamp makes the file not valid",
+            !r.valid
+                && r.document_timestamps
+                    .iter()
+                    .any(|a| !a.valid && a.checked && a.error.is_some())
+                && r.warnings
+                    .iter()
+                    .any(|w| w.contains("A document timestamp is not valid")),
+        );
+        let mut zeros = data.clone();
+        for b in &mut zeros[open + 1..close] {
+            *b = b'0';
+        }
+        let r = e.verify(&zeros, None, None).unwrap();
+        t.check(
+            "PAdES: an empty document timestamp is not valid",
+            !r.valid
+                && r.document_timestamps.iter().any(|a| {
+                    a.checked
+                        && !a.valid
+                        && a.error.as_deref().is_some_and(|e| e.contains("unreadable"))
+                }),
+        );
+    }
+
     // a visible signature: a stamp with a logo, on the first page's top left
     // (only the JPEG's frame header is read; the viewer decodes the rest)
     let jpeg = [

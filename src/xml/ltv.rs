@@ -363,3 +363,126 @@ pub fn extend(
     r.cms = bytes;
     Ok(r)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A signature element whose unsigned signature properties are `usp`.
+    fn signature(usp: &str) -> String {
+        format!(
+            "<ds:Signature xmlns:ds=\"{DS}\"><ds:SignedInfo/><ds:Object>\
+             <xades:QualifyingProperties xmlns:xades=\"{XADES}\" xmlns:x141=\"{XADES141}\">\
+             <xades:UnsignedProperties><xades:UnsignedSignatureProperties>{usp}\
+             </xades:UnsignedSignatureProperties></xades:UnsignedProperties>\
+             </xades:QualifyingProperties></ds:Object></ds:Signature>"
+        )
+    }
+
+    fn nca_token() -> Vec<u8> {
+        let resp = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/nca-live/sha256-policy-6.2/tsr.der"
+        ))
+        .unwrap();
+        let k = crate::der::parse(&resp)
+            .unwrap()
+            .items(crate::der::SEQUENCE)
+            .unwrap();
+        k[1].raw.to_vec()
+    }
+
+    #[test]
+    fn kept_values_read_back() {
+        let k = Kept {
+            certs: vec![vec![1, 2], vec![3]],
+            ocsps: vec![vec![4]],
+            crls: vec![vec![5], vec![6]],
+        };
+        let one = Kept {
+            certs: vec![vec![7]],
+            ..Default::default()
+        };
+        // CertificateValues and RevocationValues, then TimeStampValidationData with more; other
+        // elements and values in other namespaces count for nothing
+        let usp = format!(
+            "{}<x141:TimeStampValidationData>{}</x141:TimeStampValidationData>\
+             <xades:Other><xades:EncapsulatedX509Certificate>CA==</xades:EncapsulatedX509Certificate></xades:Other>\
+             <xades:CertificateValues><o:EncapsulatedX509Certificate xmlns:o=\"urn:o\">Cw==</o:EncapsulatedX509Certificate></xades:CertificateValues>",
+            values(&k),
+            values(&one)
+        );
+        let text = signature(&usp);
+        let doc = parse(&text).unwrap();
+        let back = kept(doc.root_element());
+        assert_eq!(back.certs, vec![vec![1, 2], vec![3], vec![7]]);
+        assert_eq!(back.ocsps, k.ocsps);
+        assert_eq!(back.crls, k.crls);
+        // values with only revocation data, or only lists, or nothing
+        assert!(
+            !values(&Kept {
+                crls: vec![vec![5]],
+                ..Default::default()
+            })
+            .contains("OCSPValues")
+        );
+        assert!(
+            !values(&Kept {
+                ocsps: vec![vec![5]],
+                ..Default::default()
+            })
+            .contains("CRLValues")
+        );
+        assert_eq!(values(&Kept::default()), "");
+        let bare = format!("<ds:Signature xmlns:ds=\"{DS}\"/>");
+        let doc = parse(&bare).unwrap();
+        assert!(kept(doc.root_element()).is_empty());
+    }
+
+    #[test]
+    fn timestamps_in_the_signature() {
+        let token = nca_token();
+        let b64 = crate::base64_encode(&token);
+        let stamp = |name: &str, ns: &str| {
+            format!(
+                "<{ns}:{name}><xades:EncapsulatedTimeStamp>{b64}</xades:EncapsulatedTimeStamp></{ns}:{name}>"
+            )
+        };
+        let text = signature(&format!(
+            "{}{}",
+            stamp("SignatureTimeStamp", "xades"),
+            stamp("ArchiveTimeStamp", "x141")
+        ));
+        let doc = parse(&text).unwrap();
+        let sig = doc.root_element();
+        let (sts, ats) = tokens(sig);
+        assert_eq!((sts, ats), (vec![token.clone()], vec![token.clone()]));
+        let when = gen_time(&token).unwrap();
+        assert!(when > 1_700_000_000_000);
+        assert_eq!(gen_time(b"junk"), None);
+
+        // a real token over something else: checked, not valid
+        let trust = TrustStore::new(vec![]);
+        let a = &check_archives(&text, &doc, sig, &trust)[0];
+        assert!(
+            a.checked && !a.valid && a.time == Some(when) && a.tsa.is_some(),
+            "{a:?}"
+        );
+        assert!(a.error.as_deref().unwrap().contains("does not match"));
+        // a token that is not a timestamp: still says when and by whom
+        let mut sd = cms::SignedData::parse_inner(&token).unwrap();
+        sd.content_type = cms::ID_DATA.into();
+        let other = crate::base64_encode(&sd.encode());
+        let text = signature(&format!(
+            "<x141:ArchiveTimeStamp><xades:EncapsulatedTimeStamp>{other}</xades:EncapsulatedTimeStamp></x141:ArchiveTimeStamp>"
+        ));
+        let doc = parse(&text).unwrap();
+        let a = &check_archives(&text, &doc, doc.root_element(), &trust)[0];
+        assert!(a.checked && !a.valid && a.time == Some(when), "{a:?}");
+        assert_eq!(a.tsa, tsp::token_cert(&token).map(|c| c.cn()));
+        assert!(
+            a.error.as_deref().unwrap().contains("not for a time stamp"),
+            "{a:?}"
+        );
+    }
+}
