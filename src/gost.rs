@@ -465,6 +465,20 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_point_to_itself_doubles_it() {
+        let c = curve("1.2.398.3.10.1.1.2.1.1").unwrap();
+        let g = c.g();
+        let twice = c.affine(&c.double(&g)).unwrap();
+        assert_eq!(c.affine(&c.add(&g, &g)).unwrap(), twice);
+        let neg = Jac {
+            x: g.x.clone(),
+            y: &c.p - &g.y,
+            z: BigUint::one(),
+        };
+        assert!(c.affine(&c.add(&g, &neg)).is_none());
+    }
+
+    #[test]
     fn random_below_stays_in_range() {
         let n = BigUint::from(3u32);
         let mut seen = [false; 3];

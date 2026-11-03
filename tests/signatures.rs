@@ -243,3 +243,34 @@ fn signing_without_a_revocation_answer() {
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     assert_eq!(r.signer_count, 1);
 }
+
+/// Signing with a key whose certificate has expired works, and says so.
+#[test]
+fn warnings_and_counts_from_signing() {
+    let trust = TrustStore::new(vec![ca("keys/ca_gost2015.cer")]);
+    let mut k = key("keys/alice_gost2015.p12");
+    k.cert.not_after = 0;
+    let expired = |w: &[String]| w.iter().any(|w| w.contains("expired"));
+    let r = kzsigner::sign::sign(b"hi", &k, false, None, false, None, &trust).unwrap();
+    assert!(
+        expired(&r.warnings) && r.signer_count == 1,
+        "{:?}",
+        r.warnings
+    );
+    let md = gost::hash(gost::H_GOST2015_512, b"hi").unwrap();
+    let r = kzsigner::sign::sign_hash(&md, &k, None, &trust).unwrap();
+    assert!(
+        expired(&r.warnings) && r.signer_count == 1,
+        "{:?}",
+        r.warnings
+    );
+    let pdf = std::fs::read(fixture("pdf/plain.pdf")).unwrap();
+    let r = kzsigner::pdf::sign(&pdf, &k, None, &trust, None).unwrap();
+    assert!(expired(&r.warnings), "{:?}", r.warnings);
+    let r = kzsigner::xml::sign(b"<r>1</r>", &k, None, &trust).unwrap();
+    assert!(expired(&r.warnings), "{:?}", r.warnings);
+    assert_eq!(
+        kzsigner::Error::new("shown as is").to_string(),
+        "shown as is"
+    );
+}

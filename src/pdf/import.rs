@@ -157,3 +157,171 @@ fn copy_dict(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A document with one page per rotation, the box and rotation set on the page tree.
+    fn pages(rotations: &[i64]) -> Document {
+        let mut d = Document::with_version("1.7");
+        let tree = d.new_object_id();
+        let font = d.add_object(Dictionary::from_iter([
+            ("Type", Object::from("Font")),
+            ("Parent", Object::Reference(tree)),
+            ("P", Object::Reference(tree)),
+        ]));
+        let mut kids = Vec::new();
+        for &r in rotations {
+            let mut p = Dictionary::from_iter([
+                ("Type", Object::from("Page")),
+                ("Parent", Object::Reference(tree)),
+            ]);
+            if r != 0 {
+                p.set("Rotate", r);
+            }
+            kids.push(Object::Reference(d.add_object(p)));
+        }
+        let n = kids.len() as i64;
+        d.objects.insert(
+            tree,
+            Object::Dictionary(Dictionary::from_iter([
+                ("Type", Object::from("Pages")),
+                ("Kids", Object::Array(kids)),
+                ("Count", n.into()),
+                (
+                    "MediaBox",
+                    Object::Array(vec![110.into(), 20.into(), 10.into(), 220.into()]),
+                ),
+                (
+                    "Resources",
+                    Object::Dictionary(Dictionary::from_iter([(
+                        "Font",
+                        Object::Dictionary(Dictionary::from_iter([
+                            ("F1", Object::Reference(font)),
+                            ("F2", Object::Reference(font)),
+                        ])),
+                    )])),
+                ),
+            ])),
+        );
+        let cat = d.add_object(Dictionary::from_iter([
+            ("Type", Object::from("Catalog")),
+            ("Pages", Object::Reference(tree)),
+        ]));
+        d.trailer.set("Root", cat);
+        d
+    }
+
+    fn matrix(dst: &Document, id: ObjectId) -> Vec<f32> {
+        let s = dst.get_object(id).unwrap().as_stream().unwrap();
+        let m = s.dict.get(b"Matrix").unwrap().as_array().unwrap();
+        m.iter().map(|v| v.as_float().unwrap()).collect()
+    }
+
+    #[test]
+    fn rotated_pages_stand_upright() {
+        let src = pages(&[0, 90, 180, 270, -90, 450]);
+        let mut dst = Document::with_version("1.7");
+        let got = import_pages(&src, &mut dst).unwrap();
+        let sizes: Vec<_> = got.iter().map(|i| (i.w, i.h)).collect();
+        assert_eq!(
+            sizes,
+            [
+                (100.0, 200.0),
+                (200.0, 100.0),
+                (100.0, 200.0),
+                (200.0, 100.0),
+                (200.0, 100.0),
+                (200.0, 100.0)
+            ]
+        );
+        let m: Vec<_> = got.iter().map(|i| matrix(&dst, i.id)).collect();
+        assert_eq!(m[0], [1.0, 0.0, 0.0, 1.0, -10.0, -20.0]);
+        assert_eq!(m[1], [0.0, -1.0, 1.0, 0.0, -20.0, 110.0]);
+        assert_eq!(m[2], [-1.0, 0.0, 0.0, -1.0, 110.0, 220.0]);
+        assert_eq!(m[3], [0.0, 1.0, -1.0, 0.0, 220.0, -10.0]);
+        assert_eq!(m[4], m[3], "-90 turns like 270");
+        assert_eq!(m[5], m[1], "450 turns like 90");
+        let bbox = dst.get_object(got[0].id).unwrap().as_stream().unwrap();
+        let bbox: Vec<f32> = bbox
+            .dict
+            .get(b"BBox")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_float().unwrap())
+            .collect();
+        assert_eq!(bbox, [10.0, 20.0, 110.0, 220.0]);
+    }
+
+    #[test]
+    fn resources_come_without_the_page_tree() {
+        let src = pages(&[0, 0]);
+        let mut dst = Document::with_version("1.7");
+        let got = import_pages(&src, &mut dst).unwrap();
+        let s = dst.get_object(got[0].id).unwrap().as_stream().unwrap();
+        let fonts = s.dict.get(b"Resources").unwrap().as_dict().unwrap();
+        let fonts = fonts.get(b"Font").unwrap().as_dict().unwrap();
+        let f1 = fonts.get(b"F1").unwrap().as_reference().unwrap();
+        assert_eq!(
+            fonts.get(b"F2").unwrap().as_reference().unwrap(),
+            f1,
+            "copied once"
+        );
+        let f = dst.get_dictionary(f1).unwrap();
+        assert!(f.has(b"Type") && !f.has(b"Parent") && !f.has(b"P"));
+        // the second page shares the same copy, and only the font came along
+        let s2 = dst.get_object(got[1].id).unwrap().as_stream().unwrap();
+        let f2 = s2.dict.get(b"Resources").unwrap().as_dict().unwrap();
+        let f2 = f2.get(b"Font").unwrap().as_dict().unwrap();
+        assert_eq!(f2.get(b"F1").unwrap().as_reference().unwrap(), f1);
+        assert_eq!(dst.objects.len(), 3);
+    }
+
+    #[test]
+    fn inherited_attributes() {
+        let src = pages(&[90]);
+        let (_, id) = src.get_pages().into_iter().next().unwrap();
+        let page = src.get_dictionary(id).unwrap();
+        assert_eq!(
+            inherited(&src, page, b"Rotate").unwrap().as_i64().unwrap(),
+            90
+        );
+        assert!(
+            inherited(&src, page, b"MediaBox").is_some(),
+            "from the parent"
+        );
+        assert!(inherited(&src, page, b"CropBox").is_none());
+    }
+
+    #[test]
+    fn copies_stop_deep_down() {
+        let src = Document::with_version("1.7");
+        let mut dst = Document::with_version("1.7");
+        let mut map = HashMap::new();
+        let mut o = Object::Integer(1);
+        for _ in 1..MAX_DEPTH {
+            o = Object::Array(vec![o]);
+        }
+        let deep = |mut o: &Object| {
+            let mut n = 0;
+            while let Object::Array(a) = o {
+                o = &a[0];
+                n += 1;
+            }
+            (n, o.clone())
+        };
+        let c = copy(&src, &mut dst, &Object::Array(vec![o.clone()]), &mut map, 0);
+        assert_eq!(deep(&c), (MAX_DEPTH, Object::Integer(1)));
+        let c = copy(
+            &src,
+            &mut dst,
+            &Object::Array(vec![Object::Array(vec![o])]),
+            &mut map,
+            0,
+        );
+        assert_eq!(deep(&c), (MAX_DEPTH + 1, Object::Null));
+    }
+}

@@ -180,4 +180,54 @@ mod tests {
         let v: Value = serde_json::from_str(&p[0]).unwrap();
         assert_eq!(v["signId"], 3);
     }
+
+    #[test]
+    fn codes_are_filled() {
+        let cms = vec![0x5au8; 1 << 14];
+        let mut x = 1u32;
+        let cms: Vec<u8> = cms
+            .iter()
+            .map(|_| {
+                x = x.wrapping_mul(1103515245).wrapping_add(12345);
+                (x >> 16) as u8
+            })
+            .collect();
+        let p = payloads(1, &cms).unwrap();
+        let cap = capacity();
+        for s in &p[..p.len() - 1] {
+            assert!(s.len() <= cap && s.len() + 16 > cap, "{} of {cap}", s.len());
+        }
+    }
+
+    fn part(id: u64, total: u64, index: u64, data: &str) -> String {
+        json!({"signId": id, "total": total, "index": index, "data": data}).to_string()
+    }
+
+    #[test]
+    fn bad_part_numbers() {
+        let err = |t: &str| assemble(t).unwrap_err().0;
+        assert!(err(&part(1, 2, 0, "")).contains("bad part number"));
+        assert!(err(&part(1, 2, 3, "")).contains("bad part number"));
+        assert!(err(&part(1, 1001, 1, "")).contains("bad part number"));
+        assert!(err(&part(1, 1000, 1000, "")).contains("missing part(s) 1, 2"));
+        assert!(err(&part(1, 2, 2, "")).contains("missing part(s) 1 of 2"));
+        let two = format!("{}\n{}", part(1, 2, 1, ""), part(1, 3, 2, ""));
+        assert!(err(&two).contains("disagree"));
+        assert!(err("{}\n[1]").contains("no signature QR codes"));
+    }
+
+    #[test]
+    fn unpacked_size_limit() {
+        let fits = vec![0u8; MAX_CMS as usize];
+        let p = payloads(5, &fits).unwrap();
+        assert_eq!(assemble(&p.join("\n")).unwrap()[0].1.len(), fits.len());
+        let over = vec![0u8; MAX_CMS as usize + 1];
+        let p = payloads(5, &over).unwrap();
+        assert!(
+            assemble(&p.join("\n"))
+                .unwrap_err()
+                .0
+                .contains("more than a signature")
+        );
+    }
 }

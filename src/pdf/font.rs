@@ -174,4 +174,44 @@ mod tests {
         assert!(f.text_width("Қазақстан", 10.0) > 30.0);
         assert_eq!(f.shape("✈")[0].1, '?');
     }
+
+    #[test]
+    fn widths() {
+        let f = Font::noto();
+        let a = f.shape("A")[0].0;
+        let adv = f.face.glyph_hor_advance(ttf_parser::GlyphId(a)).unwrap();
+        let upem = f.face.units_per_em();
+        assert_eq!(f.width_1000(a), i64::from(adv) * 1000 / i64::from(upem));
+        assert!(f.width_1000(a) > 100 && f.width_1000(a) < 1000);
+        let w = f.width_1000(a) as f64;
+        assert_eq!(f.text_width("AA", 12.0), 2.0 * w * 12.0 / 1000.0);
+    }
+
+    #[test]
+    fn embedded_objects() {
+        let f = Font::noto();
+        let used: BTreeMap<u16, char> = f.shape("Aә😀").into_iter().collect();
+        let mut objs = Vec::new();
+        let id = f.embed(&used, &mut |o| {
+            objs.push(o);
+            (objs.len() as u32, 0)
+        });
+        assert_eq!(id, (objs.len() as u32, 0), "the Type0 font comes last");
+        let top = objs.last().unwrap().as_dict().unwrap();
+        assert_eq!(top.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+
+        let cmap = String::from_utf8(to_unicode(&used)).unwrap();
+        let ga = f.shape("A")[0].0;
+        assert!(cmap.contains(&format!("<{ga:04X}> <0041>\n")), "{cmap}");
+        let many: BTreeMap<u16, char> = (1..=150u16).map(|g| (g, 'x')).collect();
+        let cmap = String::from_utf8(to_unicode(&many)).unwrap();
+        assert!(cmap.contains("100 beginbfchar\n") && cmap.contains("50 beginbfchar\n"));
+        assert!(cmap.contains("<0096> <0078>\n"));
+        let pair: BTreeMap<u16, char> = [(7u16, '😀')].into_iter().collect();
+        assert!(
+            String::from_utf8(to_unicode(&pair))
+                .unwrap()
+                .contains("<0007> <D83DDE00>\n")
+        );
+    }
 }

@@ -671,6 +671,13 @@ fn pdf_and_card() {
         "card: a second signature is added",
         v.contains("Signature added") && v.contains("No OCSP answer"),
     );
+    let card =
+        kzsigner::pdf::card::read(&std::fs::read(t.path("plain.pdf.card.pdf")).unwrap()).unwrap();
+    let names: Vec<&str> = card.signatures.iter().map(|(n, _)| n.as_str()).collect();
+    t.check(
+        "card: signatures numbered from 1",
+        names == ["plain.pdf.1.cms", "plain.pdf.2.cms"],
+    );
     let v = t.kz(&[
         "verify",
         "plain.pdf.card.pdf",

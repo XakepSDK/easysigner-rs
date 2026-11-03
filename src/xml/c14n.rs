@@ -350,4 +350,14 @@ mod tests {
             String::from_utf8(canonicalize(s, doc.root(), &Method::inclusive(), &[sid])).unwrap();
         assert_eq!(out, "<r><t></t></r>");
     }
+
+    #[test]
+    fn methods_by_name() {
+        let m = |u| Method::by_uri(u).map(|m| (m.exclusive, m.comments));
+        assert_eq!(m(C14N), Some((false, false)));
+        assert_eq!(m(C14N_COMMENTS), Some((false, true)));
+        assert_eq!(m(EXC_C14N), Some((true, false)));
+        assert_eq!(m(EXC_C14N_COMMENTS), Some((true, true)));
+        assert_eq!(m("http://www.w3.org/2006/12/xml-c14n11"), None);
+    }
 }

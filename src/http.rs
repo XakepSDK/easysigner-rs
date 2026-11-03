@@ -85,3 +85,48 @@ fn tr_what(what: &str) -> &str {
         other => other,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+
+    /// Answers one request with `status` and `body` on a local port.
+    fn serve(status: &'static str, body: &'static [u8]) -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(body);
+        });
+        url
+    }
+
+    #[test]
+    fn answers_and_failures() {
+        assert_eq!(
+            super::get(&serve("200 OK", b"list"), 100, "x").unwrap(),
+            b"list"
+        );
+        let e = super::get(&serve("200 OK", b"too long"), 4, "x").unwrap_err();
+        assert!(e.0.contains("Could not reach the x"), "{}", e.0);
+        let e = super::get(&serve("404 Not Found", b""), 100, "OCSP server").unwrap_err();
+        assert!(
+            e.0.starts_with("The OCSP server answered HTTP 404"),
+            "{}",
+            e.0
+        );
+        let e = super::get("https://example.invalid/", 100, "timestamp server").unwrap_err();
+        assert!(e.0.contains("timestamp server") && e.0.contains("only http://"));
+        assert_eq!(
+            super::tr_what("revocation list server"),
+            "revocation list server"
+        );
+    }
+}

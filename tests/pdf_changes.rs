@@ -576,16 +576,24 @@ fn signature_fields_that_do_not_hold() {
 
     // the value, within its room: two signers
     let gap = &pdf[a as usize + 1..b as usize - 1];
-    let hex = std::str::from_utf8(gap).unwrap().trim_end_matches('0');
-    let hex = if hex.len() % 2 == 1 {
-        format!("{hex}0")
-    } else {
-        hex.to_string()
-    };
-    let der: Vec<u8> = (0..hex.len())
+    let hex = std::str::from_utf8(gap).unwrap();
+    let mut der: Vec<u8> = (0..hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
         .collect();
+    // the zeros after the value are padding: cut at the length its header gives
+    // (trimming zero digits could also cut the value's own last byte)
+    let (head, len) = match der[1] {
+        n if n < 0x80 => (2, n as usize),
+        n => {
+            let k = (n & 0x7f) as usize;
+            (
+                2 + k,
+                der[2..2 + k].iter().fold(0, |l, &b| l << 8 | b as usize),
+            )
+        }
+    };
+    der.truncate(head + len);
     let sd = kzsigner::cms::SignedData::parse(&der).unwrap();
     let doubled = kzsigner::hex(&sd.merge(&sd).encode()).to_uppercase();
     assert!(doubled.len() <= gap.len());

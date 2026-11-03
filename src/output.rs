@@ -402,5 +402,56 @@ mod tests {
         let mut o = String::new();
         super::quote(&mut o, "a\"b</c\nд");
         assert_eq!(o, r#""a\"b<\/c\nд""#);
+        let mut o = String::new();
+        super::quote(&mut o, "\u{1}\u{85}\u{2028}a/b\u{a0}\u{2100}");
+        assert_eq!(o, "\"\\u0001\\u0085\\u2028a/b\u{a0}\u{2100}\"");
+    }
+
+    #[test]
+    fn levels_and_archive_stamps() {
+        use super::{level_words, stamp};
+        assert_eq!(level_words("B-B"), "no timestamp");
+        assert_eq!(level_words("B-T"), "timestamped");
+        assert_eq!(level_words("B-LT"), "long-term: revocation data kept");
+        assert_eq!(level_words("B-LTA"), "long-term with archive timestamp");
+        assert_eq!(level_words("X"), "");
+        let mut a = crate::report::ArchiveStamp {
+            error: Some("needs the document".into()),
+            ..Default::default()
+        };
+        let state = |a: &crate::report::ArchiveStamp| {
+            let s = stamp(a);
+            s[s.find("(by unknown TSA, ").unwrap() + 17..].to_string()
+        };
+        assert_eq!(state(&a), "needs the document)");
+        a.checked = true;
+        a.error = Some("bad".into());
+        assert_eq!(state(&a), "INVALID: bad)");
+        a.valid = true;
+        assert_eq!(state(&a), "signature ok but TSA not trusted)");
+        a.trusted = true;
+        assert_eq!(state(&a), "verified, trusted TSA)");
+    }
+
+    #[test]
+    fn empty_lists_and_objects() {
+        use super::{J, write};
+        let mut o = String::new();
+        write(
+            &mut o,
+            &J::Obj(vec![
+                ("a".into(), J::List(vec![])),
+                ("b".into(), J::Obj(vec![])),
+                (
+                    "c".into(),
+                    J::List(vec![J::Null, J::Bool(true), J::Num(-1)]),
+                ),
+            ]),
+            "",
+        );
+        assert_eq!(
+            o,
+            "{\n  \"a\": [],\n  \"b\": {},\n  \"c\": [\n    null,\n    true,\n    -1\n  ]\n}"
+        );
     }
 }

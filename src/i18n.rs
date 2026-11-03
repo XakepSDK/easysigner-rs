@@ -647,5 +647,6 @@ mod tests {
         assert_eq!(Lang::parse("kk_KZ.UTF-8"), Some(Lang::Kk));
         assert_eq!(Lang::parse("ru-RU"), Some(Lang::Ru));
         assert_eq!(Lang::parse("de_DE"), None);
+        assert_eq!(Lang::parse(" EN_us "), Some(Lang::En));
     }
 }
