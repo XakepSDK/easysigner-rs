@@ -57,7 +57,16 @@ pub(super) fn original_name(file: &Path, card_name: Option<&str>) -> String {
         .and_then(|n| n.rsplit(['/', '\\']).next())
         .filter(|n| !n.is_empty() && *n != "." && *n != "..");
     if let Some(c) = card_name {
-        c.to_string()
+        // no Windows stream names (a.exe:b.pdf), reserved characters or control characters
+        c.chars()
+            .map(|ch| {
+                if ch.is_control() || "<>:\"|?*".contains(ch) || is_bidi_control(ch) {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect()
     } else if n.to_lowercase().ends_with(".cms") {
         n[..n.len() - 4].to_string()
     } else {
@@ -116,7 +125,49 @@ pub(super) fn write_for_viewing(dir: &Path, name: &str, data: &[u8]) -> Result<P
     }
     let out = sub.join(name);
     std::fs::write(&out, data).map_err(|err| fail(&out, err))?;
+    // Mark of the Web: the document came from someone else, so Office and other viewers open
+    // it in Protected View. A file system without streams (FAT, a network share) just skips it.
+    #[cfg(windows)]
+    {
+        let mut zone = out.clone().into_os_string();
+        zone.push(":Zone.Identifier");
+        let _ = std::fs::write(zone, b"[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
     Ok(out)
+}
+
+/// Unicode bidirectional controls, which can make "fdp.exe" look like "exe.pdf" in a name.
+fn is_bidi_control(ch: char) -> bool {
+    matches!(ch, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// The types "Open the document" hands to the system's viewer: documents and pictures, never
+/// anything the system would run (a program, a shortcut, a script, an installer, a page with
+/// scripts, an Office file with macros). A signed file can carry any file under any name, and
+/// a valid signature says nothing about whether it is safe to run.
+const VIEWABLE: &[&str] = &[
+    "pdf", "txt", "xml", "csv", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods",
+    "odp", "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp", "zip",
+];
+
+/// Refuses to open `f` unless its type is one of [`VIEWABLE`].
+pub(super) fn check_viewable(f: &Path) -> Result<(), String> {
+    let ext = f
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if VIEWABLE.contains(&ext.as_str()) {
+        return Ok(());
+    }
+    let kind = if ext.is_empty() {
+        tr("a file of unknown type").to_string()
+    } else {
+        format!(".{ext}")
+    };
+    Err(trf(
+        "kzsigner opens only documents and pictures, and this is {}. Save it and open it yourself only if you trust whoever sent it: a valid signature does not make a file safe to run.",
+        &[&kind],
+    ))
 }
 
 /// Opens `f` with the program the system uses for its type.

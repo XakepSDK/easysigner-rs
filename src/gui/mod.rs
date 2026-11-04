@@ -726,7 +726,10 @@ impl App {
             Msg::ToView(ViewFor::Sign(id), _) if id != self.sign.doc_request => {}
             Msg::ToView(ViewFor::Check(id), _) if id != self.check.verify_request => {}
             Msg::ToView(_, r) => {
-                if let Err(e) = r.and_then(|f| self.dialogs.view(&f)) {
+                if let Err(e) = r.and_then(|f| {
+                    check_viewable(&f)?;
+                    self.dialogs.view(&f)
+                }) {
                     self.message = Some((trf("Could not open the document: {}", &[&e]), true));
                 }
             }
@@ -787,6 +790,48 @@ mod tests {
             "a.p7s.original.txt"
         );
         assert_eq!(viewable_name("blob", &[0xff, 0x00, 0xfe]), "blob");
+        // a card can't name a Windows stream or hide the real extension
+        assert_eq!(original_name(f, Some("a.exe:b.pdf")), "a.exe_b.pdf");
+        assert_eq!(
+            original_name(f, Some("invoice\u{202e}fdp.exe")),
+            "invoice_fdp.exe"
+        );
+    }
+
+    #[test]
+    fn only_documents_are_opened() {
+        for ok in [
+            "a.pdf", "a.PDF", "b.docx", "c.xlsx", "d.txt", "e.jpg", "f.zip", "g.xml",
+        ] {
+            assert!(check_viewable(Path::new(ok)).is_ok(), "{ok}");
+        }
+        for bad in [
+            "a.exe",
+            "a.pdf.exe",
+            "a.lnk",
+            "a.hta",
+            "a.js",
+            "a.vbs",
+            "a.bat",
+            "a.cmd",
+            "a.ps1",
+            "a.scr",
+            "a.msi",
+            "a.jar",
+            "a.html",
+            "a.svg",
+            "a.docm",
+            "a.xlsm",
+            "a.desktop",
+            "a.sh",
+            "a.apk",
+            "a.url",
+            "a.pdf.",
+            "noext",
+            "a.exe_b",
+        ] {
+            assert!(check_viewable(Path::new(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]

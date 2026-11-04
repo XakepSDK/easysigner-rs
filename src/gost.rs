@@ -332,8 +332,11 @@ impl Curve {
         if e.is_zero() {
             e = BigUint::one();
         }
+        let secret = to_le(d, self.q.bits().div_ceil(8) as usize);
+        let mut attempt = 0u32;
         loop {
-            let k = random_below(q)?;
+            let k = hedged_below(q, &secret, hash, attempt)?;
+            attempt += 1;
             let Some((cx, _)) = self.affine(&self.mul(&k, &self.g())) else {
                 continue;
             };
@@ -383,6 +386,41 @@ impl Curve {
     }
 }
 
+/// A signature nonce in [1, n-1] that stays secret even if the system's random numbers are
+/// weak or repeat: HMAC-SHA-512 keyed with the private key over fresh random bytes, the hash
+/// being signed and `attempt` (the approach of RFC 6979 section 3.6). With a good random
+/// generator it is as random as [`random_below`]; with a broken one, k still differs for
+/// every message and can't be guessed without the key, so two signatures never give the key
+/// away.
+fn hedged_below(n: &BigUint, secret: &[u8], hash: &[u8], attempt: u32) -> Result<BigUint> {
+    let mut fresh = [0u8; 32];
+    crate::random(&mut fresh)?;
+    Ok(hedged_from(n, secret, hash, attempt, &fresh))
+}
+
+/// [`hedged_below`] with the random bytes given (for tests).
+fn hedged_from(n: &BigUint, secret: &[u8], hash: &[u8], attempt: u32, fresh: &[u8]) -> BigUint {
+    use hmac::{KeyInit as _, Mac as _};
+    let len = n.bits().div_ceil(8) as usize + 16;
+    let mut buf = Vec::with_capacity(len + 64);
+    let mut block = 0u32;
+    while buf.len() < len {
+        let mut m = <hmac::Hmac<sha2::Sha512>>::new_from_slice(secret)
+            .expect("HMAC takes a key of any length");
+        m.update(b"kzsigner GOST nonce");
+        m.update(fresh);
+        m.update(&(hash.len() as u32).to_be_bytes());
+        m.update(hash);
+        m.update(&attempt.to_be_bytes());
+        m.update(&block.to_be_bytes());
+        buf.extend_from_slice(&m.finalize().into_bytes());
+        block += 1;
+    }
+    buf.truncate(len);
+    // n - 1 values, shifted to 1..n-1: never zero
+    BigUint::from_bytes_be(&buf) % (n - 1u32) + 1u32
+}
+
 /// A uniformly random integer in [1, n-1].
 pub fn random_below(n: &BigUint) -> Result<BigUint> {
     let len = n.bits().div_ceil(8) as usize + 16;
@@ -430,6 +468,41 @@ mod tests {
             bad[0] ^= 1;
             assert!(!c.verify(&x, &y, &hash, &bad));
         }
+    }
+
+    #[test]
+    fn nonces_hold_up_without_good_random_numbers() {
+        let c = curve("1.2.398.3.10.1.1.2.1.1").unwrap();
+        let fixed = [0u8; 32];
+        let k = |key: &[u8], hash: &[u8], attempt| hedged_from(&c.q, key, hash, attempt, &fixed);
+        let (a, b) = ([1u8; 32], [2u8; 32]);
+        // the same random bytes (a broken generator) still give a different k for another
+        // message, another key or another attempt
+        assert_ne!(k(&a, &[7; 32], 0), k(&a, &[8; 32], 0));
+        assert_ne!(k(&a, &[7; 32], 0), k(&b, &[7; 32], 0));
+        assert_ne!(k(&a, &[7; 32], 0), k(&a, &[7; 32], 1));
+        // and the fresh bytes still count
+        assert_ne!(
+            k(&a, &[7; 32], 0),
+            hedged_from(&c.q, &a, &[7; 32], 0, &[1; 32])
+        );
+        assert_eq!(k(&a, &[7; 32], 0), k(&a, &[7; 32], 0));
+        // always in 1..q-1, including for a tiny modulus
+        let n = BigUint::from(3u32);
+        for i in 0..200 {
+            let v = hedged_from(&n, &a, &[i as u8], i, &fixed);
+            assert!(!v.is_zero() && v < n, "{v}");
+        }
+        // signing twice gives different, valid signatures
+        let d = random_below(&c.q).unwrap();
+        let (x, y) = c.public(&d).unwrap();
+        let hash = vec![5u8; 32];
+        let (s1, s2) = (
+            c.sign(&d, &hash, 32).unwrap(),
+            c.sign(&d, &hash, 32).unwrap(),
+        );
+        assert_ne!(s1, s2);
+        assert!(c.verify(&x, &y, &hash, &s1) && c.verify(&x, &y, &hash, &s2));
     }
 
     #[test]
