@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(original_name(Path::new("/x/a.p7s"), None), "a.p7s.original");
         assert_eq!(original_name(f, Some("../../etc/passwd")), "passwd");
         assert_eq!(original_name(f, Some("dir\\note.txt")), "note.txt");
-        let ok = |n: &str, d: &[u8]| viewable_name(n, d).unwrap();
+        let ok = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d)).unwrap();
         assert_eq!(ok("contract.pdf", b"%PDF-1.7"), "contract.pdf");
         assert_eq!(ok("contract", b"%PDF-1.7"), "contract.pdf");
         assert_eq!(
@@ -812,7 +812,7 @@ mod tests {
 
     #[test]
     fn the_content_decides_how_a_file_is_opened() {
-        let name = |n: &str, d: &[u8]| viewable_name(n, d);
+        let name = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d));
         // a program, whatever it is called, is never opened
         let exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff";
         for n in ["a.exe", "a.pdf", "a.docx", "a.txt", "noext"] {
@@ -867,6 +867,56 @@ mod tests {
         assert_eq!(name("a.exe", ole).unwrap(), "a.exe.doc");
     }
 
+    /// Counts the bytes read through it.
+    struct Counting<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: std::io::Read> std::io::Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: std::io::Seek> std::io::Seek for Counting<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn a_large_document_is_not_read_whole() {
+        // a Word file with a 20 MB picture inside: only its start and table of contents are read
+        let big = vec![7u8; 20 << 20];
+        let docx = zip_of(&[
+            ("[Content_Types].xml", b""),
+            ("word/media/image1.png", &big),
+            ("word/document.xml", b""),
+        ]);
+        let mut r = Counting {
+            inner: std::io::Cursor::new(&docx),
+            read: 0,
+        };
+        assert_eq!(viewable_name("a.docx", &mut r).unwrap(), "a.docx");
+        assert!(r.read < 1 << 20, "read {} bytes", r.read);
+        // a PDF (it might be a card) and other documents: just the start
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        pdf.extend(&big);
+        let mut r = Counting {
+            inner: std::io::Cursor::new(&pdf),
+            read: 0,
+        };
+        assert_eq!(viewable_name("a.pdf", &mut r).unwrap(), "a.pdf");
+        assert!(r.read <= 8192, "read {} bytes", r.read);
+        assert!(!may_be_signed(b"\x89PNG\r\n\x1a\n...."));
+        assert!(
+            may_be_signed(b"%PDF-1.7") && may_be_signed(b"\x30\x82") && may_be_signed(b"MIIB+a==")
+        );
+    }
+
     #[test]
     fn only_documents_are_opened() {
         for ok in [
@@ -884,9 +934,9 @@ mod tests {
     #[test]
     fn viewing_copies_are_private_and_replaced() {
         let dir = std::env::temp_dir().join(format!("kzsigner-view-test-{}", std::process::id()));
-        let a = write_for_viewing(&dir, "a.txt", b"one").unwrap();
+        let a = write_for_viewing(&dir, "a.txt", &b"one"[..]).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        let b = write_for_viewing(&dir, "b.txt", b"two").unwrap();
+        let b = write_for_viewing(&dir, "b.txt", &b"two"[..]).unwrap();
         assert!(!a.exists() && std::fs::read(&b).unwrap() == b"two");
         #[cfg(unix)]
         {

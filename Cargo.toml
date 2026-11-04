@@ -9,7 +9,7 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:rfd", "dep:wgpu"]
+gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer"]
 
 [dependencies]
 gost94 = "0.11"
@@ -42,6 +42,8 @@ flate2 = "1"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde_json = "1"
 roxmltree = "0.21"
+# what a document taken out of a signed file really is, before the window opens it
+infer = { version = "0.22.0", default-features = false, optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }

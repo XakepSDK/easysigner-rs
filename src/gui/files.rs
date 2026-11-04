@@ -1,5 +1,7 @@
 //! Files taken out of signed files, opened for reading or shown in the file manager.
 
+use std::io::{Read, Seek, SeekFrom};
+
 use super::*;
 
 impl App {
@@ -23,12 +25,19 @@ impl App {
         let dir = self.dialogs.view_dir();
         self.background(ctx, move |e| {
             let r = (|| -> Result<PathBuf, String> {
-                let data =
-                    std::fs::read(&doc).map_err(|err| format!("{}: {err}", doc.display()))?;
-                // what the file is, from its content (the background check may still be running)
+                let fail = |p: &Path, err: std::io::Error| format!("{}: {err}", p.display());
+                let mut f = std::fs::File::open(&doc).map_err(|err| fail(&doc, err))?;
+                let head = read_head(&mut f).map_err(|err| fail(&doc, err))?;
+                // only a file that could be a .cms or a card (a PDF) is read whole, to look
+                // inside it (the background check may still be running); any other document
+                // is checked from its start and, for a zip, its table of contents
+                if !may_be_signed(&head) {
+                    return for_viewing(&dir, &doc, f);
+                }
+                let data = std::fs::read(&doc).map_err(|err| fail(&doc, err))?;
                 let signed = e.is_signed_cms(&data) || e.card_original(&data).is_some();
                 if !signed {
-                    return for_viewing(&dir, &doc, &data);
+                    return for_viewing(&dir, &doc, f);
                 }
                 let (name, content) = match taken_out(e, &doc, &data) {
                     Ok(x) => x,
@@ -36,13 +45,15 @@ impl App {
                     Err(_) if e.is_signed_cms(&data) => {
                         let original = original
                             .ok_or_else(|| tr("Choose the signed document.").to_string())?;
-                        let data = std::fs::read(&original)
-                            .map_err(|err| format!("{}: {err}", original.display()))?;
-                        return for_viewing(&dir, &original, &data);
+                        let f =
+                            std::fs::File::open(&original).map_err(|err| fail(&original, err))?;
+                        return for_viewing(&dir, &original, f);
                     }
                     Err(err) => return Err(err),
                 };
-                write_for_viewing(&dir, &viewable_name(&name, &content)?, &content)
+                let mut content = std::io::Cursor::new(content);
+                let name = viewable_name(&name, &mut content)?;
+                write_for_viewing(&dir, &name, content)
             })();
             Msg::ToView(id, r)
         });
@@ -86,14 +97,42 @@ pub(super) fn taken_out(e: &Engine, file: &Path, data: &[u8]) -> Result<(String,
     }
 }
 
-/// What `data` really is, from its content alone: the extension to open it with. None for
-/// anything that is not a document or picture kzsigner hands to a viewer (programs, scripts,
-/// shortcuts, Office files with macros, unknown formats). The extension chosen decides which
-/// program opens the file, so text is always opened as .txt (a web page or script inside shows
-/// as text in a text editor) or as .xml when it is XML and not a web page. `claimed` (the
-/// name's own extension, lowercase) only picks between spellings and formats the content
-/// can't tell apart: jpg/jpeg, tif/tiff, and doc/xls/ppt for old Office files.
-pub(super) fn sniff(data: &[u8], claimed: &str) -> Option<&'static str> {
+/// How much of a file's start is read to tell what it is (what `infer` itself reads).
+const HEAD: u64 = 8192;
+
+/// Up to [`HEAD`] bytes from the start of `r`.
+fn read_head(r: &mut (impl Read + Seek)) -> std::io::Result<Vec<u8>> {
+    r.seek(SeekFrom::Start(0))?;
+    let mut head = Vec::new();
+    r.take(HEAD).read_to_end(&mut head)?;
+    Ok(head)
+}
+
+/// Whether a file starting with `head` could be a .cms (DER, or Base64/PEM text) or a card
+/// (a PDF): only those are read whole.
+pub(super) fn may_be_signed(head: &[u8]) -> bool {
+    head.first() == Some(&0x30)
+        || infer::is(head, "pdf")
+        || head
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"+/=-_ \t\r\n".contains(b))
+}
+
+/// What the content of `r` really is: the extension to open it with. None for anything that
+/// is not a document or picture kzsigner hands to a viewer (programs, scripts, shortcuts,
+/// Office files with macros, unknown formats). The type comes from the `infer` crate (magic
+/// numbers); zips are then checked by their table of contents, and text by every byte, both
+/// read from `r` as needed rather than loaded whole.
+///
+/// The extension chosen decides which program opens the file, so text is always opened as
+/// .txt (a web page or script inside shows as text in a text editor), or as .xml when it is
+/// XML and not a web page. `claimed` (the name's own extension, lowercase) only picks between
+/// spellings and formats the content can't tell apart: jpg/jpeg, tif/tiff, and doc/xls/ppt
+/// for old Office files.
+pub(super) fn sniff(
+    r: &mut (impl Read + Seek),
+    claimed: &str,
+) -> std::io::Result<Option<&'static str>> {
     let pick = |options: &[&'static str]| {
         options
             .iter()
@@ -101,43 +140,58 @@ pub(super) fn sniff(data: &[u8], claimed: &str) -> Option<&'static str> {
             .find(|o| *o == claimed)
             .unwrap_or(options[0])
     };
-    let head = &data[..data.len().min(1024)];
-    // PDF readers accept up to 1 KB of anything before the header
-    if head.windows(5).any(|w| w == b"%PDF-") {
-        return Some("pdf");
+    let head = read_head(r)?;
+    let Some(kind) = infer::get(&head) else {
+        return text_kind(r, &head);
+    };
+    Ok(match kind.mime_type() {
+        "application/pdf" => Some("pdf"),
+        "image/png" => Some("png"),
+        "image/jpeg" => Some(pick(&["jpg", "jpeg"])),
+        "image/gif" => Some("gif"),
+        "image/bmp" => Some("bmp"),
+        "image/tiff" => Some(pick(&["tif", "tiff"])),
+        "image/webp" => Some("webp"),
+        "text/rtf" | "application/rtf" => Some("rtf"),
+        // old Office files (OLE compound files); without reading the whole file `infer`
+        // can't tell Word from Excel. Office blocks macros in a file marked as downloaded,
+        // which every copy kzsigner makes is.
+        "application/msword" | "application/vnd.ms-excel" | "application/vnd.ms-powerpoint" => {
+            Some(pick(&["doc", "xls", "ppt"]))
+        }
+        // Office, OpenDocument or a plain zip: told apart (and macros found) by the zip's
+        // table of contents, since `infer` only sees the first entries
+        "application/zip"
+        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        | "application/vnd.oasis.opendocument.text"
+        | "application/vnd.oasis.opendocument.spreadsheet"
+        | "application/vnd.oasis.opendocument.presentation" => zip_kind(r),
+        // text `infer` names (HTML, XML, shell scripts): shown as text
+        _ if kind.matcher_type() == infer::MatcherType::Text => return text_kind(r, &head),
+        // programs, libraries, installers, other archives, fonts, media: not opened
+        _ => None,
+    })
+}
+
+/// Text, checked byte by byte without holding it all: no NUL or other control bytes below
+/// tab, in UTF-8 or a single-byte encoding (windows-1251 and the like).
+fn text_kind(r: &mut (impl Read + Seek), head: &[u8]) -> std::io::Result<Option<&'static str>> {
+    r.seek(SeekFrom::Start(0))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if buf[..n].iter().any(|b| *b < 0x09) {
+            return Ok(None);
+        }
     }
-    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some("png");
-    }
-    if data.starts_with(b"\xff\xd8\xff") {
-        return Some(pick(&["jpg", "jpeg"]));
-    }
-    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-        return Some("gif");
-    }
-    if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") {
-        return Some(pick(&["tif", "tiff"]));
-    }
-    if data.len() > 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
-        return Some("webp");
-    }
-    if data.starts_with(b"{\\rtf") {
-        return Some("rtf");
-    }
-    // old Office files (OLE compound files); Office blocks macros in a file marked as
-    // downloaded, which every copy kzsigner makes is
-    if data.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
-        return Some(pick(&["doc", "xls", "ppt"]));
-    }
-    if data.starts_with(b"PK\x03\x04") {
-        return sniff_zip(data);
-    }
-    // text: no NUL or other control bytes below tab, in UTF-8 or a single-byte encoding
-    // (windows-1251 and the like)
-    if data.iter().all(|b| *b >= 0x09) {
-        return Some(if is_plain_xml(head) { "xml" } else { "txt" });
-    }
-    None
+    Ok(Some(if is_plain_xml(head) { "xml" } else { "txt" }))
 }
 
 /// XML that is not a web page (HTML, SVG, XHTML, or XML with a stylesheet), which a browser
@@ -158,10 +212,11 @@ fn is_plain_xml(head: &[u8]) -> bool {
         .any(|m| t.contains(m))
 }
 
-/// A zip: a Word, Excel or PowerPoint file (without macros), an OpenDocument file, or a plain
-/// zip.
-fn sniff_zip(data: &[u8]) -> Option<&'static str> {
-    let z = zip::ZipArchive::new(std::io::Cursor::new(data)).ok()?;
+/// A zip, from its table of contents (read from the end of the file, not the whole file): a
+/// Word, Excel or PowerPoint file, an OpenDocument file, or a plain zip; None with macros.
+fn zip_kind(r: &mut (impl Read + Seek)) -> Option<&'static str> {
+    r.seek(SeekFrom::Start(0)).ok()?;
+    let mut z = zip::ZipArchive::new(r).ok()?;
     // a name that can't be read could hide anything: refused
     let names: Vec<String> = z
         .file_names()
@@ -169,8 +224,10 @@ fn sniff_zip(data: &[u8]) -> Option<&'static str> {
         .collect::<Result<_, _>>()
         .ok()?;
     let has = |n: &str| names.iter().any(|x| x == n);
-    // macros (Office keeps them in vbaProject.bin): never opened from here
-    if names.iter().any(|n| n.ends_with("vbaproject.bin")) {
+    // macros: Office keeps them in vbaProject.bin, OpenDocument in Basic/ or Scripts/
+    if names.iter().any(|n| {
+        n.ends_with("vbaproject.bin") || n.starts_with("basic/") || n.starts_with("scripts/")
+    }) {
         return None;
     }
     if has("[content_types].xml") {
@@ -185,9 +242,7 @@ fn sniff_zip(data: &[u8]) -> Option<&'static str> {
         };
     }
     if has("mimetype") {
-        let mut z = z;
         let mut m = String::new();
-        use std::io::Read as _;
         z.by_name("mimetype")
             .ok()?
             .take(100)
@@ -203,32 +258,38 @@ fn sniff_zip(data: &[u8]) -> Option<&'static str> {
     Some("zip")
 }
 
-/// `name` with the extension of what `data` really is ("contract.exe" holding a PDF gives
+/// `name` with the extension of what `r` really holds ("contract.exe" holding a PDF gives
 /// "contract.exe.pdf"); an error for anything that is not a document or picture.
-pub(super) fn viewable_name(name: &str, data: &[u8]) -> Result<String, String> {
+pub(super) fn viewable_name(name: &str, r: &mut (impl Read + Seek)) -> Result<String, String> {
     let ext = Path::new(name)
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    match sniff(data, &ext) {
+    match sniff(r, &ext).map_err(|e| e.to_string())? {
         Some(real) if real == ext => Ok(name.to_string()),
         Some(real) => Ok(format!("{name}.{real}")),
         None => Err(not_viewable()),
     }
 }
 
-/// The file to open for reading `path` (holding `data`): itself when its name already says
-/// what it is, otherwise a copy named for its real type.
-pub(super) fn for_viewing(dir: &Path, path: &Path, data: &[u8]) -> Result<PathBuf, String> {
+/// The file to open for reading `path` (open as `f`): itself when its name already says what
+/// it is, otherwise a copy named for its real type.
+pub(super) fn for_viewing(
+    dir: &Path,
+    path: &Path,
+    mut f: std::fs::File,
+) -> Result<PathBuf, String> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "document".into());
-    let wanted = viewable_name(&name, data)?;
+    let wanted = viewable_name(&name, &mut f)?;
     if wanted == name {
         Ok(path.to_path_buf())
     } else {
-        write_for_viewing(dir, &wanted, data)
+        f.seek(SeekFrom::Start(0))
+            .map_err(|err| format!("{}: {err}", path.display()))?;
+        write_for_viewing(dir, &wanted, f)
     }
 }
 
@@ -236,9 +297,13 @@ fn not_viewable() -> String {
     tr("kzsigner opens only documents and pictures, and this file is neither (or is an Office file with macros). Save it and open it yourself only if you trust whoever sent it: a valid signature does not make a file safe to run.").into()
 }
 
-/// Writes `data` as `name` in a fresh folder under `dir`, readable only by this user; copies
+/// Copies `data` to `name` in a fresh folder under `dir`, readable only by this user; copies
 /// made for earlier viewing are removed first.
-pub(super) fn write_for_viewing(dir: &Path, name: &str, data: &[u8]) -> Result<PathBuf, String> {
+pub(super) fn write_for_viewing(
+    dir: &Path,
+    name: &str,
+    mut data: impl Read,
+) -> Result<PathBuf, String> {
     let fail = |p: &Path, err: std::io::Error| format!("{}: {err}", p.display());
     // a viewer may still hold an old copy open (Windows): then it stays until next time
     let _ = std::fs::remove_dir_all(dir);
@@ -253,7 +318,9 @@ pub(super) fn write_for_viewing(dir: &Path, name: &str, data: &[u8]) -> Result<P
         }
     }
     let out = sub.join(name);
-    std::fs::write(&out, data).map_err(|err| fail(&out, err))?;
+    let mut file = std::fs::File::create(&out).map_err(|err| fail(&out, err))?;
+    std::io::copy(&mut data, &mut file).map_err(|err| fail(&out, err))?;
+    drop(file);
     // Mark of the Web: the document came from someone else, so Office and other viewers open
     // it in Protected View. A file system without streams (FAT, a network share) just skips it.
     #[cfg(windows)]
