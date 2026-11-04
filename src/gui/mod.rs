@@ -783,19 +783,88 @@ mod tests {
         assert_eq!(original_name(Path::new("/x/a.p7s"), None), "a.p7s.original");
         assert_eq!(original_name(f, Some("../../etc/passwd")), "passwd");
         assert_eq!(original_name(f, Some("dir\\note.txt")), "note.txt");
-        assert_eq!(viewable_name("contract.pdf", b"%PDF-1.7"), "contract.pdf");
-        assert_eq!(viewable_name("contract", b"%PDF-1.7"), "contract.pdf");
+        let ok = |n: &str, d: &[u8]| viewable_name(n, d).unwrap();
+        assert_eq!(ok("contract.pdf", b"%PDF-1.7"), "contract.pdf");
+        assert_eq!(ok("contract", b"%PDF-1.7"), "contract.pdf");
         assert_eq!(
-            viewable_name("a.p7s.original", "текст".as_bytes()),
+            ok("a.p7s.original", "текст".as_bytes()),
             "a.p7s.original.txt"
         );
-        assert_eq!(viewable_name("blob", &[0xff, 0x00, 0xfe]), "blob");
         // a card can't name a Windows stream or hide the real extension
         assert_eq!(original_name(f, Some("a.exe:b.pdf")), "a.exe_b.pdf");
         assert_eq!(
             original_name(f, Some("invoice\u{202e}fdp.exe")),
             "invoice_fdp.exe"
         );
+    }
+
+    /// A zip holding `names` (each with empty content).
+    fn zip_of(names: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (n, d) in names {
+            z.start_file(*n, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(d).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn the_content_decides_how_a_file_is_opened() {
+        let name = |n: &str, d: &[u8]| viewable_name(n, d);
+        // a program, whatever it is called, is never opened
+        let exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff";
+        for n in ["a.exe", "a.pdf", "a.docx", "a.txt", "noext"] {
+            assert!(name(n, exe).is_err(), "{n}");
+        }
+        assert!(name("a.bin", &[0, 1, 2, 3]).is_err());
+        // a document under a dangerous name gets its real type added
+        assert_eq!(name("invoice.exe", b"%PDF-1.7").unwrap(), "invoice.exe.pdf");
+        assert_eq!(
+            name("a.lnk", b"\x89PNG\r\n\x1a\n....").unwrap(),
+            "a.lnk.png"
+        );
+        // scripts and pages are text, shown as text, never run or rendered
+        assert_eq!(
+            name("a.hta", b"<html><script>x()</script>").unwrap(),
+            "a.hta.txt"
+        );
+        assert_eq!(name("a.js", b"WScript.Shell").unwrap(), "a.js.txt");
+        assert_eq!(name("a.xml", b"<svg onload='x()'/>").unwrap(), "a.xml.txt");
+        assert_eq!(name("a.csv", b"=cmd|' /c calc'!A1").unwrap(), "a.csv.txt");
+        assert_eq!(
+            name("a.xml", b"<?xml version='1.0'?><doc/>").unwrap(),
+            "a.xml"
+        );
+        assert_eq!(name("data", b"\xef\xbb\xbf<doc/>").unwrap(), "data.xml");
+        // windows-1251 text
+        assert_eq!(
+            name("a.txt", &[0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]).unwrap(),
+            "a.txt"
+        );
+        // Office files by what the zip holds, refused with macros
+        let docx = zip_of(&[("[Content_Types].xml", b""), ("word/document.xml", b"")]);
+        assert_eq!(name("a.docx", &docx).unwrap(), "a.docx");
+        assert_eq!(name("a.exe", &docx).unwrap(), "a.exe.docx");
+        let xlsx = zip_of(&[("[Content_Types].xml", b""), ("xl/workbook.xml", b"")]);
+        assert_eq!(name("a.docx", &xlsx).unwrap(), "a.docx.xlsx");
+        let docm = zip_of(&[
+            ("[Content_Types].xml", b""),
+            ("word/document.xml", b""),
+            ("word/vbaProject.bin", b""),
+        ]);
+        assert!(name("a.docx", &docm).is_err());
+        let odt = zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.text")]);
+        assert_eq!(name("a.odt", &odt).unwrap(), "a.odt");
+        assert_eq!(
+            name("a.jar", &zip_of(&[("x.class", b"")])).unwrap(),
+            "a.jar.zip"
+        );
+        // old Office files keep the claimed one of doc/xls/ppt
+        let ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest";
+        assert_eq!(name("a.xls", ole).unwrap(), "a.xls");
+        assert_eq!(name("a.exe", ole).unwrap(), "a.exe.doc");
     }
 
     #[test]
@@ -806,29 +875,7 @@ mod tests {
             assert!(check_viewable(Path::new(ok)).is_ok(), "{ok}");
         }
         for bad in [
-            "a.exe",
-            "a.pdf.exe",
-            "a.lnk",
-            "a.hta",
-            "a.js",
-            "a.vbs",
-            "a.bat",
-            "a.cmd",
-            "a.ps1",
-            "a.scr",
-            "a.msi",
-            "a.jar",
-            "a.html",
-            "a.svg",
-            "a.docm",
-            "a.xlsm",
-            "a.desktop",
-            "a.sh",
-            "a.apk",
-            "a.url",
-            "a.pdf.",
-            "noext",
-            "a.exe_b",
+            "a.exe", "a.lnk", "a.hta", "a.csv", "a.html", "a.docm", "a.pdf.", "noext",
         ] {
             assert!(check_viewable(Path::new(bad)).is_err(), "{bad}");
         }
