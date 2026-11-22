@@ -30,8 +30,10 @@ const CAS: [&[u8]; 3] = [
     include_bytes!("../../tests/fixtures/kalkan/ca_gost2004.cer"),
     include_bytes!("../../tests/fixtures/kalkan/ca_rsa.cer"),
 ];
-/// On a phone a file field is one button that opens Android's file chooser.
-const CHOOSE: &str = "Choose a file…";
+/// On a phone a file field is one button that opens Android's file chooser, named by the
+/// field's label.
+const DOC_FIELD: &str = "Document to sign";
+const KEY_FIELD: &str = "Key file (.p12), for example GOSTKNCA_… or RSA_…";
 
 fn log(s: &str) {
     for l in s.lines() {
@@ -185,10 +187,7 @@ fn sign_screen(h: &mut H, dialogs: &Scripted, doc: &Path) -> Result<(), String> 
         .click();
     h.run();
     dialogs.next(doc.to_path_buf());
-    h.get_all_by_label(CHOOSE)
-        .next()
-        .ok_or("no Choose a file… for the document")?
-        .click();
+    h.get_by_label(DOC_FIELD).click();
     settle(h)
 }
 
@@ -200,10 +199,7 @@ fn open_key_file(
     keep: Option<&str>,
 ) -> Result<(), String> {
     dialogs.next(key.to_path_buf());
-    h.get_all_by_label(CHOOSE)
-        .next()
-        .ok_or("no Choose a file… for the key")?
-        .click();
+    h.get_by_label(KEY_FIELD).click();
     settle(h)?;
     let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
     pw.focus();
@@ -244,7 +240,7 @@ fn remove_kept_key(h: &mut H) -> Result<(), String> {
     settle(h)?;
     check!(h.state().stored_keys().is_empty(), "the key is still kept");
     check!(
-        h.query_all_by_label(CHOOSE).next().is_some(),
+        h.query_by_label(KEY_FIELD).is_some(),
         "no key file field after removing"
     );
     Ok(())
