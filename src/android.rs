@@ -5,6 +5,8 @@
 //!
 //! Requests: `pick` (the chooser), `save\n<name>\n<path>` (copy a written file to where the
 //! user chooses), `share\n<path>`, `view\n<path>` (open in another app), `keyboard\n1|0`, `info` (files dir, cache dir, language),
+//! `insets` (the screen edges to keep clear, in pixels: left,top,right,bottom), `background`
+//! (back on the start screen: the app goes behind the others, as Android apps do),
 //! `poll` (the next event: `picked\n<path>`, `cancelled`, `open\n<path>`, `saved\n<name>`,
 //! `error\n<text>`, or null).
 //!
@@ -333,7 +335,11 @@ pub fn main(app: AndroidApp) {
                 Ok(store) => app = app.with_key_store(store),
                 Err(e) => eprintln!("kzsigner: key store: {e}"),
             }
-            Ok(Box::new(AndroidWindow(app, std::time::Instant::now())))
+            Ok(Box::new(AndroidWindow(
+                app,
+                std::time::Instant::now(),
+                Insets::default(),
+            )))
         }),
     );
     if let Err(e) = r {
@@ -344,7 +350,33 @@ pub fn main(app: AndroidApp) {
 /// The desktop window's screens. Chosen, saved and shared files come back from the activity
 /// while the app is in the background; it is asked for them for a few seconds after the app
 /// comes back or is touched, not all the time.
-struct AndroidWindow(App, std::time::Instant);
+struct AndroidWindow(App, std::time::Instant, Insets);
+
+/// The screen edges the window keeps clear (status bar, gesture bar, camera cutout, keyboard),
+/// in pixels; asked again every 200 ms while the window is drawn.
+#[derive(Default)]
+struct Insets {
+    px: [f32; 4],
+    asked: Option<std::time::Instant>,
+}
+
+impl Insets {
+    fn get(&mut self) -> [f32; 4] {
+        if self
+            .asked
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(200))
+        {
+            self.asked = Some(std::time::Instant::now());
+            if let Some(s) = java("insets") {
+                let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [l, t, r, b] = v[..] {
+                    self.px = [l, t, r, b];
+                }
+            }
+        }
+        self.px
+    }
+}
 
 impl eframe::App for AndroidWindow {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -352,10 +384,22 @@ impl eframe::App for AndroidWindow {
         if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
             self.1 = std::time::Instant::now();
         }
+        // Android's back button and back swipe arrive as the BrowserBack key
+        if ctx.input(|i| i.key_pressed(egui::Key::BrowserBack)) && !self.0.back() {
+            java("background");
+        }
+        let ppp = ctx.pixels_per_point();
+        let [l, t, r, b] = self.2.get().map(|v| v / ppp);
         egui::CentralPanel::default().show(ui, |ui| {
-            // clear of the status bar
-            ui.add_space(24.0);
-            self.0.ui(ui);
+            let full = ui.max_rect();
+            let inner = egui::Rect::from_min_max(
+                full.min + egui::vec2(l, t),
+                (full.max - egui::vec2(r, b)).max(full.min + egui::vec2(l, t)),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                ui.set_clip_rect(inner);
+                self.0.ui(ui);
+            });
         });
         if self.1.elapsed() < std::time::Duration::from_secs(5) || self.0.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

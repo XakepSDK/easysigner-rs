@@ -468,6 +468,19 @@ impl App {
         }
     }
 
+    /// The phone's back button: closes the open question or message, else goes back to the
+    /// start screen. False on the start screen, where the app itself goes away.
+    pub fn back(&mut self) -> bool {
+        if self.key.confirm_remove.take().is_some() || self.message.take().is_some() {
+            return true;
+        }
+        if self.screen != Screen::Start {
+            self.screen = Screen::Start;
+            return true;
+        }
+        false
+    }
+
     /// Back, the screen's title and the language menu.
     fn header(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();

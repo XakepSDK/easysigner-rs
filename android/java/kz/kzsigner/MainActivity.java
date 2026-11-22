@@ -8,7 +8,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.graphics.Insets;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
 import java.io.File;
 import java.io.FileInputStream;
@@ -116,6 +118,11 @@ public class MainActivity extends NativeActivity {
                     }
                 });
                 return null;
+            case "insets":
+                return insets();
+            case "background":
+                runOnUiThread(() -> moveTaskToBack(true));
+                return null;
             case "keyboard":
                 boolean show = r.length > 1 && r[1].equals("1");
                 runOnUiThread(() -> keyboard(show));
@@ -131,6 +138,22 @@ public class MainActivity extends NativeActivity {
      */
     public byte[] guard(String request, byte[] a, byte[] b) {
         return keyGuard.call(request, a, b);
+    }
+
+    /**
+     * The edges the app must keep clear, in pixels: "left,top,right,bottom". Android 15 and
+     * newer draw apps under the status bar, the gesture bar and the camera cutout; the bottom
+     * also covers the on-screen keyboard while it is up.
+     */
+    private String insets() {
+        View v = getWindow().getDecorView();
+        WindowInsets w = v.getRootWindowInsets();
+        if (w == null) {
+            return "0,0,0,0";
+        }
+        Insets bars = w.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+        Insets ime = w.getInsets(WindowInsets.Type.ime());
+        return bars.left + "," + bars.top + "," + bars.right + "," + Math.max(bars.bottom, ime.bottom);
     }
 
     private void keyboard(boolean show) {

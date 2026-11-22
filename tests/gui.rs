@@ -576,3 +576,17 @@ fn kept_key_signs_with_one_touch() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The phone's back button: a message first, then the screen, then nothing to go back to.
+#[test]
+fn back_button_steps_back() {
+    let mut app = App::new(kzsigner::Engine::new(vec![]), Box::new(Scripted::default()));
+    assert!(!app.back(), "nothing to go back to on the start screen");
+    app.screen = Screen::Sign;
+    app.message = Some(("hello".into(), false));
+    assert!(app.back());
+    assert!(app.message.is_none());
+    assert_eq!(app.screen, Screen::Sign);
+    assert!(app.back());
+    assert_eq!(app.screen, Screen::Start);
+}
