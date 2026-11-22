@@ -106,7 +106,7 @@ public class MainActivity extends NativeActivity {
                 }
                 android.util.Log.i(tag, "PASS");
             } catch (Exception e) {
-                android.util.Log.e(tag, "FAIL " + e);
+                android.util.Log.e(tag, "FAIL " + KeyGuard.why(e));
             }
         }).start();
     }
@@ -149,7 +149,7 @@ public class MainActivity extends NativeActivity {
                 android.util.Log.i(tag, "FP PASS reset");
             }
         } catch (Exception e) {
-            android.util.Log.e(tag, "FP FAIL " + e);
+            android.util.Log.e(tag, "FP FAIL " + KeyGuard.why(e));
         }
     }
 

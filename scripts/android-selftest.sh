@@ -88,10 +88,16 @@ unlock() {
     sleep 1
     adb shell wm dismiss-keyguard
     sleep 1
-    adb shell input swipe 500 1500 500 300
+    # swipe the lock screen up, then the PIN
+    size=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
+    w=${size%x*}
+    h=${size#*x}
+    adb shell input swipe $((w / 2)) $((h * 4 / 5)) $((w / 2)) $((h / 5))
     sleep 1
     pin
     sleep 3
+    adb shell dumpsys window | grep -qiE 'mDreamingLockscreen=true|isKeyguardShowing=true|mShowingLockscreen=true' &&
+        echo "the lock screen is still up after unlocking"
 }
 pin() { adb shell input text "$PIN"; adb shell input keyevent KEYCODE_ENTER; }
 

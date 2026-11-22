@@ -75,8 +75,17 @@ final class KeyGuard {
         } catch (KeyPermanentlyInvalidatedException | UnrecoverableKeyException e) {
             return new byte[] {RESET};
         } catch (Exception e) {
-            return failed(e.toString());
+            return failed(why(e));
         }
+    }
+
+    /** An exception with its causes, which say what the Keystore refused. */
+    static String why(Throwable e) {
+        StringBuilder b = new StringBuilder(e.toString());
+        for (Throwable c = e.getCause(); c != null && b.length() < 1000; c = c.getCause()) {
+            b.append("; ").append(c);
+        }
+        return b.toString();
     }
 
     /**
