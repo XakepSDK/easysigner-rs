@@ -16,9 +16,18 @@ TEST_APK=$2
 PIN=1111
 fail() {
     echo "FAIL: $*"
-    adb exec-out screencap -p > android-fail.png
+    shot android-fail.png
     adb logcat -d -s KZSELFTEST:* kzsigner:* RustStdoutStderr:* AndroidRuntime:* DEBUG:* | tail -120
     exit 1
+}
+# a screenshot, also printed into the log (base64 between markers): CI's artifacts are not
+# reachable from everywhere the log is
+shot() {
+    adb exec-out screencap -p > "$1"
+    echo "--- screenshot $1"
+    base64 -w 0 "$1"
+    echo
+    echo "--- end $1"
 }
 pin() { adb shell input text "$PIN"; adb shell input keyevent KEYCODE_ENTER; }
 
@@ -35,7 +44,7 @@ adb logcat -c
 adb shell am start -W -n kz.kzsigner/.MainActivity
 sleep 20
 adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped after starting"
-adb exec-out screencap -p > android-start.png
+shot android-start.png
 adb shell input keyevent KEYCODE_BACK
 sleep 3
 adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped on Back"
@@ -100,6 +109,6 @@ while :; do
     sleep 4
 done
 echo "$log" | grep -E "UI |NEED|DONE"
-adb exec-out screencap -p > android-screens.png
+shot android-screens.png
 adb shell pidof kz.kzsigner >/dev/null || fail "the test copy stopped"
 echo "screens PASS"

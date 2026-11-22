@@ -114,8 +114,51 @@ fn settle(h: &mut H) -> Result<(), String> {
     Err("background work did not finish in 2 minutes".into())
 }
 
+/// The emulator's Keystore is software only, so the app would keep keys behind their password
+/// there. The test copy says it is hardware, so the screen lock path (the one phones take)
+/// runs, still on the real Keystore and the real system prompt.
+struct EmulatorChip;
+
+impl Guard for EmulatorChip {
+    fn capabilities(&self) -> crate::vault::Capabilities {
+        let c = AndroidGuard.capabilities();
+        crate::vault::Capabilities {
+            hardware: true,
+            ..c
+        }
+    }
+    fn create(
+        &self,
+        name: &str,
+        auth: crate::vault::ChipAuth,
+    ) -> Result<crate::vault::Security, crate::vault::GuardError> {
+        AndroidGuard.create(name, auth)
+    }
+    fn seal(
+        &self,
+        name: &str,
+        plain: &[u8],
+        aad: &[u8],
+        prompt: &crate::vault::Prompt,
+    ) -> Result<Vec<u8>, crate::vault::GuardError> {
+        AndroidGuard.seal(name, plain, aad, prompt)
+    }
+    fn open(
+        &self,
+        name: &str,
+        sealed: &[u8],
+        aad: &[u8],
+        prompt: &crate::vault::Prompt,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::vault::GuardError> {
+        AndroidGuard.open(name, sealed, aad, prompt)
+    }
+    fn delete(&self, name: &str) {
+        AndroidGuard.delete(name)
+    }
+}
+
 fn window(store_file: &Path, dialogs: &Scripted) -> Result<H, String> {
-    let guard: Box<dyn Guard> = Box::new(AndroidGuard);
+    let guard: Box<dyn Guard> = Box::new(EmulatorChip);
     let store = Store::open(store_file, guard).map_err(|e| e.to_string())?;
     let cas = CAS.iter().filter_map(|d| Cert::parse_any(d).ok()).collect();
     let mut app = App::new(Engine::new(cas), Box::new(dialogs.clone())).with_key_store(store);
@@ -199,7 +242,7 @@ fn remove_kept_key(h: &mut H) -> Result<(), String> {
 fn wait_lock(want: bool) -> Result<(), String> {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(60) {
-        if AndroidGuard.capabilities().screen_lock == want {
+        if EmulatorChip.capabilities().screen_lock == want {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -220,6 +263,7 @@ fn run() -> Result<(), String> {
     let dialogs = Scripted::default();
     wait_lock(true)?;
     let caps = AndroidGuard.capabilities();
+    log(&format!("UI chip problem {:?}", AndroidGuard.problem()));
     log(&format!("UI caps {caps:?}"));
 
     // 1. first time: the key file and password; kept behind the screen lock, with one prompt
