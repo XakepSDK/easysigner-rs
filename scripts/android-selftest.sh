@@ -64,6 +64,8 @@ fingers() {
 # enrolls virtual finger $1 through Settings, touching the sensor until it is added
 enroll() {
     want=$(($(fingers || echo 0) + 1))
+    # a fresh Settings: one left from the last enrollment only comes back to the front
+    adb shell am force-stop com.android.settings
     adb shell am start -a android.settings.FINGERPRINT_ENROLL > /dev/null
     i=0
     while [ $i -lt 90 ]; do
