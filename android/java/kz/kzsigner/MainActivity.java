@@ -66,6 +66,11 @@ public class MainActivity extends NativeActivity {
             // picked up by the test copy's Rust side (src/android_selftest.rs) through "selftest"
             uiTest = true;
         }
+        String fp = intent.getStringExtra("fptest");
+        if (fp != null) {
+            new Thread(() -> fingerprintTest(fp)).start();
+            return;
+        }
         if (!intent.getBooleanExtra("selftest", false)) {
             return;
         }
@@ -104,6 +109,48 @@ public class MainActivity extends NativeActivity {
                 android.util.Log.e(tag, "FAIL " + e);
             }
         }).start();
+    }
+
+    /**
+     * CI's fingerprint check on an emulator with a fingerprint enrolled: step "seal" makes a
+     * fingerprint-only key and uses it twice (the script touches the virtual sensor); step
+     * "reset", run after the script enrolled another finger, checks that the key is gone, as
+     * it must be for a fingerprint-only key. Logs FP PASS or FP FAIL under KZSELFTEST.
+     */
+    private void fingerprintTest(String step) {
+        String tag = "KZSELFTEST";
+        String name = "kzsigner-selftest-fp";
+        File box = new File(getFilesDir(), "selftest-fp.box");
+        try {
+            byte[] plain = "fingerprint".getBytes("UTF-8");
+            byte[] aad = {4, 5, 6};
+            String p = "\nkzsigner self-test\nfingerprint\n";
+            if (step.equals("seal")) {
+                byte[] where = body(keyGuard.call("create\n" + name + "\n2", null, null));
+                android.util.Log.i(tag, "FP create security " + where[0]);
+                byte[] sealed = body(keyGuard.call("seal\n" + name + p, plain, aad));
+                android.util.Log.i(tag, "FP seal ok");
+                byte[] back = body(keyGuard.call("open\n" + name + p, sealed, aad));
+                if (!java.util.Arrays.equals(back, plain)) {
+                    throw new Exception("open gave other bytes");
+                }
+                try (FileOutputStream out = new FileOutputStream(box)) {
+                    out.write(sealed);
+                }
+                android.util.Log.i(tag, "FP PASS seal");
+            } else {
+                byte[] sealed = java.nio.file.Files.readAllBytes(box.toPath());
+                byte[] r = keyGuard.call("open\n" + name + p, sealed, aad);
+                if (r[0] != 2) {
+                    throw new Exception("after a new fingerprint the key still answers: " + r[0]);
+                }
+                keyGuard.call("delete\n" + name, null, null);
+                box.delete();
+                android.util.Log.i(tag, "FP PASS reset");
+            }
+        } catch (Exception e) {
+            android.util.Log.e(tag, "FP FAIL " + e);
+        }
     }
 
     private static boolean emulator() {
