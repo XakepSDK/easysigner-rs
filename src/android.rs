@@ -28,6 +28,9 @@ use zeroize::Zeroizing;
 
 pub use winit::platform::android::activity::AndroidApp;
 
+#[cfg(feature = "selftest")]
+mod selftest;
+
 /// The activity (a global reference owned by android-activity, valid while the app runs).
 /// ndk_context only has the Application, which is not where `call` is.
 static ACTIVITY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -328,6 +331,8 @@ pub fn main(app: AndroidApp) {
         std::sync::atomic::Ordering::Release,
     );
     info();
+    #[cfg(feature = "selftest")]
+    selftest::start();
     let options = eframe::NativeOptions {
         android_app: Some(app),
         ..Default::default()
@@ -404,17 +409,7 @@ impl eframe::App for AndroidWindow {
         }
         let ppp = ctx.pixels_per_point();
         let [l, t, r, b] = self.2.get().map(|v| v / ppp);
-        egui::CentralPanel::default().show(ui, |ui| {
-            let full = ui.max_rect();
-            let inner = egui::Rect::from_min_max(
-                full.min + egui::vec2(l, t),
-                (full.max - egui::vec2(r, b)).max(full.min + egui::vec2(l, t)),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                ui.set_clip_rect(inner);
-                self.0.ui(ui);
-            });
-        });
+        egui::CentralPanel::default().show(ui, |ui| self.0.ui_inset(ui, [l, t, r, b]));
         if self.1.elapsed() < std::time::Duration::from_secs(5) || self.0.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }

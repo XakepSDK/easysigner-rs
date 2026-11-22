@@ -7,6 +7,10 @@
 # Needs: the NDK (r27), build-tools 35.0.0, platforms;android-35 and a JDK (javac).
 # The libraries go through scripts/cargo.sh, so two builds of a commit give the same APK.
 #
+# KZSIGNER_SELFTEST=1 builds the emulator test copy instead: x86_64 only, with the in-app test
+# of the real screens (src/android_selftest.rs), signed with the development key, written to
+# target/apk-selftest/kzsigner-selftest.apk. CI runs it with scripts/android-selftest.sh.
+#
 # Signing: with KZSIGNER_KEYSTORE (+ KZSIGNER_KEYSTORE_PASS, KZSIGNER_KEY_ALIAS) when set,
 # else with android/dev.keystore, a development key whose password is in this file. A phone
 # keeps an app only while updates come with the same key: a dev build has to be uninstalled
@@ -22,6 +26,18 @@ V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
 # zip stores local times: the same on every machine only in one time zone
 export TZ=UTC
+TARGETS="aarch64-linux-android x86_64-linux-android"
+FEATURES=
+W=target/apk
+OUT=dist/kzsigner-$V-android.apk
+if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
+    TARGETS=x86_64-linux-android
+    FEATURES="--features selftest"
+    W=target/apk-selftest
+    OUT=$W/kzsigner-selftest.apk
+    unset KZSIGNER_KEYSTORE
+    V=$V-selftest
+fi
 # a release must not be signed with the development key, whose password is public
 case "$V" in
 *-*) ;;
@@ -32,15 +48,15 @@ case "$V" in
 esac
 
 # the Rust library, for each phone architecture
-for t in aarch64-linux-android x86_64-linux-android; do
+for t in $TARGETS; do
     T=$(echo "$t" | tr 'a-z-' 'A-Z_')
     export "CARGO_TARGET_${T}_LINKER=$TC/${t}30-clang"
-    sh scripts/cargo.sh build --release --locked --target "$t" -p kzsigner-android
+    # shellcheck disable=SC2086
+    sh scripts/cargo.sh build --release --locked --target "$t" -p kzsigner-android $FEATURES
 done
 
-W=target/apk
 rm -rf "$W"
-mkdir -p "$W/classes" "$W/dex" "$W/res" "$W/lib/arm64-v8a" "$W/lib/x86_64" dist
+mkdir -p "$W/classes" "$W/dex" "$W/res" "$W/lib" dist
 
 # the Java side: compiled, then turned into Android's classes.dex
 javac --release 8 -nowarn -encoding UTF-8 -classpath "$JAR" \
@@ -53,16 +69,24 @@ sed "s/android:versionName=\"[^\"]*\"/android:versionName=\"$V\"/" android/Andro
 "$BT/aapt2" link -o "$W/base.apk" -I "$JAR" --manifest "$W/AndroidManifest.xml" "$W/res.zip"
 
 # code and libraries; fixed file times so the archive does not depend on when it was built
-cp target/aarch64-linux-android/release/libkzsigner_android.so "$W/lib/arm64-v8a/"
-cp target/x86_64-linux-android/release/libkzsigner_android.so "$W/lib/x86_64/"
+LIBS=
+for t in $TARGETS; do
+    case $t in
+    aarch64-*) abi=arm64-v8a ;;
+    x86_64-*) abi=x86_64 ;;
+    esac
+    mkdir -p "$W/lib/$abi"
+    cp "target/$t/release/libkzsigner_android.so" "$W/lib/$abi/"
+    LIBS="$LIBS lib/$abi/libkzsigner_android.so"
+done
 cp "$W/dex/classes.dex" "$W/"
 find "$W/lib" "$W/classes.dex" -exec touch -d "@$SOURCE_DATE_EPOCH" {} +
+# shellcheck disable=SC2086
 (cd "$W" && zip -q -X -D -9 base.apk classes.dex &&
-    zip -q -X -D -0 base.apk lib/arm64-v8a/libkzsigner_android.so lib/x86_64/libkzsigner_android.so)
+    zip -q -X -D -0 base.apk $LIBS)
 # native libraries stay uncompressed and 16 KB aligned (loaded straight from the APK)
 "$BT/zipalign" -f -P 16 4 "$W/base.apk" "$W/aligned.apk"
 
-OUT=dist/kzsigner-$V-android.apk
 if [ -n "${KZSIGNER_KEYSTORE:-}" ]; then
     "$BT/apksigner" sign --ks "$KZSIGNER_KEYSTORE" --ks-pass env:KZSIGNER_KEYSTORE_PASS \
         --ks-key-alias "${KZSIGNER_KEY_ALIAS:-kzsigner}" --out "$OUT" "$W/aligned.apk"

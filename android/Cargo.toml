@@ -13,3 +13,7 @@ path = "src/lib.rs"
 
 [target.'cfg(target_os = "android")'.dependencies]
 kzsigner = { path = "..", default-features = false, features = ["gui"] }
+
+[features]
+# the emulator test copy (scripts/apk.sh, KZSIGNER_SELFTEST=1)
+selftest = ["kzsigner/selftest"]

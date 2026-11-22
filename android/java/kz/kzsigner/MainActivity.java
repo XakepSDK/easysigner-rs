@@ -37,6 +37,8 @@ public class MainActivity extends NativeActivity {
     private volatile String pickFor;
     /** The security chip, for the key store. */
     private KeyGuard keyGuard;
+    /** CI asked the test copy to run its test of the screens (emulators only). */
+    private volatile boolean uiTest;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -57,11 +59,14 @@ public class MainActivity extends NativeActivity {
      * so no other app can show prompts on a phone through it.
      */
     private void selfTest(Intent intent) {
-        if (intent == null || !intent.getBooleanExtra("selftest", false)) {
+        if (intent == null || !emulator()) {
             return;
         }
-        if (!"ranchu".equals(android.os.Build.HARDWARE)
-                && !"goldfish".equals(android.os.Build.HARDWARE)) {
+        if (intent.getBooleanExtra("uitest", false)) {
+            // picked up by the test copy's Rust side (src/android_selftest.rs) through "selftest"
+            uiTest = true;
+        }
+        if (!intent.getBooleanExtra("selftest", false)) {
             return;
         }
         new Thread(() -> {
@@ -99,6 +104,11 @@ public class MainActivity extends NativeActivity {
                 android.util.Log.e(tag, "FAIL " + e);
             }
         }).start();
+    }
+
+    private static boolean emulator() {
+        return "ranchu".equals(android.os.Build.HARDWARE)
+                || "goldfish".equals(android.os.Build.HARDWARE);
     }
 
     /** A KeyGuard answer's data, or an exception saying how it went wrong. */
@@ -181,6 +191,16 @@ public class MainActivity extends NativeActivity {
                         event("noviewer");
                     }
                 });
+                return null;
+            case "selftest":
+                // once: "ui" when CI asked for the test of the screens
+                if (uiTest) {
+                    uiTest = false;
+                    return "ui";
+                }
+                return null;
+            case "log":
+                android.util.Log.i("KZSELFTEST", r.length > 1 ? r[1] : "");
                 return null;
             case "insets":
                 return insets();

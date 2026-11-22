@@ -212,25 +212,8 @@ jobs:
             exit 1
           }
           cmp dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk
-      - name: Disk space for the emulator (the builds above leave little)
-        run: |
-          rm -rf "$RUNNER_TEMP/again"
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/node_modules /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL
-          df -h /
-      - name: KVM for the emulator
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: On an Android 15 emulator, the app starts, Back works and the security chip code passes its self-test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          disable-animations: true
-          disk-size: 2048M
-          script: sh scripts/android-selftest.sh
+      - name: The emulator test copy (x86_64, with the test of the real screens)
+        run: KZSIGNER_SELFTEST=1 sh scripts/apk.sh
       - name: The second build must have matched (checked above)
         if: steps.again.outcome != 'success'
         run: exit 1
@@ -241,14 +224,50 @@ jobs:
           name: kzsigner-android
           path: dist/
       - uses: actions/upload-artifact@v4
+        with:
+          name: android-selftest
+          path: target/apk-selftest/kzsigner-selftest.apk
+  # the APK on emulators: the oldest Android the app supports, the one it targets, the newest
+  android-emulator:
+    needs: android
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [30, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kzsigner-android
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-selftest
+          path: selftest
+      - name: KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Starts, Back works, the security chip code and the real screens pass their tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          disk-size: 2048M
+          script: sh scripts/android-selftest.sh dist/kzsigner-*-android.apk selftest/kzsigner-selftest.apk
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-screenshot
+          name: android-screenshots-${{ matrix.api }}
           path: android-*.png
           if-no-files-found: ignore
   release:
     if: github.ref == 'refs/heads/main' && !contains(needs.build.outputs.version, '-')
-    needs: [build, android]
+    needs: [build, android, android-emulator]
     runs-on: ubuntu-latest
     permissions:
       contents: write

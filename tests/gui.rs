@@ -590,3 +590,48 @@ fn back_button_steps_back() {
     assert!(app.back());
     assert_eq!(app.screen, Screen::Start);
 }
+
+/// On a phone the window keeps clear of the status bar, the camera cutout and the gesture bar:
+/// Back, the title and the language menu sit below the top inset, the Sign button above the
+/// bottom one, whatever their sizes.
+#[test]
+fn phone_layout_keeps_clear_of_system_bars() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    kzsigner::i18n::set(kzsigner::i18n::Lang::En);
+    for insets in [
+        [0.0, 24.0, 0.0, 16.0],
+        [0.0, 52.0, 0.0, 48.0],
+        [40.0, 30.0, 40.0, 0.0],
+    ] {
+        let [l, t, r, b] = insets;
+        let (w, h) = (412.0, 900.0);
+        let mut app = App::new(kzsigner::Engine::new(vec![]), Box::new(Scripted::default()));
+        app.screen = Screen::Sign;
+        let mut harness = Harness::builder()
+            .with_size([w, h])
+            .build_ui_state(move |ui, app: &mut App| app.ui_inset(ui, insets), app);
+        harness.run();
+        let inside = |what: &str, rect: egui::Rect| {
+            assert!(
+                rect.top() >= t && rect.left() >= l && rect.right() <= w - r,
+                "{what} at {rect:?} is under a system bar {insets:?}"
+            );
+        };
+        inside("Back", harness.get_by_label("Back").rect());
+        inside(
+            "the title",
+            harness
+                .get_all_by_label("Sign a document")
+                .next()
+                .unwrap()
+                .rect(),
+        );
+        inside("the language menu", harness.get_by_value("English").rect());
+        let sign = harness.get_by_label("Sign").rect();
+        // the Sign button is reached by scrolling, never left under the gesture bar
+        assert!(
+            sign.bottom() <= h - b || sign.top() >= h - b,
+            "Sign at {sign:?} is under the gesture bar {insets:?}"
+        );
+    }
+}

@@ -471,6 +471,19 @@ impl App {
         }
     }
 
+    /// [`App::ui`] kept clear of the screen's edges: `insets` is left, top, right, bottom in
+    /// points (a phone's status bar, gesture bar, camera cutout and keyboard).
+    pub fn ui_inset(&mut self, ui: &mut egui::Ui, insets: [f32; 4]) {
+        let [l, t, r, b] = insets.map(|v| v.max(0.0));
+        let full = ui.max_rect();
+        let min = full.min + egui::vec2(l, t);
+        let inner = egui::Rect::from_min_max(min, (full.max - egui::vec2(r, b)).max(min));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+            ui.set_clip_rect(inner);
+            self.ui(ui);
+        });
+    }
+
     /// The phone's back button: closes the open question or message, else goes back to the
     /// start screen. False on the start screen, where the app itself goes away.
     pub fn back(&mut self) -> bool {
