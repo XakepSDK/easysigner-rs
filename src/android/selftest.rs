@@ -30,7 +30,8 @@ const CAS: [&[u8]; 3] = [
     include_bytes!("../../tests/fixtures/kalkan/ca_gost2004.cer"),
     include_bytes!("../../tests/fixtures/kalkan/ca_rsa.cer"),
 ];
-const KEY_FIELD: &str = "Key file (.p12), for example GOSTKNCA_… or RSA_…";
+/// On a phone a file field is one button that opens Android's file chooser.
+const CHOOSE: &str = "Choose a file…";
 
 fn log(s: &str) {
     for l in s.lines() {
@@ -40,6 +41,12 @@ fn log(s: &str) {
 
 /// Waits for the test copy to be asked for its test (`--ez uitest true`), and runs it.
 pub fn start() {
+    // release builds abort on a panic: say why first, for the CI script
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |p| {
+        log(&format!("UI FAIL panic: {p}"));
+        default(p);
+    }));
     std::thread::spawn(|| {
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -164,7 +171,7 @@ fn window(store_file: &Path, dialogs: &Scripted) -> Result<H, String> {
     let mut app = App::new(Engine::new(cas), Box::new(dialogs.clone())).with_key_store(store);
     (app.sign.timestamp, app.ocsp) = (false, false);
     let mut h = Harness::builder()
-        .with_size([412.0, 900.0])
+        .with_size([412.0, 2400.0])
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
     h.run();
     Ok(h)
@@ -178,20 +185,25 @@ fn sign_screen(h: &mut H, dialogs: &Scripted, doc: &Path) -> Result<(), String> 
         .click();
     h.run();
     dialogs.next(doc.to_path_buf());
-    h.get_all_by_label("Browse…")
+    h.get_all_by_label(CHOOSE)
         .next()
-        .ok_or("no Browse…")?
+        .ok_or("no Choose a file… for the document")?
         .click();
     settle(h)
 }
 
 /// Opens the key file with its password; the store keeps it, asking `keep` of the script.
-fn open_key_file(h: &mut H, key: &Path, keep: Option<&str>) -> Result<(), String> {
-    let f = h.get_by_label(KEY_FIELD);
-    f.focus();
-    f.type_text(&key.display().to_string());
-    h.run();
-    h.key_press(egui::Key::Enter);
+fn open_key_file(
+    h: &mut H,
+    dialogs: &Scripted,
+    key: &Path,
+    keep: Option<&str>,
+) -> Result<(), String> {
+    dialogs.next(key.to_path_buf());
+    h.get_all_by_label(CHOOSE)
+        .next()
+        .ok_or("no Choose a file… for the key")?
+        .click();
     settle(h)?;
     let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
     pw.focus();
@@ -232,7 +244,7 @@ fn remove_kept_key(h: &mut H) -> Result<(), String> {
     settle(h)?;
     check!(h.state().stored_keys().is_empty(), "the key is still kept");
     check!(
-        h.query_by_label(KEY_FIELD).is_some(),
+        h.query_all_by_label(CHOOSE).next().is_some(),
         "no key file field after removing"
     );
     Ok(())
@@ -270,7 +282,7 @@ fn run() -> Result<(), String> {
     log("UI step keep");
     let mut h = window(&store_file, &dialogs)?;
     sign_screen(&mut h, &dialogs, &doc)?;
-    open_key_file(&mut h, &key, Some("pin"))?;
+    open_key_file(&mut h, &dialogs, &key, Some("pin"))?;
     check!(
         h.query_by_label_contains("Kept on this phone. Next time, sign with your fingerprint")
             .is_some(),
@@ -332,7 +344,7 @@ fn run() -> Result<(), String> {
     let _ = std::fs::remove_file(&store_file);
     let mut h = window(&store_file, &dialogs)?;
     sign_screen(&mut h, &dialogs, &doc)?;
-    open_key_file(&mut h, &key, None)?;
+    open_key_file(&mut h, &dialogs, &key, None)?;
     check!(
         h.query_by_label_contains("Next time only the password is needed")
             .is_some(),
