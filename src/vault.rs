@@ -197,6 +197,10 @@ pub trait Guard: Send + Sync {
     ) -> std::result::Result<Zeroizing<Vec<u8>>, GuardError>;
     /// Removes key `name`; nothing happens if there is none.
     fn delete(&self, name: &str);
+    /// Why keys can't live in hardware here, when the device says it can't (for the owner).
+    fn problem(&self) -> Option<String> {
+        None
+    }
 }
 
 impl<G: Guard + ?Sized> Guard for Box<G> {
@@ -226,6 +230,9 @@ impl<G: Guard + ?Sized> Guard for Box<G> {
     }
     fn delete(&self, name: &str) {
         (**self).delete(name)
+    }
+    fn problem(&self) -> Option<String> {
+        (**self).problem()
     }
 }
 
@@ -750,6 +757,11 @@ impl<G: Guard> Store<G> {
 
     /// The level a new key gets without asking: one touch where the device can, otherwise
     /// the password.
+    /// Why the device's security chip can't be used, when it can't.
+    pub fn chip_problem(&self) -> Option<String> {
+        self.guard.problem()
+    }
+
     pub fn default_level(&self) -> Level {
         let c = self.guard.capabilities();
         if c.screen_lock && c.hardware {

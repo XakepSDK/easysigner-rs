@@ -12,7 +12,6 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyInfo;
 import android.security.keystore.KeyPermanentlyInvalidatedException;
 import android.security.keystore.KeyProperties;
-import android.security.keystore.StrongBoxUnavailableException;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.UnrecoverableKeyException;
@@ -47,6 +46,8 @@ final class KeyGuard {
     private final Activity activity;
     /** Whether keys can live in hardware; asked once. */
     private Boolean hardware;
+    /** Why they can't, when they can't. */
+    private String hardwareProblem = "";
 
     KeyGuard(Activity activity) {
         this.activity = activity;
@@ -78,7 +79,10 @@ final class KeyGuard {
         }
     }
 
-    /** "screen lock,fingerprint,hardware" as 1 or 0 each. */
+    /**
+     * "screen lock,fingerprint,hardware" as 1 or 0 each; then, on a second line, why keys
+     * can't live in hardware when they can't.
+     */
     private String caps() {
         KeyguardManager km = activity.getSystemService(KeyguardManager.class);
         boolean lock = km != null && km.isDeviceSecure();
@@ -86,7 +90,9 @@ final class KeyGuard {
         boolean bio = bm != null
                 && bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                         == BiometricManager.BIOMETRIC_SUCCESS;
-        return (lock ? "1" : "0") + "," + (bio ? "1" : "0") + "," + (hardware() ? "1" : "0");
+        boolean hw = hardware();
+        return (lock ? "1" : "0") + "," + (bio ? "1" : "0") + "," + (hw ? "1" : "0")
+                + "\n" + (hw ? "" : hardwareProblem);
     }
 
     /** Whether a key made here lands in hardware: tried once with a throwaway key. */
@@ -94,10 +100,15 @@ final class KeyGuard {
         if (hardware == null) {
             String probe = "kzsigner-probe";
             try {
-                hardware = create(probe, AUTH_NONE) != 3;
+                byte where = create(probe, AUTH_NONE);
+                hardware = where != 3;
+                if (!hardware) {
+                    hardwareProblem = "keys are kept in software only";
+                }
                 keyStore().deleteEntry(probe);
             } catch (Exception e) {
                 hardware = false;
+                hardwareProblem = e.toString();
             }
         }
         return hardware;
@@ -107,9 +118,17 @@ final class KeyGuard {
     private byte create(String name, int auth) throws Exception {
         boolean strongBox =
                 activity.getPackageManager().hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE);
-        try {
-            generate(name, auth, strongBox);
-        } catch (StrongBoxUnavailableException e) {
+        boolean made = false;
+        if (strongBox) {
+            try {
+                generate(name, auth, true);
+                made = true;
+            } catch (Exception e) {
+                // StrongBox missing, busy, or without this kind of key: the protected area
+                keyStore().deleteEntry(name);
+            }
+        }
+        if (!made) {
             generate(name, auth, false);
         }
         SecretKey key = (SecretKey) keyStore().getKey(name, null);

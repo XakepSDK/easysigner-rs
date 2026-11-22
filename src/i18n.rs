@@ -590,6 +590,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("valid until {}", "{} дейін жарамды", "действует до {}"),
     ("Use a key kept on this phone", "Осы телефондағы кілтті пайдалану", "Использовать ключ с этого телефона"),
     ("Type the key's password.", "Кілттің құпиясөзін теріңіз.", "Введите пароль ключа."),
+    ("The phone's security chip could not be used: {}", "Телефонның қауіпсіздік чипін пайдалану мүмкін болмады: {}", "Не удалось использовать чип безопасности телефона: {}"),
 ];
 
 /// `s` as it would have been typed with the same keys on a Latin (US) keyboard, when it was

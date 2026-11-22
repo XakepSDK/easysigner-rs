@@ -164,7 +164,8 @@ enum Msg {
         String,
         Result<(Box<Key>, Option<String>), String>,
     ),
-    KeySaved(Result<(String, Vec<StoredKey>), crate::vault::VaultError>),
+    /// (the key's id, the kept keys, why the security chip could not be used)
+    KeySaved(Result<(String, Vec<StoredKey>, Option<String>), crate::vault::VaultError>),
     KeysChanged(Result<Vec<StoredKey>, String>),
     Signed(PathBuf, SignAs, Result<SignResult, String>),
     Verified(u64, Result<VerifyReport, String>),
@@ -332,6 +333,8 @@ pub struct KeyForm {
     pub stored: Option<String>,
     /// With stored keys: a key file is used instead.
     pub use_file: bool,
+    /// Why the phone's security chip could not be used for the kept key, when it could not.
+    chip_problem: Option<String>,
     /// Keeping the opened key file on the phone.
     saving: Saving,
     /// The stored key to remove once confirmed.

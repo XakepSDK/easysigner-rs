@@ -272,16 +272,20 @@ impl App {
                     .map_err(|err| VaultError::Failed(format!("{}: {err}", file.display())))?;
                 let mut s = store.lock().unwrap_or_else(|p| p.into_inner());
                 let id = s.add(&data, &password, Some(&alias), &prompt)?;
-                Ok((id, snapshot(e, &s)))
+                Ok((id, snapshot(e, &s), s.chip_problem()))
             })();
             Msg::KeySaved(r)
         });
     }
 
     /// A key was saved into the store (or not).
-    pub(super) fn key_saved(&mut self, r: Result<(String, Vec<StoredKey>), VaultError>) {
+    pub(super) fn key_saved(
+        &mut self,
+        r: Result<(String, Vec<StoredKey>, Option<String>), VaultError>,
+    ) {
         match r {
-            Ok((id, keys)) => {
+            Ok((id, keys, problem)) => {
+                self.key.chip_problem = problem;
                 let level = keys
                     .iter()
                     .find(|k| k.id == id)
@@ -330,6 +334,12 @@ impl App {
                     )
                 };
                 ui.add(egui::Label::new(Tone::Good.text(ui, t)).wrap());
+                if level.needs_password()
+                    && let Some(p) = &self.key.chip_problem
+                {
+                    let t = trf("The phone's security chip could not be used: {}", &[p]);
+                    ui.add(egui::Label::new(Tone::Muted.text(ui, t).size(12.5)).wrap());
+                }
             }
             Saving::NotSaved | Saving::Failed(_) => {
                 if let Saving::Failed(e) = &self.key.saving {

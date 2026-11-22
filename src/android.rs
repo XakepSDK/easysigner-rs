@@ -127,7 +127,7 @@ impl Guard for AndroidGuard {
     fn capabilities(&self) -> Capabilities {
         let caps = guard_call("caps", &[], &[]).unwrap_or_default();
         let s = String::from_utf8_lossy(&caps);
-        let mut f = s.split(',').map(|v| v == "1");
+        let mut f = s.lines().next().unwrap_or("").split(',').map(|v| v == "1");
         Capabilities {
             screen_lock: f.next().unwrap_or(false),
             biometric: f.next().unwrap_or(false),
@@ -173,6 +173,20 @@ impl Guard for AndroidGuard {
 
     fn delete(&self, name: &str) {
         let _ = guard_call(&format!("delete\n{}", one_line(name)), &[], &[]);
+    }
+
+    fn problem(&self) -> Option<String> {
+        let caps = match guard_call("caps", &[], &[]) {
+            Ok(c) => c,
+            Err(GuardError::Failed(e)) => return Some(e),
+            Err(_) => return None,
+        };
+        let s = String::from_utf8_lossy(&caps);
+        s.lines()
+            .nth(1)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from)
     }
 }
 
