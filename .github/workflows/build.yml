@@ -222,21 +222,15 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: The app starts on an emulator and keeps running
+      - name: On an Android 15 emulator, the app starts, Back works and the security chip code passes its self-test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 35
           arch: x86_64
           target: google_apis
           disable-animations: true
           disk-size: 2048M
-          script: |
-            adb install -r dist/*.apk
-            adb shell am start -W -n kz.kzsigner/.MainActivity
-            sleep 20
-            adb exec-out screencap -p > android-start.png
-            adb logcat -d -s kzsigner:* RustStdoutStderr:* AndroidRuntime:* DEBUG:* libc:* | tail -60
-            adb shell pidof kz.kzsigner
+          script: sh scripts/android-selftest.sh
       - name: The second build must have matched (checked above)
         if: steps.again.outcome != 'success'
         run: exit 1
@@ -250,7 +244,7 @@ jobs:
         if: always()
         with:
           name: android-screenshot
-          path: android-start.png
+          path: android-*.png
           if-no-files-found: ignore
   release:
     if: github.ref == 'refs/heads/main' && !contains(needs.build.outputs.version, '-')

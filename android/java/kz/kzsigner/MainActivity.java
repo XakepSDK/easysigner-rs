@@ -47,6 +47,69 @@ public class MainActivity extends NativeActivity {
         super.onCreate(state);
         keyGuard = new KeyGuard(this);
         received(getIntent());
+        selfTest(getIntent());
+    }
+
+    /**
+     * CI's check of the security chip code on an emulator (scripts/android-selftest.sh):
+     * started with {@code --ez selftest true}, it runs KeyGuard as the key store does and logs
+     * each step under the tag KZSELFTEST, ending in PASS or FAIL. It runs on emulators only,
+     * so no other app can show prompts on a phone through it.
+     */
+    private void selfTest(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra("selftest", false)) {
+            return;
+        }
+        if (!"ranchu".equals(android.os.Build.HARDWARE)
+                && !"goldfish".equals(android.os.Build.HARDWARE)) {
+            return;
+        }
+        new Thread(() -> {
+            String tag = "KZSELFTEST";
+            try {
+                byte[] plain = "kzsigner self-test".getBytes("UTF-8");
+                byte[] aad = {1, 2, 3};
+                String caps = new String(body(keyGuard.call("caps", null, null)), "UTF-8");
+                android.util.Log.i(tag, "caps " + caps.replace('\n', ' '));
+                if (!caps.startsWith("1,")) {
+                    throw new Exception("no screen lock seen");
+                }
+                android.util.Log.i(tag, "insets " + insets());
+                for (int auth = 0; auth <= 1; auth++) {
+                    String name = "kzsigner-selftest-" + auth;
+                    byte[] where = body(keyGuard.call("create\n" + name + "\n" + auth, null, null));
+                    android.util.Log.i(tag, "create auth " + auth + " security " + where[0]);
+                    String p = "\nkzsigner self-test\nauth " + auth + "\n";
+                    byte[] sealed = body(keyGuard.call("seal\n" + name + p, plain, aad));
+                    android.util.Log.i(tag, "seal auth " + auth + " ok");
+                    byte[] back = body(keyGuard.call("open\n" + name + p, sealed, aad));
+                    if (!java.util.Arrays.equals(back, plain)) {
+                        throw new Exception("open gave other bytes");
+                    }
+                    android.util.Log.i(tag, "open auth " + auth + " ok");
+                    byte[] bad = sealed.clone();
+                    bad[bad.length - 1] ^= 1;
+                    if (keyGuard.call("open\n" + name + p, bad, aad)[0] == 0) {
+                        throw new Exception("a changed box opened");
+                    }
+                    keyGuard.call("delete\n" + name, null, null);
+                }
+                android.util.Log.i(tag, "PASS");
+            } catch (Exception e) {
+                android.util.Log.e(tag, "FAIL " + e);
+            }
+        }).start();
+    }
+
+    /** A KeyGuard answer's data, or an exception saying how it went wrong. */
+    private static byte[] body(byte[] answer) throws Exception {
+        if (answer.length > 0 && answer[0] == 0) {
+            return java.util.Arrays.copyOfRange(answer, 1, answer.length);
+        }
+        String why = answer.length > 1
+                ? new String(answer, 1, answer.length - 1, "UTF-8")
+                : "status " + (answer.length > 0 ? answer[0] : -1);
+        throw new Exception(why);
     }
 
     private static void delete(File f) {
@@ -63,6 +126,7 @@ public class MainActivity extends NativeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         received(intent);
+        selfTest(intent);
     }
 
     /** Called by Rust on its own thread. */
