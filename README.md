@@ -181,6 +181,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   SHA-1 MAC), and PBES2/AES files. The file structure is read here because Kalkan writes BER,
   which the RustCrypto `pkcs12`/`der` crates do not read; the key derivation and ciphers are
   theirs.
+* `vault.rs`: keys kept by kzsigner itself (the phone app, later the desktop): the private key
+  re-encrypted with AES-256-GCM by a key in the device's security chip, optionally under an
+  Argon2id password too; levels from "one touch" to "fingerprint and password", a hidden list,
+  growing waits after wrong passwords. The chip side is the `Guard` trait; the tests use a stand-in.
 * `der.rs`: a small ASN.1 reader (DER and BER) and DER writer that keeps raw encodings, so signed
   parts are hashed and copied byte for byte (NCALayer and Kalkan files are not always strict DER,
   which the `der` crate requires).

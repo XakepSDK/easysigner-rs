@@ -24,6 +24,7 @@ pub mod sign;
 pub mod time;
 pub mod trust;
 pub mod tsp;
+pub mod vault;
 pub mod verify;
 pub mod xml;
 

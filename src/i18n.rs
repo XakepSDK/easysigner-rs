@@ -556,6 +556,15 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("An XML document's signatures are inside it: extend the signed XML file alone, without --data.", "XML құжатының қолтаңбалары оның ішінде: қол қойылған XML файлын --data параметрінсіз жалғыз ұзартыңыз.", "Подписи XML-документа находятся внутри него: продлевайте подписанный XML-файл отдельно, без --data."),
     ("Another signature in this XML document covers this one, so adding validation data to it would break that signature.", "Осы XML құжатындағы басқа қолтаңба бұл қолтаңбаны қамтиды, сондықтан оған тексеру деректерін қосу ол қолтаңбаны бұзады.", "Другая подпись в этом XML-документе покрывает эту, поэтому добавление в неё данных для проверки испортит ту подпись."),
     ("Your signature can be added inside this XML document.", "Сіздің қолтаңбаңызды осы XML құжатының ішіне қосуға болады.", "Вашу подпись можно добавить внутрь этого XML-документа."),
+    ("Cancelled.", "Бас тартылды.", "Отменено."),
+    ("This device reset the key's protection (screen lock removed or a new fingerprint added). Add the .p12 file again.", "Бұл құрылғы кілттің қорғанысын тастады (экран құлпы алынып тасталды немесе жаңа саусақ ізі қосылды). .p12 файлын қайта қосыңыз.", "Устройство сбросило защиту ключа (снята блокировка экрана или добавлен новый отпечаток). Добавьте файл .p12 заново."),
+    ("Wrong password.", "Құпиясөз қате.", "Неверный пароль."),
+    ("Too many wrong passwords. Try again in {} s.", "Қате құпиясөз тым көп енгізілді. {} с кейін қайталаңыз.", "Слишком много неверных паролей. Повторите через {} с."),
+    ("kzsigner is locked.", "kzsigner құлыпталған.", "kzsigner заблокирован."),
+    ("This key is already added.", "Бұл кілт бұрын қосылған.", "Этот ключ уже добавлен."),
+    ("This protection is not available on this device.", "Бұл қорғаныс осы құрылғыда қолжетімсіз.", "Эта защита недоступна на этом устройстве."),
+    ("The key is no longer in kzsigner.", "Бұл кілт kzsigner-де енді жоқ.", "Этого ключа больше нет в kzsigner."),
+    ("The key store is damaged", "Кілттер қоймасы бүлінген", "Хранилище ключей повреждено"),
 ];
 
 #[cfg(test)]

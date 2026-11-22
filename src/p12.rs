@@ -39,10 +39,36 @@ struct Bag<T> {
 }
 
 pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Key> {
+    open_with_pkcs8(p12, password, wanted_alias).map(|(k, _)| k)
+}
+
+/// [`open`], also returning the key's PKCS#8 PrivateKeyInfo (for the key store, which keeps
+/// it re-encrypted). Every decrypted key in the file is wiped before returning.
+pub fn open_with_pkcs8(
+    p12: &[u8],
+    password: &str,
+    wanted_alias: Option<&str>,
+) -> Result<(Key, zeroize::Zeroizing<Vec<u8>>)> {
+    use zeroize::Zeroize;
     let auth_safe = read_pfx(p12, password)?;
     let mut keys: Vec<Bag<Vec<u8>>> = Vec::new();
     let mut certs: Vec<Bag<Cert>> = Vec::new();
-    read_contents(&auth_safe, password, &mut keys, &mut certs).map_err(|e| {
+    let read = read_contents(&auth_safe, password, &mut keys, &mut certs);
+    let r = pick(read, &keys, certs, wanted_alias);
+    for k in &mut keys {
+        k.value.zeroize();
+    }
+    r
+}
+
+/// The wanted key and its certificates out of a read file (see [`open_with_pkcs8`]).
+fn pick(
+    read: Result<()>,
+    keys: &[Bag<Vec<u8>>],
+    certs: Vec<Bag<Cert>>,
+    wanted_alias: Option<&str>,
+) -> Result<(Key, zeroize::Zeroizing<Vec<u8>>)> {
+    read.map_err(|e| {
         Error::new(trf(
             "Could not open the key file. The password is probably wrong, or the file uses an unsupported format ({})",
             &[&e.0],
@@ -84,13 +110,15 @@ pub fn open(p12: &[u8], password: &str, wanted_alias: Option<&str>) -> Result<Ke
     let leaf =
         leaf.ok_or_else(|| Error::new(tr("The key file has no certificate for its key.")))?;
     let other_aliases = aliases.iter().filter(|a| **a != alias).cloned().collect();
-    Ok(Key {
+    let pkcs8 = zeroize::Zeroizing::new(kb.value.clone());
+    let key = Key {
         alias,
         private_key,
         chain: chain(&leaf, &pool),
         cert: leaf,
         other_aliases,
-    })
+    };
+    Ok((key, pkcs8))
 }
 
 /// Checks the MAC and returns the AuthenticatedSafe bytes.

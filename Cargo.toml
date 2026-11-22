@@ -44,6 +44,9 @@ serde_json = "1"
 roxmltree = "0.21"
 # what a document taken out of a signed file really is, before the window opens it
 infer = { version = "0.22.0", default-features = false, optional = true }
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+zeroize = "1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = { version = "0.17", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
