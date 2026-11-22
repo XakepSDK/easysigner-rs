@@ -7,6 +7,8 @@
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="35" />
     <!-- NCA's time stamps and revocation check -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- the fingerprint/PIN prompt for keys kept in the app (granted at install) -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:label="kzsigner"

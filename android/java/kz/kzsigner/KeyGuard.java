@@ -86,10 +86,15 @@ final class KeyGuard {
     private String caps() {
         KeyguardManager km = activity.getSystemService(KeyguardManager.class);
         boolean lock = km != null && km.isDeviceSecure();
-        BiometricManager bm = activity.getSystemService(BiometricManager.class);
-        boolean bio = bm != null
-                && bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-                        == BiometricManager.BIOMETRIC_SUCCESS;
+        boolean bio = false;
+        try {
+            BiometricManager bm = activity.getSystemService(BiometricManager.class);
+            bio = bm != null
+                    && bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                            == BiometricManager.BIOMETRIC_SUCCESS;
+        } catch (RuntimeException e) {
+            // no fingerprint then; the screen lock PIN still works
+        }
         boolean hw = hardware();
         return (lock ? "1" : "0") + "," + (bio ? "1" : "0") + "," + (hw ? "1" : "0")
                 + "\n" + (hw ? "" : hardwareProblem);
