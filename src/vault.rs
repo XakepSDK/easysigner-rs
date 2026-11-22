@@ -199,6 +199,119 @@ pub trait Guard: Send + Sync {
     fn delete(&self, name: &str);
 }
 
+impl<G: Guard + ?Sized> Guard for Box<G> {
+    fn capabilities(&self) -> Capabilities {
+        (**self).capabilities()
+    }
+    fn create(&self, name: &str, auth: ChipAuth) -> std::result::Result<Security, GuardError> {
+        (**self).create(name, auth)
+    }
+    fn seal(
+        &self,
+        name: &str,
+        plain: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> std::result::Result<Vec<u8>, GuardError> {
+        (**self).seal(name, plain, aad, prompt)
+    }
+    fn open(
+        &self,
+        name: &str,
+        sealed: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> std::result::Result<Zeroizing<Vec<u8>>, GuardError> {
+        (**self).open(name, sealed, aad, prompt)
+    }
+    fn delete(&self, name: &str) {
+        (**self).delete(name)
+    }
+}
+
+/// A guard in ordinary memory, for tests of the window: no chip, no real prompts. It records
+/// each prompt it would have shown, and answers them as [`SoftwareGuard::cancel`] says.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct SoftwareGuard {
+    keys: std::sync::Mutex<std::collections::HashMap<String, ([u8; 32], ChipAuth)>>,
+    pub prompts: std::sync::Mutex<Vec<Prompt>>,
+    pub cancel: std::sync::atomic::AtomicBool,
+    /// Pretend the device has no screen lock.
+    pub no_screen_lock: bool,
+}
+
+impl SoftwareGuard {
+    fn ask(&self, auth: ChipAuth, prompt: &Prompt) -> std::result::Result<(), GuardError> {
+        if auth == ChipAuth::None {
+            return Ok(());
+        }
+        self.prompts.lock().unwrap().push(prompt.clone());
+        if self.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(GuardError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn key(&self, name: &str) -> std::result::Result<([u8; 32], ChipAuth), GuardError> {
+        self.keys
+            .lock()
+            .unwrap()
+            .get(name)
+            .copied()
+            .ok_or(GuardError::KeyReset)
+    }
+
+    /// How many chip keys exist.
+    pub fn key_count(&self) -> usize {
+        self.keys.lock().unwrap().len()
+    }
+}
+
+impl Guard for SoftwareGuard {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            screen_lock: !self.no_screen_lock,
+            biometric: !self.no_screen_lock,
+            hardware: true,
+        }
+    }
+
+    fn create(&self, name: &str, auth: ChipAuth) -> std::result::Result<Security, GuardError> {
+        let k = random::<32>().map_err(|e| GuardError::Failed(e.to_string()))?;
+        self.keys.lock().unwrap().insert(name.into(), (k, auth));
+        Ok(Security::Software)
+    }
+
+    fn seal(
+        &self,
+        name: &str,
+        plain: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> std::result::Result<Vec<u8>, GuardError> {
+        let (k, auth) = self.key(name)?;
+        self.ask(auth, prompt)?;
+        encrypt(&k, plain, aad).map_err(|e| GuardError::Failed(e.to_string()))
+    }
+
+    fn open(
+        &self,
+        name: &str,
+        sealed: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> std::result::Result<Zeroizing<Vec<u8>>, GuardError> {
+        let (k, auth) = self.key(name)?;
+        self.ask(auth, prompt)?;
+        decrypt(&k, sealed, aad).ok_or_else(|| GuardError::Failed("bad tag".into()))
+    }
+
+    fn delete(&self, name: &str) {
+        self.keys.lock().unwrap().remove(name);
+    }
+}
+
 /// Why a key store operation failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VaultError {

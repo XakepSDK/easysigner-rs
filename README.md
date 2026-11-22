@@ -86,7 +86,10 @@ Run `kzsigner` with no arguments (or double-click it) for the window. It starts 
 technical details are folded away. A file opened with it (`kzsigner document.pdf`) or dropped on
 the window goes where it belongs: a document to signing, a signed file (.cms, signed PDF, card)
 to checking, a key file to the key field. On a phone, or in a narrow window, the screens
-switch to one column with full-width buttons. Safe by default: signing adds NCA's official time and
+switch to one column with full-width buttons. On the phone (Android 11 or newer), a key file
+opened once is kept in the app, locked by the phone's security chip: the next signature needs
+only a fingerprint or the screen lock, not the file and its password (with no screen lock set,
+the key's password is asked instead). Safe by default: signing adds NCA's official time and
 checking asks NCA whether the keys were revoked (both need internet; they can be turned off
 under More options). When NCA cannot be reached, a check says the signatures are valid but not
 checked for revocation, rather than failing. The window is in Kazakh, Russian or English: it starts in the
@@ -204,7 +207,7 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   text, so the rest of the document stays byte for byte as it was.
 * `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
   (plain http, which NCA's servers use; a proxy from the environment is honoured).
-* `gui/`: the window (`mod.rs` the app, its state grouped as `SignForm`, `KeyForm` and `CheckForm`, and the routing between screens; `sign.rs`, `check.rs` the two screens; `report.rs` a check's result; `files.rs`, `widgets.rs`) ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
+* `gui/`: the window (`mod.rs` the app, its state grouped as `SignForm`, `KeyForm` and `CheckForm`, and the routing between screens; `sign.rs`, `check.rs` the two screens; `keys.rs` keys kept on the phone; `report.rs` a check's result; `files.rs`, `widgets.rs`) ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). `icons.rs` draws the icons from SVG path data as vector shapes, so
 they stay sharp at any scale with no image files. Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh

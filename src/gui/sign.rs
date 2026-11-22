@@ -46,6 +46,10 @@ impl App {
         ui.add_space(10.0);
         card(ui, |ui| {
             step(ui, tr("2 · Your signature key"));
+            if self.stored_mode() {
+                self.stored_key_card(ui);
+                return;
+            }
             let kf = self.key.file.clone();
             if let Some(f) = self.file_field(
                 ui,
@@ -55,33 +59,7 @@ impl App {
             ) {
                 self.set_key_file(&ctx, f);
             }
-            ui.horizontal(|ui| {
-                let l = ui.label(tr("Password"));
-                let r = ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.key.password)
-                            .password(!self.key.show_password)
-                            .desired_width(if self.narrow {
-                                // room for the eye button beside it
-                                let eye = ui.spacing().interact_size.y.max(22.0) + 8.0;
-                                (ui.available_width() - eye - ui.spacing().item_spacing.x).max(80.0)
-                            } else {
-                                240.0
-                            }),
-                    )
-                    .labelled_by(l.id);
-                if r.lost_focus() {
-                    self.open_key(&ctx);
-                }
-                let hint = if self.key.show_password {
-                    tr("Hide password")
-                } else {
-                    tr("Show password")
-                };
-                if eye_button(ui, self.key.show_password, hint).clicked() {
-                    self.key.show_password = !self.key.show_password;
-                }
-            });
+            self.password_field(ui, Some(&ctx));
             if self.key.aliases.len() > 1 {
                 let before = self.key.alias.clone();
                 ui.horizontal(|ui| {
@@ -101,8 +79,13 @@ impl App {
             if self.key.opened.is_some() {
                 let tone = if self.key.ok { Tone::Good } else { Tone::Warn };
                 banner(ui, tone, |ui| self.key.note.show(ui));
+                self.saving_note(ui, &ctx);
             } else {
                 self.key.note.show(ui);
+            }
+            if !self.stored.is_empty() && ui.link(tr("Use a key kept on this phone")).clicked() {
+                self.key.use_file = false;
+                self.key.password.clear();
             }
         });
         ui.add_space(10.0);
@@ -111,9 +94,13 @@ impl App {
             self.how_to_save(ui);
         });
         ui.add_space(12.0);
+        let key_ready = match self.selected_stored() {
+            Some(k) => !k.level.needs_password() || !self.key.password.is_empty(),
+            None => self.key.opened.is_some() && !self.stored_mode(),
+        };
         let can_sign = !self.sign.signing
             && self.sign.doc.is_some()
-            && self.key.opened.is_some()
+            && key_ready
             && (!self.sign.doc_is_detached_cms || self.sign.sign_original.is_some());
         let label = if self.sign.signing {
             tr("Signing…")
@@ -122,7 +109,9 @@ impl App {
         };
         let hint = if self.sign.doc.is_none() {
             tr("Choose the document first.")
-        } else if self.key.opened.is_none() {
+        } else if !key_ready && self.stored_mode() {
+            tr("Type the key's password.")
+        } else if !key_ready {
             tr("Choose your key file and type its password.")
         } else if self.sign.doc_is_detached_cms && self.sign.sign_original.is_none() {
             tr("Choose the signed document.")
@@ -501,6 +490,8 @@ impl App {
 
     pub fn set_key_file(&mut self, ctx: &egui::Context, file: PathBuf) {
         self.key.file = Some(file);
+        self.key.use_file = true;
+        self.key.saving = Saving::None;
         self.key.aliases.clear();
         self.key.alias = None;
         self.open_key(ctx);
@@ -531,10 +522,16 @@ impl App {
         self.background(ctx, move |e| {
             let r = std::fs::read(&f)
                 .map_err(|err| format!("{}: {err}", f.display()))
-                .and_then(|d| {
-                    e.open_key(&d, &pw, wanted.as_deref())
-                        .map(Box::new)
-                        .map_err(|x| x.0)
+                .and_then(|d| match e.open_key(&d, &pw, wanted.as_deref()) {
+                    Ok(k) => Ok((Box::new(k), None)),
+                    // typed on a Russian or Kazakh keyboard? NCA passwords are Latin only
+                    Err(x) => i18n::latin_keyboard(&pw)
+                        .and_then(|alt| {
+                            e.open_key(&d, &alt, wanted.as_deref())
+                                .ok()
+                                .map(|k| (Box::new(k), Some(alt)))
+                        })
+                        .ok_or(x.0),
                 });
             Msg::KeyOpened(id, f, pw_hash, r)
         });
@@ -580,12 +577,26 @@ impl App {
     }
 
     pub fn sign(&mut self, ctx: &egui::Context) {
-        let (Some(doc), Some(key)) = (self.sign.doc.clone(), self.key.opened.clone()) else {
+        let Some(doc) = self.sign.doc.clone() else {
             return;
+        };
+        // a stored key is unlocked only now, after the fingerprint or PIN prompt
+        let stored = self.stored_signing();
+        if let Some(k) = self.selected_stored() {
+            self.key.holder = Some(k.name.clone());
+        }
+        let opened = self.key.opened.clone().filter(|_| stored.is_none());
+        if stored.is_none() && opened.is_none() {
+            return;
+        }
+        let key_alg = match (&opened, self.selected_stored()) {
+            (Some(k), _) => k.cert.key_alg(),
+            (None, Some(s)) => s.key_alg.clone(),
+            _ => return,
         };
         let det = self.sign.detached && !self.sign.doc_is_cms;
         // NCA's timestamp server no longer serves GOST 34.310-2004 keys
-        let gost2004 = key.cert.key_alg() == crate::gost::KEY_GOST2004;
+        let gost2004 = key_alg == crate::gost::KEY_GOST2004;
         let skip_tsa = self.sign.timestamp && gost2004 && self.sign.sign_as != SignAs::Card;
         let tsa = (self.sign.timestamp && !skip_tsa).then(|| DEFAULT_TSA_URL.to_string());
         // the long-term data comes from NCA's OCSP server: not when online checks are off
@@ -610,6 +621,11 @@ impl App {
             let r = (|| -> Result<SignResult, String> {
                 let input =
                     std::fs::read(&doc).map_err(|err| format!("{}: {err}", doc.display()))?;
+                let key = match (opened, stored) {
+                    (Some(k), _) => k,
+                    (None, Some(s)) => Arc::new(s.unlock(&input)?),
+                    (None, None) => return Err(String::new()),
+                };
                 let o = orig
                     .map(|p| std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display())))
                     .transpose()?;
@@ -810,16 +826,23 @@ impl App {
     /// A key was opened (or could not be).
     pub(super) fn key_opened(
         &mut self,
+        ctx: &egui::Context,
         id: u64,
         f: &Path,
         pw_hash: &str,
-        r: Result<Box<Key>, String>,
+        r: Result<(Box<Key>, Option<String>), String>,
     ) {
         if id != self.key.request {
             return;
         }
         match r {
-            Ok(k) => {
+            Ok((k, latin)) => {
+                let mut pw_hash = pw_hash.to_string();
+                if let Some(p) = latin {
+                    pw_hash = crate::hex(&crate::gost::sha256(p.as_bytes()));
+                    self.key.password = p;
+                }
+                let pw_hash = pw_hash.as_str();
                 if !k.other_aliases.is_empty() && self.key.aliases.is_empty() {
                     self.key.aliases = std::iter::once(k.alias.clone())
                         .chain(k.other_aliases.iter().cloned())
@@ -835,6 +858,8 @@ impl App {
                 self.key.alias = Some(k.alias.clone());
                 self.key.opened_for = Some(key_request(f, Some(&k.alias), pw_hash));
                 self.key.opened = Some(Arc::new(*k));
+                self.key.saving = Saving::None;
+                self.save_opened_key(ctx);
             }
             Err(e) => {
                 self.key.holder = None;
@@ -848,6 +873,8 @@ impl App {
         self.sign.signing = false;
         match r {
             Ok(r) => self.save_signed(doc, sign_as, r),
+            // the fingerprint/PIN prompt was closed
+            Err(e) if e.is_empty() => {}
             Err(e) => {
                 // NCA's time (on by default) and a card's key check need the internet
                 let offline_hint = e.contains(DEFAULT_TSA_URL) || e.contains(DEFAULT_OCSP_URL);

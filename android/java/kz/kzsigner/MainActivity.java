@@ -21,7 +21,8 @@ import java.util.Locale;
 /**
  * kzsigner's window is Rust (NativeActivity runs it). This class only does what needs Java:
  * Android's file chooser and "Save as", sharing, files opened from other apps, and the
- * on-screen keyboard. Rust calls {@link #call(String)}; see src/android.rs for the requests.
+ * on-screen keyboard, and the security chip for stored keys. Rust calls {@link #call(String)}
+ * and {@link #guard(String, byte[], byte[])}; see src/android.rs for the requests.
  */
 public class MainActivity extends NativeActivity {
     private static final int PICK = 1;
@@ -32,6 +33,8 @@ public class MainActivity extends NativeActivity {
     private volatile String saveFrom;
     /** The file field the chooser was opened for. */
     private volatile String pickFor;
+    /** The security chip, for the key store. */
+    private KeyGuard keyGuard;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -40,6 +43,7 @@ public class MainActivity extends NativeActivity {
         delete(new File(getCacheDir(), "out"));
         delete(new File(getCacheDir(), "view"));
         super.onCreate(state);
+        keyGuard = new KeyGuard(this);
         received(getIntent());
     }
 
@@ -119,6 +123,14 @@ public class MainActivity extends NativeActivity {
             default:
                 return null;
         }
+    }
+
+    /**
+     * Called by Rust on its own thread, never the UI thread: the key store's requests to the
+     * security chip (see KeyGuard). A prompt blocks until the owner answers it.
+     */
+    public byte[] guard(String request, byte[] a, byte[] b) {
+        return keyGuard.call(request, a, b);
     }
 
     private void keyboard(boolean show) {

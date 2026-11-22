@@ -40,7 +40,8 @@ It is distributed as an APK on the GitHub release page, next to the Windows and 
 
 - **Targets:** `aarch64-linux-android` (almost all phones), and `x86_64-linux-android` for the
   emulator in CI. Optionally `armv7-linux-androideabi` for old phones.
-- **minSdk:** 26 (Android 8), which covers about 97% of phones in use.
+- **minSdk:** 30 (Android 11), target 35. Raised from 26 for the key store: per-use
+  fingerprint-or-PIN keys (`setUserAuthenticationParameters`) need Android 11.
 - **Tooling:** `cargo-ndk` builds the .so. A small Gradle-free packaging step (`aapt2` + `zipalign`
   + `apksigner` from the SDK build-tools) makes the APK. The NDK, build-tools and Rust versions
   are pinned so the build stays reproducible, like `scripts/cargo.sh` does on the desktop.

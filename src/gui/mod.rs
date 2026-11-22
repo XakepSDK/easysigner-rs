@@ -16,11 +16,14 @@ use crate::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
 
 mod check;
 mod files;
+mod keys;
 mod report;
 mod sign;
 mod widgets;
 
 use files::*;
+use keys::Saving;
+pub use keys::{KeyStore, StoredKey};
 pub use report::report;
 use widgets::*;
 
@@ -153,7 +156,16 @@ pub enum Screen {
 
 enum Msg {
     DocChecked(u64, Result<(DocKind, Option<VerifyReport>), String>),
-    KeyOpened(u64, PathBuf, String, Result<Box<Key>, String>),
+    /// (request, file, password hash, the key and the password it opened with when that is
+    /// the typed one on a Latin keyboard)
+    KeyOpened(
+        u64,
+        PathBuf,
+        String,
+        Result<(Box<Key>, Option<String>), String>,
+    ),
+    KeySaved(Result<(String, Vec<StoredKey>), crate::vault::VaultError>),
+    KeysChanged(Result<Vec<StoredKey>, String>),
     Signed(PathBuf, SignAs, Result<SignResult, String>),
     Verified(u64, Result<VerifyReport, String>),
     /// (file, (suggested name for the saved document, bytes))
@@ -240,6 +252,9 @@ pub struct App {
     pub key: KeyForm,
     /// The Check screen.
     pub check: CheckForm,
+    /// Keys kept on this device (the phone app), and the window's copy of their list.
+    keys: Option<KeyStore>,
+    stored: Vec<StoredKey>,
 }
 
 /// The Sign screen's state: the document, the options, and the last signing.
@@ -313,6 +328,14 @@ pub struct KeyForm {
     request: u64,
     /// What the opened key was opened with (see [`key_request`]).
     opened_for: Option<String>,
+    /// The stored key chosen for signing (its id).
+    pub stored: Option<String>,
+    /// With stored keys: a key file is used instead.
+    pub use_file: bool,
+    /// Keeping the opened key file on the phone.
+    saving: Saving,
+    /// The stored key to remove once confirmed.
+    confirm_remove: Option<String>,
 }
 
 /// The Check screen's state.
@@ -348,6 +371,8 @@ impl App {
             sign: SignForm::default(),
             key: KeyForm::default(),
             check: CheckForm::default(),
+            keys: None,
+            stored: Vec::new(),
         }
     }
 
@@ -423,6 +448,7 @@ impl App {
                     Screen::Check => self.check_screen(ui),
                 }
             });
+        self.remove_dialog(&ctx);
         if let Some((text, error)) = self.message.clone() {
             egui::Modal::new(egui::Id::unique("message")).show(&ctx, |ui| {
                 ui.set_max_width(460.0);
@@ -715,7 +741,9 @@ impl App {
     fn handle(&mut self, ctx: &egui::Context, m: Msg) {
         match m {
             Msg::DocChecked(id, r) => self.doc_checked(ctx, id, r),
-            Msg::KeyOpened(id, f, pw_hash, r) => self.key_opened(id, &f, &pw_hash, r),
+            Msg::KeyOpened(id, f, pw_hash, r) => self.key_opened(ctx, id, &f, &pw_hash, r),
+            Msg::KeySaved(r) => self.key_saved(r),
+            Msg::KeysChanged(r) => self.keys_changed(r),
             Msg::Signed(doc, sign_as, r) => self.signed(&doc, sign_as, r),
             Msg::Verified(id, r) => self.verified(id, r),
             Msg::Extracted(file, r) => match r {

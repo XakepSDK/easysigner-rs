@@ -565,7 +565,53 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("This protection is not available on this device.", "Бұл қорғаныс осы құрылғыда қолжетімсіз.", "Эта защита недоступна на этом устройстве."),
     ("The key is no longer in kzsigner.", "Бұл кілт kzsigner-де енді жоқ.", "Этого ключа больше нет в kzsigner."),
     ("The key store is damaged", "Кілттер қоймасы бүлінген", "Хранилище ключей повреждено"),
+    // keys kept on the phone
+    ("Use another key file…", "Басқа кілт файлын пайдалану…", "Использовать другой файл ключа…"),
+    ("Remove this key from the phone…", "Бұл кілтті телефоннан өшіру…", "Удалить этот ключ с телефона…"),
+    ("The keyboard is not typing Latin letters. NCA key passwords use only Latin letters.", "Пернетақта латын әріптерін термейді. ҰКО кілттерінің құпиясөзінде тек латын әріптері болады.", "Клавиатура печатает не латинские буквы. Пароли ключей НУЦ содержат только латинские буквы."),
+    ("You can add it again later from its .p12 file and password.", "Оны кейін .p12 файлы мен құпиясөзі арқылы қайта қосуға болады.", "Его можно добавить снова из файла .p12 и пароля."),
+    ("Remove", "Өшіру", "Удалить"),
+    ("Cancel", "Бас тарту", "Отмена"),
+    ("Keep your key on this phone", "Кілтті осы телефонда сақтау", "Сохранить ключ на этом телефоне"),
+    ("Next time, a fingerprint or the screen lock is enough to sign.", "Келесі жолы қол қою үшін саусақ ізі немесе экран құлпы жеткілікті.", "В следующий раз для подписи достаточно отпечатка пальца или блокировки экрана."),
+    ("Keeping the key on this phone…", "Кілт осы телефонда сақталуда…", "Ключ сохраняется на этом телефоне…"),
+    ("✔ Kept on this phone. Next time only the password is needed. Set a screen lock on the phone to sign with your fingerprint instead.", "✔ Осы телефонда сақталды. Келесі жолы тек құпиясөз керек. Саусақ ізімен қол қою үшін телефонға экран құлпын орнатыңыз.", "✔ Сохранён на этом телефоне. В следующий раз нужен только пароль. Чтобы подписывать отпечатком пальца, установите блокировку экрана."),
+    ("✔ Kept on this phone. Next time, sign with your fingerprint or screen lock.", "✔ Осы телефонда сақталды. Келесі жолы саусақ ізімен немесе экран құлпымен қол қойыңыз.", "✔ Сохранён на этом телефоне. В следующий раз подписывайте отпечатком пальца или блокировкой экрана."),
+    ("Not kept on this phone.", "Осы телефонда сақталмады.", "Не сохранён на этом телефоне."),
+    ("Keep it on this phone", "Осы телефонда сақтау", "Сохранить на этом телефоне"),
+    ("Expired: get a new key on egov.kz.", "Мерзімі өтті: egov.kz сайтынан жаңа кілт алыңыз.", "Срок истёк: получите новый ключ на egov.kz."),
+    ("Signs with the password", "Құпиясөзбен қол қояды", "Подписывает по паролю"),
+    ("Protected by the phone's security chip", "Телефонның қауіпсіздік чипімен қорғалған", "Защищён чипом безопасности телефона"),
+    ("Protected by the phone's secure processor area", "Телефон процессорының қорғалған аймағымен қорғалған", "Защищён защищённой областью процессора телефона"),
+    ("Protected by the phone's screen lock", "Телефонның экран құлпымен қорғалған", "Защищён блокировкой экрана телефона"),
+    ("Remove the key of {} from this phone?", "{} кілтін осы телефоннан өшіру керек пе?", "Удалить ключ {} с этого телефона?"),
+    ("Sign {}", "{} құжатына қол қою", "Подписать {}"),
+    ("Document code {} {}", "Құжат коды {} {}", "Код документа {} {}"),
+    ("valid until {}", "{} дейін жарамды", "действует до {}"),
+    ("Use a key kept on this phone", "Осы телефондағы кілтті пайдалану", "Использовать ключ с этого телефона"),
+    ("Type the key's password.", "Кілттің құпиясөзін теріңіз.", "Введите пароль ключа."),
 ];
+
+/// `s` as it would have been typed with the same keys on a Latin (US) keyboard, when it was
+/// typed on the Russian ЙЦУКЕН layout (whose letter keys the Kazakh layout shares); None when
+/// it has no such letters, or letters only the Kazakh layout has.
+pub fn latin_keyboard(s: &str) -> Option<String> {
+    const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ";
+    const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>~";
+    let mut changed = false;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if let Some(i) = RU.chars().position(|r| r == c) {
+            out.push(EN.chars().nth(i)?);
+            changed = true;
+        } else if c.is_alphabetic() && !c.is_ascii() {
+            return None;
+        } else {
+            out.push(c);
+        }
+    }
+    changed.then_some(out)
+}
 
 #[cfg(test)]
 mod tests {
@@ -651,6 +697,15 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn latin_keyboard_layout() {
+        assert_eq!(latin_keyboard("Йцукен12!").as_deref(), Some("Qwerty12!"));
+        assert_eq!(latin_keyboard("ЗфыыЦщкв1").as_deref(), Some("PassWord1"));
+        assert_eq!(latin_keyboard("хъжэбюё").as_deref(), Some("[];',.`"));
+        assert_eq!(latin_keyboard("Qwerty12"), None);
+        assert_eq!(latin_keyboard("Қwerty"), None);
     }
 
     #[test]

@@ -34,7 +34,7 @@ esac
 # the Rust library, for each phone architecture
 for t in aarch64-linux-android x86_64-linux-android; do
     T=$(echo "$t" | tr 'a-z-' 'A-Z_')
-    export "CARGO_TARGET_${T}_LINKER=$TC/${t}26-clang"
+    export "CARGO_TARGET_${T}_LINKER=$TC/${t}30-clang"
     sh scripts/cargo.sh build --release --locked --target "$t" -p kzsigner-android
 done
 
@@ -45,7 +45,7 @@ mkdir -p "$W/classes" "$W/dex" "$W/res" "$W/lib/arm64-v8a" "$W/lib/x86_64" dist
 # the Java side: compiled, then turned into Android's classes.dex
 javac --release 8 -nowarn -encoding UTF-8 -classpath "$JAR" \
     -d "$W/classes" android/java/kz/kzsigner/*.java
-"$BT/d8" --release --min-api 26 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class' | sort)
+"$BT/d8" --release --min-api 30 --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class' | sort)
 
 # resources and manifest
 "$BT/aapt2" compile --no-crunch --dir android/res -o "$W/res.zip"

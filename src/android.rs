@@ -7,6 +7,9 @@
 //! user chooses), `share\n<path>`, `view\n<path>` (open in another app), `keyboard\n1|0`, `info` (files dir, cache dir, language),
 //! `poll` (the next event: `picked\n<path>`, `cancelled`, `open\n<path>`, `saved\n<name>`,
 //! `error\n<text>`, or null).
+//!
+//! Keys kept in the app go through a second method, `byte[] guard(String request, byte[] a,
+//! byte[] b)`, to the phone's security chip (`KeyGuard.java`); see [`AndroidGuard`].
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -18,6 +21,8 @@ use jni::{jni_sig, jni_str};
 use crate::Engine;
 use crate::gui::{App, DialogEvent, Dialogs};
 use crate::i18n::{self, tr, trf};
+use crate::vault::{Capabilities, ChipAuth, Guard, GuardError, Prompt, Security, Store};
+use zeroize::Zeroizing;
 
 pub use winit::platform::android::activity::AndroidApp;
 
@@ -62,8 +67,116 @@ fn java(request: &str) -> Option<String> {
     }
 }
 
+/// A request to the security chip (`guard` in MainActivity, run by KeyGuard.java) with two
+/// byte arrays. The answer's first byte says how it went: 0 done (the rest is the data),
+/// 1 cancelled, 2 the key is gone for good, 3 failed (the rest is the reason).
+fn guard_call(request: &str, a: &[u8], b: &[u8]) -> Result<Zeroizing<Vec<u8>>, GuardError> {
+    let ctx = ndk_context::android_context();
+    let activity = ACTIVITY.load(std::sync::atomic::Ordering::Acquire);
+    if activity == 0 {
+        return Err(GuardError::Failed("no activity".into()));
+    }
+    // Safety: as in `java`
+    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) };
+    let r = vm.attach_current_thread(|env| -> jni::errors::Result<Vec<u8>> {
+        let activity = unsafe { JObject::from_raw(env, activity as jni::sys::jobject) };
+        let req = env.new_string(request)?;
+        let a = env.byte_array_from_slice(a)?;
+        let b = env.byte_array_from_slice(b)?;
+        let out = env
+            .call_method(
+                &activity,
+                jni_str!("guard"),
+                jni_sig!("(Ljava/lang/String;[B[B)[B"),
+                &[JValue::Object(&req), JValue::Object(&a), JValue::Object(&b)],
+            )?
+            .l()?;
+        if out.is_null() {
+            return Ok(vec![3]);
+        }
+        let out = env.cast_local::<jni::objects::JByteArray>(out)?;
+        env.convert_byte_array(&out)
+    });
+    let out = Zeroizing::new(r.map_err(|e| GuardError::Failed(e.to_string()))?);
+    match out.first() {
+        Some(0) => Ok(Zeroizing::new(out[1..].to_vec())),
+        Some(1) => Err(GuardError::Cancelled),
+        Some(2) => Err(GuardError::KeyReset),
+        _ => Err(GuardError::Failed(
+            String::from_utf8_lossy(out.get(1..).unwrap_or_default()).into_owned(),
+        )),
+    }
+}
+
+/// Android Keystore (StrongBox or the processor's protected area) through KeyGuard.java.
+struct AndroidGuard;
+
+/// The prompt's texts travel as lines of the request.
+fn prompt_lines(p: &Prompt) -> String {
+    format!(
+        "{}\n{}\n{}",
+        one_line(&p.title),
+        one_line(&p.subtitle),
+        one_line(&p.detail)
+    )
+}
+
+impl Guard for AndroidGuard {
+    fn capabilities(&self) -> Capabilities {
+        let caps = guard_call("caps", &[], &[]).unwrap_or_default();
+        let s = String::from_utf8_lossy(&caps);
+        let mut f = s.split(',').map(|v| v == "1");
+        Capabilities {
+            screen_lock: f.next().unwrap_or(false),
+            biometric: f.next().unwrap_or(false),
+            hardware: f.next().unwrap_or(false),
+        }
+    }
+
+    fn create(&self, name: &str, auth: ChipAuth) -> Result<Security, GuardError> {
+        let auth = match auth {
+            ChipAuth::None => 0,
+            ChipAuth::BiometricOrPin => 1,
+            ChipAuth::BiometricOnly => 2,
+        };
+        let out = guard_call(&format!("create\n{}\n{auth}", one_line(name)), &[], &[])?;
+        Ok(match out.first() {
+            Some(1) => Security::Chip,
+            Some(2) => Security::Protected,
+            _ => Security::Software,
+        })
+    }
+
+    fn seal(
+        &self,
+        name: &str,
+        plain: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> Result<Vec<u8>, GuardError> {
+        let req = format!("seal\n{}\n{}", one_line(name), prompt_lines(prompt));
+        Ok(guard_call(&req, plain, aad)?.to_vec())
+    }
+
+    fn open(
+        &self,
+        name: &str,
+        sealed: &[u8],
+        aad: &[u8],
+        prompt: &Prompt,
+    ) -> Result<Zeroizing<Vec<u8>>, GuardError> {
+        let req = format!("open\n{}\n{}", one_line(name), prompt_lines(prompt));
+        guard_call(&req, sealed, aad)
+    }
+
+    fn delete(&self, name: &str) {
+        let _ = guard_call(&format!("delete\n{}", one_line(name)), &[], &[]);
+    }
+}
+
 /// The app's private folders (files, cache) and the phone's language, asked once.
 struct Info {
+    files: PathBuf,
     cache: PathBuf,
 }
 
@@ -78,6 +191,7 @@ fn info() -> &'static Info {
         let lang = l.next().unwrap_or("");
         i18n::set_platform(lang, PathBuf::from(&files));
         Info {
+            files: PathBuf::from(files),
             cache: PathBuf::from(cache),
         }
     })
@@ -212,7 +326,13 @@ pub fn main(app: AndroidApp) {
                 s.spacing.interact_size.y = 40.0;
                 s.spacing.button_padding = egui::vec2(12.0, 8.0);
             });
-            let app = App::new(Engine::new(vec![]), Box::<AndroidDialogs>::default());
+            let mut app = App::new(Engine::new(vec![]), Box::<AndroidDialogs>::default());
+            // keys kept in the app: a file in the app's private folder, locked by the chip
+            let guard: Box<dyn Guard> = Box::new(AndroidGuard);
+            match Store::open(&info().files.join("keys.kzs"), guard) {
+                Ok(store) => app = app.with_key_store(store),
+                Err(e) => eprintln!("kzsigner: key store: {e}"),
+            }
             Ok(Box::new(AndroidWindow(app, std::time::Instant::now())))
         }),
     );

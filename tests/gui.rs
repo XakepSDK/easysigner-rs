@@ -390,3 +390,189 @@ fn pdf_signing_and_cards_in_the_window() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The test chip, shared between two starts of the window.
+struct SharedChip(Arc<kzsigner::vault::SoftwareGuard>);
+
+impl kzsigner::vault::Guard for SharedChip {
+    fn capabilities(&self) -> kzsigner::vault::Capabilities {
+        self.0.capabilities()
+    }
+    fn create(
+        &self,
+        name: &str,
+        auth: kzsigner::vault::ChipAuth,
+    ) -> Result<kzsigner::vault::Security, kzsigner::vault::GuardError> {
+        self.0.create(name, auth)
+    }
+    fn seal(
+        &self,
+        name: &str,
+        plain: &[u8],
+        aad: &[u8],
+        prompt: &kzsigner::vault::Prompt,
+    ) -> Result<Vec<u8>, kzsigner::vault::GuardError> {
+        self.0.seal(name, plain, aad, prompt)
+    }
+    fn open(
+        &self,
+        name: &str,
+        sealed: &[u8],
+        aad: &[u8],
+        prompt: &kzsigner::vault::Prompt,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, kzsigner::vault::GuardError> {
+        self.0.open(name, sealed, aad, prompt)
+    }
+    fn delete(&self, name: &str) {
+        self.0.delete(name)
+    }
+}
+
+fn store_app(
+    chip: &Arc<kzsigner::vault::SoftwareGuard>,
+    path: &Path,
+    ca: &Cert,
+    dialogs: &Scripted,
+) -> App {
+    use kzsigner::vault::{Guard, Store};
+    let guard: Box<dyn Guard> = Box::new(SharedChip(chip.clone()));
+    let store = Store::open(path, guard).unwrap();
+    let mut app = App::new(
+        kzsigner::Engine::new(vec![ca.clone()]),
+        Box::new(dialogs.clone()),
+    )
+    .with_key_store(store);
+    (app.sign.timestamp, app.ocsp) = (false, false);
+    app
+}
+
+/// A key file opened once is kept on the phone with no question; the next start signs with
+/// one fingerprint/PIN prompt and no password; the key can be removed again.
+#[test]
+fn kept_key_signs_with_one_touch() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    kzsigner::i18n::set(kzsigner::i18n::Lang::En);
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kalkan");
+    let dir = std::env::temp_dir().join(format!("kzsigner-gui-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let doc = dir.join("doc.txt");
+    std::fs::write(&doc, "kept key test\n").unwrap();
+    let store_file = dir.join("keys.kzs");
+    let ca = Cert::parse_any(&std::fs::read(fx.join("ca_gost2015.cer")).unwrap()).unwrap();
+    let chip = Arc::new(kzsigner::vault::SoftwareGuard::default());
+    let dialogs = Scripted::default();
+
+    // first start: the key file and its password, as before
+    let app = store_app(&chip, &store_file, &ca, &dialogs);
+    let mut h = Harness::builder()
+        .with_size([780.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+    h.run();
+    h.get_all_by_label("Sign a document")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    dialogs.next(doc.clone());
+    h.get_all_by_label("Browse…").next().unwrap().click();
+    settle(&mut h);
+    let key_field = h.get_by_label("Key file (.p12), for example GOSTKNCA_… or RSA_…");
+    key_field.focus();
+    key_field.type_text(&fx.join("alice_gost2015.p12").display().to_string());
+    h.run();
+    h.key_press(egui::Key::Enter);
+    settle(&mut h);
+    let pw = h.get_by_role(egui::accesskit::Role::PasswordInput);
+    pw.focus();
+    pw.type_text("Qwerty12");
+    h.run();
+    h.key_press(egui::Key::Enter);
+    settle(&mut h);
+    // kept with one prompt that says what it is for, and no question in the window
+    assert!(
+        h.query_by_label_contains("Kept on this phone. Next time, sign with your fingerprint")
+            .is_some(),
+        "{:?}",
+        h.state().message
+    );
+    {
+        let p = chip.prompts.lock().unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].title, "Keep your key on this phone");
+    }
+    assert_eq!(h.state().stored_keys().len(), 1);
+    // this signing goes on with the file: the password was just typed, no second prompt
+    let out = dir.join("first.cms");
+    dialogs.next(out.clone());
+    h.get_by_label("Sign").click();
+    settle(&mut h);
+    assert_eq!(h.state().screen, Screen::Signed, "{:?}", h.state().message);
+    assert_eq!(chip.prompts.lock().unwrap().len(), 1);
+    drop(h);
+
+    // next start: the kept key is picked already; one prompt, no password
+    let app = store_app(&chip, &store_file, &ca, &dialogs);
+    let mut h = Harness::builder()
+        .with_size([780.0, 1000.0])
+        .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
+    h.run();
+    h.get_all_by_label("Sign a document")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    dialogs.next(doc.clone());
+    h.get_all_by_label("Browse…").next().unwrap().click();
+    settle(&mut h);
+    assert!(
+        h.query_all_by_label_contains("ИВАНОВ АЛИБЕК")
+            .next()
+            .is_some()
+    );
+    assert!(
+        h.query_by_role(egui::accesskit::Role::PasswordInput)
+            .is_none(),
+        "no password for a kept key"
+    );
+    // the owner closes the prompt: nothing happens, no error
+    chip.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.get_by_label("Sign").click();
+    settle(&mut h);
+    assert_eq!(h.state().screen, Screen::Sign);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    chip.cancel
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let out = dir.join("second.cms");
+    dialogs.next(out.clone());
+    h.get_by_label("Sign").click();
+    settle(&mut h);
+    assert_eq!(h.state().screen, Screen::Signed, "{:?}", h.state().message);
+    {
+        let p = chip.prompts.lock().unwrap();
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[2].title, "Sign doc.txt");
+        assert!(p[2].detail.starts_with("Document code "), "{:?}", p[2]);
+    }
+    assert!(out.exists());
+
+    // remove it: the chip key goes too, and the file field is back
+    h.get_by_label("Back").click();
+    h.run();
+    h.get_all_by_label("Sign a document")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Remove this key from the phone…").click();
+    h.run();
+    h.get_by_label("Remove").click();
+    settle(&mut h);
+    assert!(h.state().stored_keys().is_empty());
+    assert_eq!(chip.key_count(), 0, "the chip key is gone too");
+    assert!(
+        h.query_by_label("Key file (.p12), for example GOSTKNCA_… or RSA_…")
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
