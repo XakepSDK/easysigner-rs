@@ -1,3 +1,6 @@
 [bindings.kotlin]
 package_name = "kz.kzsigner.core"
 cdylib_name = "kzsigner_ffi"
+# Android's own cleaner choice (java.lang.ref.Cleaner only on Android 13+)
+android = true
+android_cleaner = true

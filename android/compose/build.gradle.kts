@@ -84,7 +84,9 @@ android {
     }
 
     lint {
-        checkReleaseBuilds = false
+        // the release build stops on a call Android 11 doesn't have (the bindings' too)
+        checkReleaseBuilds = true
+        fatal.add("NewApi")
     }
 }
 

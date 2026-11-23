@@ -36,7 +36,11 @@ public class KeyFiles extends ContentProvider {
         String name = new File(uri.getPath()).getName();
         File f = new File(getContext().getCacheDir(), name);
         try (InputStream in = getContext().getAssets().open(name); OutputStream out = new FileOutputStream(f)) {
-            in.transferTo(out);
+            // InputStream.transferTo is Android 13+; this runs on 11 too
+            byte[] buf = new byte[8192];
+            for (int n; (n = in.read(buf)) > 0; ) {
+                out.write(buf, 0, n);
+            }
         }
         return f;
     }

@@ -134,8 +134,15 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
         } ?: uri.lastPathSegment ?: "?"
         val bytes = try {
             app.contentResolver.openInputStream(uri)?.use { s ->
-                val b = s.readNBytes(MAX_KEY_FILE + 1)
-                if (b.size > MAX_KEY_FILE) null else b
+                // InputStream.readNBytes is Android 13+: read in pieces, up to the limit
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                while (out.size() <= MAX_KEY_FILE) {
+                    val n = s.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                }
+                if (out.size() > MAX_KEY_FILE) null else out.toByteArray()
             }
         } catch (e: Exception) {
             null

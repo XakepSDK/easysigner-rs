@@ -13,7 +13,7 @@ import java.util.Locale
 
 @Composable
 @ReadOnlyComposable
-private fun locale(): Locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+private fun locale(): Locale = LocalConfiguration.current.locales[0]
 
 private fun day(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
 
