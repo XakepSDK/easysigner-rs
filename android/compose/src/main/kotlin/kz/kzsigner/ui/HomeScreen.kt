@@ -25,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -80,8 +81,8 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
 
     Screen(onBack = null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            // never broken in two (large text); the chip's text is capped instead
-            Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, softWrap = false, modifier = Modifier.weight(1f))
+            // the app's name is a wordmark: a fixed size, so large text leaves room for the chip
+            Text("kzsigner", fontSize = with(LocalDensity.current) { 20.dp.toSp() }, fontWeight = FontWeight.Bold, softWrap = false, modifier = Modifier.weight(1f))
             Spacer(Modifier.width(12.dp))
             Box { KeyChip(keys.firstOrNull()?.name, keys.isEmpty() && model.keys?.hidden != true, onKeys) }
         }
