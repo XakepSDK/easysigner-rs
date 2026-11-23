@@ -1,5 +1,5 @@
-# The Android app: a thin library that Android's NativeActivity loads (libkzsigner_android.so).
-# Everything else is the kzsigner crate (src/android.rs); the APK is made by scripts/apk.sh.
+# The Android app: a thin library that GameActivity loads (libkzsigner_android.so).
+# Everything else is the kzsigner crate (src/android.rs); the APK is made by scripts/apk.sh (cargo, then Gradle).
 [package]
 name = "kzsigner-android"
 version = "0.1.0-dev"

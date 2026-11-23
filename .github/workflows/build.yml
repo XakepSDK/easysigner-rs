@@ -204,14 +204,11 @@ jobs:
           git clone -q . "$RUNNER_TEMP/again"
           (cd "$RUNNER_TEMP/again" && KZSIGNER_KEYSTORE_PASS="$PASS" sh scripts/apk.sh > /dev/null)
           sha256sum dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk
-          cmp target/apk/unsigned.apk "$RUNNER_TEMP/again/target/apk/unsigned.apk" || {
-            unzip -lv target/apk/unsigned.apk; unzip -lv "$RUNNER_TEMP/again/target/apk/unsigned.apk"
-            for f in $(cd target/apk && find classes.dex lib dex classes res.zip base.apk -type f | sort); do
-              cmp -s "target/apk/$f" "$RUNNER_TEMP/again/target/apk/$f" || echo "differs: $f"
-            done
+          cmp dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk || {
+            unzip -lv dist/*.apk > a.txt; unzip -lv "$RUNNER_TEMP"/again/dist/*.apk > b.txt
+            diff a.txt b.txt
             exit 1
           }
-          cmp dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk
       - name: The emulator test copy (x86_64, with the test of the real screens)
         run: KZSIGNER_SELFTEST=1 sh scripts/apk.sh
       - name: The second build must have matched (checked above)

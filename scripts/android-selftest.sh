@@ -3,7 +3,8 @@
 #
 #   sh scripts/android-selftest.sh APK SELFTEST_APK
 #
-# 1. APK (the one released): starts, keeps running after Back on the start screen, and its
+# 1. APK (the one released): starts, shows its start screen to screen readers (Android's
+#    accessibility tree), keeps running after Back on the start screen, and its
 #    security chip code passes MainActivity.selfTest with a screen PIN set.
 # 2. SELFTEST_APK (the test copy, KZSIGNER_SELFTEST=1 sh scripts/apk.sh): its test of the real
 #    screens (src/android/selftest.rs) keeps a key, signs with it, closes a prompt, removes
@@ -122,6 +123,15 @@ adb shell am start -W -n kz.kzsigner/.MainActivity
 sleep 20
 adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped after starting"
 shot android-start.png
+# what TalkBack reads: Android's accessibility tree (AccessKit) must name the start screen's
+# choices and the language menu
+adb shell uiautomator dump /sdcard/a11y.xml > /dev/null 2>&1
+tree=$(adb shell cat /sdcard/a11y.xml)
+for want in "Sign a document" "Check a signed file" "English"; do
+    echo "$tree" | grep -o '<node [^>]*>' | grep 'package="kz.kzsigner"' | grep -q "$want" ||
+        fail "the accessibility tree has no \"$want\": a screen reader can't see it"
+done
+echo "accessibility tree OK"
 adb shell input keyevent KEYCODE_BACK
 sleep 3
 adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped on Back"

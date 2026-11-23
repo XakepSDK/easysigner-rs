@@ -4,7 +4,7 @@
 //! Rust talks to it through one method, `String call(String request)`.
 //!
 //! Requests: `pick` (the chooser), `save\n<name>\n<path>` (copy a written file to where the
-//! user chooses), `share\n<path>`, `view\n<path>` (open in another app), `keyboard\n1|0`, `info` (files dir, cache dir, language),
+//! user chooses), `share\n<path>`, `view\n<path>` (open in another app), `info` (files dir, cache dir, language),
 //! `insets` (the screen edges to keep clear, in pixels: left,top,right,bottom), `background`
 //! (back on the start screen: the app goes behind the others, as Android apps do),
 //! `poll` (the next event: `picked\n<path>`, `cancelled`, `open\n<path>`, `saved\n<name>`,
@@ -281,7 +281,11 @@ impl Dialogs for AndroidDialogs {
     }
 
     fn keyboard(&mut self, show: bool) {
-        java(if show { "keyboard\n1" } else { "keyboard\n0" });
+        // egui-winit shows and hides the keyboard itself; this sets how it types and starts
+        // the field's typing afresh
+        if show {
+            ime::start();
+        }
     }
 
     fn poll(&mut self) -> Option<DialogEvent> {
@@ -330,6 +334,7 @@ pub fn main(app: AndroidApp) {
         app.activity_as_ptr() as usize,
         std::sync::atomic::Ordering::Release,
     );
+    let _ = ime::APP.set(app.clone());
     info();
     #[cfg(feature = "selftest")]
     selftest::start();
@@ -400,6 +405,7 @@ impl Insets {
 impl eframe::App for AndroidWindow {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        ime::typed(&ctx);
         if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
             self.1 = std::time::Instant::now();
         }
@@ -413,5 +419,87 @@ impl eframe::App for AndroidWindow {
         if self.1.elapsed() < std::time::Duration::from_secs(5) || self.0.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+    }
+}
+
+/// The on-screen keyboard's typing. GameActivity hands typed text to the app as the whole
+/// text of an edit box it keeps (winit 0.30 does not pass it on), so each frame the box is
+/// compared with what egui was given: added letters become text, removed ones Backspace.
+mod ime {
+    use std::sync::{Mutex, OnceLock};
+
+    use eframe::egui;
+    use winit::platform::android::activity::AndroidApp;
+    use winit::platform::android::activity::input::{
+        ImeOptions, InputType, TextInputAction, TextInputState,
+    };
+
+    pub(super) static APP: OnceLock<AndroidApp> = OnceLock::new();
+    /// The edit box's text as last passed to egui.
+    static SEEN: Mutex<String> = Mutex::new(String::new());
+
+    /// A field got the keyboard: no suggestions or learning (the fields hold passwords), an
+    /// Enter key rather than a Done action (winit drops actions), and an empty box.
+    pub(super) fn start() {
+        let Some(app) = APP.get() else { return };
+        app.set_ime_editor_info(
+            InputType::TYPE_CLASS_TEXT
+                | InputType::TYPE_TEXT_VARIATION_PASSWORD
+                | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            TextInputAction::None,
+            ImeOptions::IME_FLAG_NO_PERSONALIZED_LEARNING,
+        );
+        app.set_text_input_state(TextInputState::default());
+        if let Ok(mut seen) = SEEN.lock() {
+            seen.clear();
+        }
+    }
+
+    /// Passes what was typed since the last frame to egui, before the screens are drawn.
+    pub(super) fn typed(ctx: &egui::Context) {
+        let Some(app) = APP.get() else { return };
+        let Ok(mut seen) = SEEN.lock() else { return };
+        let now = app.text_input_state().text;
+        if now == *seen {
+            return;
+        }
+        let events = changes(&seen, &now);
+        *seen = now;
+        ctx.input_mut(|i| i.events.extend(events));
+        ctx.request_repaint();
+    }
+
+    fn key(key: egui::Key) -> [egui::Event; 2] {
+        [true, false].map(|pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        })
+    }
+
+    /// The egui events that turn `old` into `new`: Backspace for each letter after the common
+    /// start, then the new letters; a new line is the Enter key.
+    pub(super) fn changes(old: &str, new: &str) -> Vec<egui::Event> {
+        let same = old
+            .chars()
+            .zip(new.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut out = Vec::new();
+        for _ in old.chars().skip(same) {
+            out.extend(key(egui::Key::Backspace));
+        }
+        let added: String = new.chars().skip(same).collect();
+        for (n, part) in added.split('\n').enumerate() {
+            if n > 0 {
+                out.extend(key(egui::Key::Enter));
+            }
+            if !part.is_empty() {
+                out.push(egui::Event::Text(part.to_string()));
+            }
+        }
+        out
     }
 }

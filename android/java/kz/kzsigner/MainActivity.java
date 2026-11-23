@@ -1,8 +1,6 @@
 package kz.kzsigner;
 
-import android.app.NativeActivity;
 import android.content.ActivityNotFoundException;
-import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -11,7 +9,6 @@ import android.provider.OpenableColumns;
 import android.graphics.Insets;
 import android.view.View;
 import android.view.WindowInsets;
-import android.view.inputmethod.InputMethodManager;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -19,14 +16,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.Locale;
+import com.google.androidgamesdk.GameActivity;
 
 /**
- * kzsigner's window is Rust (NativeActivity runs it). This class only does what needs Java:
- * Android's file chooser and "Save as", sharing, files opened from other apps, and the
- * on-screen keyboard, and the security chip for stored keys. Rust calls {@link #call(String)}
+ * kzsigner's window is Rust (GameActivity runs it). This class only does what needs Java:
+ * Android's file chooser and "Save as", sharing, files opened from other apps, the screen
+ * edges to keep clear, and the security chip for stored keys. Rust calls {@link #call(String)}
  * and {@link #guard(String, byte[], byte[])}; see src/android.rs for the requests.
  */
-public class MainActivity extends NativeActivity {
+public class MainActivity extends GameActivity {
     private static final int PICK = 1;
     private static final int SAVE = 2;
 
@@ -254,10 +252,6 @@ public class MainActivity extends NativeActivity {
             case "background":
                 runOnUiThread(() -> moveTaskToBack(true));
                 return null;
-            case "keyboard":
-                boolean show = r.length > 1 && r[1].equals("1");
-                runOnUiThread(() -> keyboard(show));
-                return null;
             default:
                 return null;
         }
@@ -285,19 +279,6 @@ public class MainActivity extends NativeActivity {
         Insets bars = w.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
         Insets ime = w.getInsets(WindowInsets.Type.ime());
         return bars.left + "," + bars.top + "," + bars.right + "," + Math.max(bars.bottom, ime.bottom);
-    }
-
-    private void keyboard(boolean show) {
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        View v = getWindow().getDecorView();
-        if (show) {
-            v.setFocusable(true);
-            v.setFocusableInTouchMode(true);
-            v.requestFocus();
-            imm.showSoftInput(v, 0);
-        } else {
-            imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
-        }
     }
 
     @Override

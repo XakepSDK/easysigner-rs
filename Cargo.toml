@@ -9,7 +9,7 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer"]
+gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer", "dep:accesskit_winit"]
 # the emulator test copy of the Android app (scripts/apk.sh, KZSIGNER_SELFTEST=1)
 selftest = ["gui", "dep:egui_kittest"]
 
@@ -55,10 +55,12 @@ rfd = { version = "0.17", optional = true, default-features = false, features = 
 
 [target.'cfg(target_os = "android")'.dependencies]
 egui_kittest = { version = "0.37", optional = true }
-eframe = { version = "0.37", optional = true, default-features = false, features = ["android-native-activity", "glow"] }
+# GameActivity (AndroidX): the on-screen keyboard, and the view AccessKit's TalkBack adapter needs
+eframe = { version = "0.37", optional = true, default-features = false, features = ["android-game-activity", "glow", "accesskit"] }
+accesskit_winit = { version = "0.34", optional = true, default-features = false, features = ["accesskit_android", "rwh_06"] }
 jni = "0.22"
 ndk-context = "0.1"
-winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
 
 [target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }

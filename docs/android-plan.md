@@ -42,9 +42,11 @@ It is distributed as an APK on the GitHub release page, next to the Windows and 
   emulator in CI. Optionally `armv7-linux-androideabi` for old phones.
 - **minSdk:** 30 (Android 11), target 35. Raised from 26 for the key store: per-use
   fingerprint-or-PIN keys (`setUserAuthenticationParameters`) need Android 11.
-- **Tooling:** `cargo-ndk` builds the .so. A small Gradle-free packaging step (`aapt2` + `zipalign`
-  + `apksigner` from the SDK build-tools) makes the APK. The NDK, build-tools and Rust versions
-  are pinned so the build stays reproducible, like `scripts/cargo.sh` does on the desktop.
+- **Tooling:** cargo builds the .so (`scripts/apk.sh`), and Gradle (pinned 8.14.3, checked by
+  SHA-256; Android Gradle plugin 8.10.1) adds the Java side and signs. Gradle came in with
+  GameActivity, which TalkBack support needs (AccessKit's Android adapter reads its view) and
+  which is an AndroidX library. The NDK, build-tools, Gradle and Rust versions are pinned so the
+  build stays reproducible; CI builds every commit twice and compares the APKs.
 - **Signing key:** a release keystore is generated once and stored as GitHub Actions secrets
   (keystore base64 + password). It must never change: Android refuses updates signed with a
   different key. The user keeps an offline backup.
