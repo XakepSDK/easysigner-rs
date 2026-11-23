@@ -164,13 +164,20 @@ final class Phone {
 
     /**
      * Whether kzsigner's accessibility tree has something whose text or description contains
-     * the name (what TalkBack reads; a button's label may carry its explanation too).
+     * the name (what TalkBack reads; a button's label may carry its explanation too). The app
+     * builds its tree once a reader first asks for it, so this asks for up to 15 seconds.
      */
     boolean appNames(String name) {
         Pattern p = Pattern.compile(".*" + Pattern.quote(name) + ".*", Pattern.DOTALL);
         BySelector text = By.pkg(APP).text(p);
         BySelector desc = By.pkg(APP).desc(p);
-        return device.hasObject(text) || device.hasObject(desc);
+        for (int i = 0; i < 15; i++) {
+            if (device.hasObject(text) || device.hasObject(desc)) {
+                return true;
+            }
+            sleep(1000);
+        }
+        return false;
     }
 
     /** The screen's accessibility tree, as XML. */
