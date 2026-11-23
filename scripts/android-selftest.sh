@@ -1,224 +1,62 @@
 #!/bin/sh
 # Runs on CI's Android emulators (see .github/workflows/build.yml):
 #
-#   sh scripts/android-selftest.sh APK SELFTEST_APK
+#   sh scripts/android-selftest.sh APK SELFTEST_APK UITEST_APK
 #
-# 1. APK (the one released): starts, shows its start screen to screen readers (Android's
-#    accessibility tree), keeps running after Back on the start screen, and its
-#    security chip code passes MainActivity.selfTest with a screen PIN set.
-# 2. SELFTEST_APK (the test copy, KZSIGNER_SELFTEST=1 sh scripts/apk.sh): its test of the real
-#    screens (src/android/selftest.rs) keeps a key, signs with it, closes a prompt, removes
-#    it, and does the same with no screen lock. This script answers what it asks for in the
-#    log: types the PIN into the prompt, closes the prompt, removes and sets the screen PIN.
-# 3. Fingerprint (with the test copy still installed): enrolls a finger through Settings,
-#    then a fingerprint-only key works with a touch of the virtual sensor, and is gone after
-#    another finger is enrolled.
-# Screenshots: android-*.png. Fails unless both log PASS and the app still runs.
+# The tests are UI Automator tests in android/uitest (UITEST_APK, built next to the test copy
+# by KZSIGNER_SELFTEST=1 sh scripts/apk.sh); they run on the emulator in their own process.
+# This script only installs the APKs, runs the tests, and does the one thing a test on the
+# phone can't: touching the virtual fingerprint sensor, while a test logs "FINGER n".
+#
+# 1. ReleasedApp, with APK (the one released): starts, shows its start screen to screen
+#    readers, keeps running after Back, and its security chip code works with a screen PIN.
+# 2. TestCopy, with SELFTEST_APK: the test of the real screens (src/android/selftest.rs),
+#    then a fingerprint-only key with fingers enrolled through Settings.
+# Screenshots: android-*.png, also printed into the log.
 set -u
 APK=$1
 TEST_APK=$2
-PIN=1111
-fail() {
-    echo "FAIL: $*"
-    shot android-fail.png
-    adb logcat -d -s KZSELFTEST:* kzsigner:* RustStdoutStderr:* AndroidRuntime:* DEBUG:* | tail -120
-    exit 1
-}
+UITEST_APK=$3
+RUNNER=kz.kzsigner.uitest/androidx.test.runner.AndroidJUnitRunner
+
 # a screenshot, also printed into the log (base64 between markers): CI's artifacts are not
 # reachable from everywhere the log is
-shot() {
-    adb exec-out screencap -p > "$1"
-    echo "--- screenshot $1"
-    base64 -w 0 "$1"
-    echo
-    echo "--- end $1"
-}
-# taps the first thing on screen whose text or description matches $1 (a regex, any case)
-tap_text() {
-    adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || return 1
-    xy=$(adb shell cat /sdcard/ui.xml | python3 -c '
-import re, sys
-x = sys.stdin.read()
-p = re.compile(sys.argv[1], re.I)
-for n in re.findall(r"<node [^>]*>", x):
-    t = re.search(r"\btext=\"([^\"]*)\"", n)
-    d = re.search(r"content-desc=\"([^\"]*)\"", n)
-    if any(m and p.fullmatch(m.group(1).strip()) for m in (t, d)):
-        b = re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", n)
-        if b:
-            a = list(map(int, b.groups()))
-            print((a[0] + a[2]) // 2, (a[1] + a[3]) // 2)
-            break
-' "$1")
-    [ -n "$xy" ] || return 1
-    # shellcheck disable=SC2086
-    adb shell input tap $xy
-}
-# whether the screen shows text matching $1
-shows() {
-    adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1
-    adb shell cat /sdcard/ui.xml | grep -qiE "$1"
-}
-fingers() {
-    adb shell dumpsys fingerprint | grep -oE '"count":[0-9]+' | head -1 | cut -d: -f2
-}
-# enrolls virtual finger $1 through Settings, touching the sensor until it is added
-enroll() {
-    want=$(($(fingers || echo 0) + 1))
-    # a fresh Settings: one left from the last enrollment only comes back to the front
-    adb shell am force-stop com.android.settings
-    adb shell am start -a android.settings.FINGERPRINT_ENROLL > /dev/null
-    i=0
-    while [ $i -lt 90 ]; do
-        i=$((i + 1))
-        sleep 2
-        [ "$(fingers || echo 0)" -ge "$want" ] 2>/dev/null && break
-        if shows '(Re-enter|Confirm|Enter) your (device )?PIN'; then pin; continue; fi
-        tap_text '(I agree|Agree|Next|Continue|Start|More|Accept|OK|Got it)' || true
-        adb emu finger touch "$1" > /dev/null 2>&1
+shots() {
+    for f in $(adb shell ls /data/local/tmp/kzuitest/ 2>/dev/null); do
+        adb pull -q "/data/local/tmp/kzuitest/$f" "$f" > /dev/null 2>&1 || continue
+        echo "--- screenshot $f"
+        base64 -w 0 "$f"
+        echo
+        echo "--- end $f"
     done
-    tap_text '(Done|Next|Finish)' || true
-    adb shell input keyevent KEYCODE_HOME
-    [ "$(fingers || echo 0)" -ge "$want" ] 2>/dev/null || fail "could not enroll finger $1"
-    echo "enrolled finger $1"
+    adb shell rm -rf /data/local/tmp/kzuitest
 }
-# locks the screen and unlocks it with the PIN: the Keystore lets keys that need an unlocked
-# device work only after a real unlock with the screen lock
-unlock() {
-    for attempt in 1 2 3 4 5; do
-        adb shell input keyevent KEYCODE_SLEEP
-        sleep 2
-        adb shell input keyevent KEYCODE_WAKEUP
-        sleep 2
-        adb shell wm dismiss-keyguard
-        sleep 2
-        # swipe the lock screen up, then the PIN
-        size=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
-        w=${size%x*}
-        h=${size#*x}
-        adb shell input swipe $((w / 2)) $((h * 4 / 5)) $((w / 2)) $((h / 5))
-        sleep 2
-        pin
-        sleep 4
-        if ! adb shell dumpsys window | grep -qiE 'mDreamingLockscreen=true|isKeyguardShowing=true|mShowingLockscreen=true'; then
-            echo "unlocked (attempt $attempt)"
-            return 0
-        fi
-        echo "the lock screen is still up after unlocking (attempt $attempt)"
-    done
-    fail "could not unlock the screen with the PIN"
-}
-pin() { adb shell input text "$PIN"; adb shell input keyevent KEYCODE_ENTER; }
 
-adb shell svc power stayon true
-adb shell settings put system screen_off_timeout 1800000
-adb shell locksettings set-pin "$PIN" || fail "could not set a screen PIN"
-unlock
-echo "Android $(adb shell getprop ro.build.version.release)"
-
-# --- the released APK
-adb install -r "$APK" || fail "install"
-adb logcat -c
-adb shell am start -W -n kz.kzsigner/.MainActivity
-sleep 20
-adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped after starting"
-shot android-start.png
-# what TalkBack reads: Android's accessibility tree (AccessKit) must name the start screen's
-# choices and the language menu
-adb shell uiautomator dump /sdcard/a11y.xml > /dev/null 2>&1
-tree=$(adb shell cat /sdcard/a11y.xml)
-for want in "Sign a document" "Check a signed file" "English"; do
-    echo "$tree" | grep -o '<node [^>]*>' | grep 'package="kz.kzsigner"' | grep -q "$want" ||
-        fail "the accessibility tree has no \"$want\": a screen reader can't see it"
-done
-echo "accessibility tree OK"
-adb shell input keyevent KEYCODE_BACK
-sleep 3
-adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped on Back"
-
-adb shell am start -W -n kz.kzsigner/.MainActivity --ez selftest true
-# the self-test shows the PIN prompt three times (seal, open, and a changed box)
-i=0
-log=
-while [ $i -lt 40 ]; do
-    i=$((i + 1))
-    sleep 3
-    log=$(adb logcat -d -s KZSELFTEST:*)
-    case "$log" in
-    *PASS*) break ;;
-    *FAIL*) fail "chip self-test" ;;
-    esac
-    # the PIN, whether or not a prompt is up: with none, the start screen ignores it
-    pin
-done
-echo "$log"
-echo "$log" | grep -q PASS || fail "chip self-test did not finish"
-adb shell pidof kz.kzsigner >/dev/null || fail "the app stopped"
-echo "chip self-test PASS"
-
-# --- the test copy: the real screens
-adb uninstall kz.kzsigner > /dev/null
-adb install -r "$TEST_APK" || fail "install the test copy"
-adb logcat -c
-adb shell am start -W -n kz.kzsigner/.MainActivity
-sleep 10
-adb shell am start -W -n kz.kzsigner/.MainActivity --ez uitest true
-answered=0
-last=$(date +%s)
-while :; do
-    sleep 2
-    log=$(adb logcat -d -s KZSELFTEST:*)
-    case "$log" in
-    *"UI PASS"*) break ;;
-    *"UI FAIL"*) fail "screens: $(echo "$log" | grep -o 'UI FAIL.*' | head -1)" ;;
-    esac
-    [ $(($(date +%s) - last)) -lt 600 ] || fail "screens: no progress for 10 minutes"
-    # the newest request, and whether it is done
-    req=$(echo "$log" | grep -o 'NEED [0-9]* [a-z]*' | tail -1)
-    [ -n "$req" ] || continue
-    n=$(echo "$req" | cut -d' ' -f2)
-    what=$(echo "$req" | cut -d' ' -f3)
-    if echo "$log" | grep -qE "DONE $n[[:space:]]*$"; then
-        continue
-    fi
-    if [ "$n" != "$answered" ]; then
-        echo "screens ask $n: $what"
-        answered=$n
-        last=$(date +%s)
-        sleep 3
-    fi
-    case $what in
-    pin) pin ;;
-    cancel) adb shell input keyevent KEYCODE_BACK ;;
-    nolock) adb shell locksettings clear --old "$PIN" ;;
-    lock) adb shell locksettings set-pin "$PIN" && unlock ;;
-    esac
-    sleep 4
-done
-echo "$log" | grep -E "UI |NEED|DONE"
-shot android-screens.png
-adb shell pidof kz.kzsigner >/dev/null || fail "the test copy stopped"
-echo "screens PASS"
-
-# --- fingerprint
-enroll 1
-fp_step() {
+# runs one test class; touches the fingerprint sensor while the test asks for it
+run() {
     adb logcat -c
-    adb shell am start -W -n kz.kzsigner/.MainActivity --es fptest "$1" > /dev/null
-    i=0
-    while [ $i -lt 30 ]; do
-        i=$((i + 1))
-        sleep 3
-        log=$(adb logcat -d -s KZSELFTEST:*)
-        case "$log" in
-        *"FP PASS $1"*) echo "$log"; return 0 ;;
-        *"FP FAIL"*) fail "fingerprint $1" ;;
-        esac
-        adb emu finger touch 1 > /dev/null 2>&1
+    adb shell am instrument -w -r -e class "kz.kzsigner.uitest.$1" "$RUNNER" > instrument.txt 2>&1 &
+    test=$!
+    while kill -0 "$test" 2>/dev/null; do
+        sleep 2
+        f=$(adb logcat -d -s KZUITEST:* | grep -o 'FINGER [0-9]*' | tail -1 | cut -d' ' -f2)
+        [ -n "$f" ] && [ "$f" != 0 ] && adb emu finger touch "$f" > /dev/null 2>&1
     done
-    fail "fingerprint $1 did not finish"
+    wait "$test"
+    adb logcat -d -s KZUITEST:* KZSELFTEST:*
+    grep -E 'INSTRUMENTATION_STATUS: (test|stack)=|^OK|FAILURES|Tests run' instrument.txt
+    shots
+    grep -q '^OK (' instrument.txt || {
+        echo "FAIL: $1"
+        cat instrument.txt
+        exit 1
+    }
+    echo "$1 PASS"
 }
-fp_step seal
-enroll 2
-fp_step reset
-echo "fingerprint PASS"
+
+adb install -r "$UITEST_APK" || exit 1
+adb install -r "$APK" || exit 1
+run ReleasedApp
+adb uninstall kz.kzsigner > /dev/null
+adb install -r "$TEST_APK" || exit 1
+run TestCopy

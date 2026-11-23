@@ -2,6 +2,7 @@
 // given as -Pkzsigner.jniLibs); this only adds the Java side, resources and AndroidX, and signs.
 plugins {
     id("com.android.application") version "8.10.1"
+    id("com.android.test") version "8.10.1" apply false
 }
 
 val jniLibsDir = providers.gradleProperty("kzsigner.jniLibs").getOrElse("../target/android-jni")

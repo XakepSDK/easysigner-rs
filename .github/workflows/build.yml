@@ -223,7 +223,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: android-selftest
-          path: target/apk-selftest/kzsigner-selftest.apk
+          path: target/apk-selftest/
   # the APK on emulators: the oldest Android the app supports, the one it targets, the newest
   android-emulator:
     needs: android
@@ -255,7 +255,7 @@ jobs:
           target: google_apis
           disable-animations: true
           disk-size: 2048M
-          script: sh scripts/android-selftest.sh dist/kzsigner-*-android.apk selftest/kzsigner-selftest.apk
+          script: sh scripts/android-selftest.sh dist/kzsigner-*-android.apk selftest/kzsigner-selftest.apk selftest/kzsigner-uitest.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -12,7 +12,8 @@
 #
 # KZSIGNER_SELFTEST=1 builds the emulator test copy instead: x86_64 only, with the in-app test
 # of the real screens (src/android/selftest.rs), signed with the development key, written to
-# target/apk-selftest/kzsigner-selftest.apk. CI runs it with scripts/android-selftest.sh.
+# target/apk-selftest/kzsigner-selftest.apk, and the UI Automator tests next to it
+# (kzsigner-uitest.apk, from android/uitest). CI runs them with scripts/android-selftest.sh.
 #
 # Signing: with KZSIGNER_KEYSTORE (+ KZSIGNER_KEYSTORE_PASS, KZSIGNER_KEY_ALIAS) when set,
 # else with android/dev.keystore, a development key whose password is in build.gradle.kts. A
@@ -30,6 +31,7 @@ GRADLE_SHA256=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531
 
 TARGETS="aarch64-linux-android x86_64-linux-android"
 FEATURES=
+TASKS=assembleRelease
 JNI=target/android-jni
 OUT=dist/kzsigner-$V-android.apk
 if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
@@ -37,6 +39,8 @@ if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
     FEATURES="--features selftest"
     JNI=target/android-jni-selftest
     OUT=target/apk-selftest/kzsigner-selftest.apk
+    # and the UI Automator tests that drive it (android/uitest)
+    TASKS="assembleRelease :uitest:assembleDebug"
     unset KZSIGNER_KEYSTORE
     V=$V-selftest
 fi
@@ -95,9 +99,13 @@ for n in 21 17; do
         break
     fi
 done
-"$GRADLE" -q -p android --no-daemon --console=plain assembleRelease \
+# shellcheck disable=SC2086
+"$GRADLE" -q -p android --no-daemon --console=plain $TASKS \
     -Pkzsigner.version="$V" -Pkzsigner.jniLibs="$(pwd)/$JNI"
 mkdir -p "$(dirname "$OUT")"
 cp target/gradle/outputs/apk/release/kzsigner-release.apk "$OUT"
+if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
+    cp target/gradle-uitest/outputs/apk/debug/uitest-debug.apk "$(dirname "$OUT")/kzsigner-uitest.apk"
+fi
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$OUT" | head -3
 ls -la "$OUT"

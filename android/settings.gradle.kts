@@ -14,3 +14,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "kzsigner"
+include(":uitest")
