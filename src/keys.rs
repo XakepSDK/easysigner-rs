@@ -1,9 +1,9 @@
 //! Public and private keys (KZ GOST and RSA) and the signatures made with them.
 
 use num_bigint::BigUint;
+use rsa::Pkcs1v15Sign;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
 use rsa::traits::PublicKeyParts;
-use rsa::{Pkcs1v15Sign, RsaPrivateKey, RsaPublicKey};
 
 use crate::der::{self, Tlv};
 use crate::gost::{self, Curve, Scheme};
@@ -15,7 +15,7 @@ pub enum PublicKey {
         x: BigUint,
         y: BigUint,
     },
-    Rsa(RsaPublicKey),
+    Rsa(rsa::PublicKey),
     Other(String),
 }
 
@@ -25,7 +25,7 @@ pub enum PrivateKey {
         scheme: Scheme,
         d: BigUint,
     },
-    Rsa(RsaPrivateKey),
+    Rsa(rsa::PrivateKey),
 }
 
 fn param_set(params: Option<&Tlv>) -> Result<String> {
@@ -67,7 +67,7 @@ impl PublicKey {
             });
         }
         if oid == gost::RSA_ENCRYPTION {
-            let k = RsaPublicKey::from_pkcs1_der(bits)
+            let k = rsa::PublicKey::from_pkcs1_der(bits)
                 .map_err(|e| Error::new(format!("malformed RSA public key: {e}")))?;
             return Ok(PublicKey::Rsa(k));
         }
@@ -156,7 +156,7 @@ impl PrivateKey {
             return Ok(PrivateKey::Gost { curve, scheme, d });
         }
         if oid == gost::RSA_ENCRYPTION {
-            let k = RsaPrivateKey::from_pkcs1_der(&key)
+            let k = rsa::PrivateKey::from_pkcs1_der(&key)
                 .map_err(|e| Error::new(format!("malformed RSA private key: {e}")))?;
             return Ok(PrivateKey::Rsa(k));
         }

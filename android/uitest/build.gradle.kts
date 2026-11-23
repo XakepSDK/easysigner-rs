@@ -9,8 +9,8 @@ layout.buildDirectory = file("../../target/gradle-uitest")
 
 android {
     namespace = "kz.kzsigner.uitest"
-    compileSdk = 35
-    buildToolsVersion = "36.0.0"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
     targetProjectPath = ":"
 
     defaultConfig {
@@ -48,9 +48,9 @@ android {
 }
 
 dependencies {
-    implementation("androidx.test:runner:1.6.2")
-    implementation("androidx.test.ext:junit:1.2.1")
-    implementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    implementation("androidx.test:runner:1.7.0")
+    implementation("androidx.test.ext:junit:1.3.0")
+    implementation("androidx.test.uiautomator:uiautomator:2.4.1")
     implementation("junit:junit:4.13.2")
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.8.22"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.21"))
 }

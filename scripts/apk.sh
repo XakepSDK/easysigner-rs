@@ -5,7 +5,7 @@
 #
 #   ANDROID_HOME=... ANDROID_NDK_ROOT=... sh scripts/apk.sh
 #
-# Needs: the NDK (r27), build-tools 36.0.0, platforms;android-35 and a JDK 17 or newer (25
+# Needs: the NDK (r30), build-tools 37.0.0, platforms;android-37.0 and a JDK 17 or newer (25
 # on CI). Gradle itself is downloaded once (pinned version, checked against its SHA-256) into
 # ~/.cache/kzsigner-gradle, or taken from KZSIGNER_GRADLE. Two builds of a commit give the same
 # APK.
@@ -98,5 +98,5 @@ cp target/gradle/outputs/apk/release/kzsigner-release.apk "$OUT"
 if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
     cp target/gradle-uitest/outputs/apk/debug/uitest-debug.apk "$(dirname "$OUT")/kzsigner-uitest.apk"
 fi
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$OUT" | head -3
+"$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$OUT" | head -3
 ls -la "$OUT"

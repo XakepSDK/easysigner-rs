@@ -542,8 +542,10 @@ fn text_string(s: &str) -> Object {
 fn text_from(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xfe, 0xff]) {
         let units: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_be_bytes(c))
             .collect();
         String::from_utf16_lossy(&units)
     } else {

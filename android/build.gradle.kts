@@ -12,8 +12,8 @@ layout.buildDirectory = file("../target/gradle")
 
 android {
     namespace = "kz.kzsigner"
-    compileSdk = 35
-    buildToolsVersion = "36.0.0"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "kz.kzsigner"
@@ -83,7 +83,7 @@ android {
 dependencies {
     // must match the GameActivity glue in the android-activity crate (see its README)
     implementation("androidx.games:games-activity:4.4.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     // one Kotlin standard library: AndroidX brings two generations of it
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.8.22"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.21"))
 }

@@ -170,7 +170,7 @@ fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
                 iter,
                 Pkcs12KeyType::Mac,
                 <$h as digest::OutputSizeUser>::output_size(),
-            );
+            )?;
             let mut h =
                 <hmac::Hmac<$h>>::new_from_slice(&key).map_err(|_| Error::new("MAC key"))?;
             h.update(data);
@@ -317,8 +317,9 @@ fn kdf<D: Digest + FixedOutputReset + BlockSizeUser>(
     iterations: u32,
     id: Pkcs12KeyType,
     n: usize,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     derive_key::<D>(pw, salt, id, iterations.clamp(1, i32::MAX as u32) as i32, n)
+        .map_err(|e| Error::new(format!("key derivation: {e}")))
 }
 
 /// CBC decryption with PKCS#7 padding (RustCrypto's cbc crate).
@@ -353,16 +354,18 @@ fn decrypt(alg: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
     let iv = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::Iv, n);
     match oid.as_str() {
         "1.2.840.113549.1.12.1.3" => {
-            cbc_decrypt(new_cipher::<des::TdesEde3>(&key(24))?, &iv(8), data)
+            cbc_decrypt(new_cipher::<des::TdesEde3>(&key(24)?)?, &iv(8)?, data)
         }
         "1.2.840.113549.1.12.1.4" => {
-            cbc_decrypt(new_cipher::<des::TdesEde2>(&key(16))?, &iv(8), data)
+            cbc_decrypt(new_cipher::<des::TdesEde2>(&key(16)?)?, &iv(8)?, data)
         }
-        "1.2.840.113549.1.12.1.5" => {
-            cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(16), 128), &iv(8), data)
-        }
+        "1.2.840.113549.1.12.1.5" => cbc_decrypt(
+            rc2::Rc2::new_with_eff_key_len(&key(16)?, 128),
+            &iv(8)?,
+            data,
+        ),
         "1.2.840.113549.1.12.1.6" => {
-            cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(5), 40), &iv(8), data)
+            cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(5)?, 40), &iv(8)?, data)
         }
         o => Err(Error::new(format!("unsupported key file encryption {o}"))),
     }

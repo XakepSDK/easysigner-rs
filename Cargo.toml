@@ -2,7 +2,7 @@
 name = "kzsigner"
 version = "0.1.0-dev"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.100"
 default-run = "kzsigner"
 description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer"
 repository = "https://github.com/XakepSDK/easysigner-rs"
@@ -25,7 +25,7 @@ des = "0.9"
 rc2 = "0.9"
 aes = "0.9"
 cipher = "0.5"
-num-bigint = "0.4"
+num-bigint = "0.5"
 num-traits = "0.2"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -36,8 +36,8 @@ ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
 cbc = "0.2.1"
 pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
-rsa = { version = "=0.10.0-rc.19", default-features = false, features = ["encoding", "std"] }
-lopdf = { version = "0.46", default-features = false }
+rsa = { version = "0.10", default-features = false, features = ["encoding", "std", "pkcs1v15"] }
+lopdf = { version = "0.47", default-features = false }
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 qrcodegen = "1.8"
 flate2 = "1"
@@ -51,7 +51,7 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 zeroize = "1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-rfd = { version = "0.17", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
+rfd = { version = "0.18", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 egui_kittest = { version = "0.37", optional = true }
@@ -64,7 +64,6 @@ winit = { version = "0.30", default-features = false, features = ["android-game-
 
 [target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }
-wgpu = { version = "30", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # Direct3D 12, with Windows' own software renderer (WARP) when there is no graphics driver

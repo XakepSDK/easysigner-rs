@@ -1147,8 +1147,10 @@ fn ascii_name(s: &str) -> String {
 fn text_from(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xfe, 0xff]) {
         let u: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_be_bytes(c))
             .collect();
         String::from_utf16_lossy(&u)
     } else {
@@ -1183,7 +1185,7 @@ fn attachments(doc: &Document) -> Vec<(String, Vec<u8>)> {
     while let Some((node, depth)) = stack.pop() {
         let Ok(d) = node.as_dict() else { continue };
         if let Ok(a) = d.get(b"Names").and_then(Object::as_array) {
-            leaves.extend(a.chunks_exact(2).filter_map(|p| deref(&p[1])));
+            leaves.extend(a.as_chunks::<2>().0.iter().filter_map(|p| deref(&p[1])));
         }
         if depth < 16
             && let Some(kids) = d.get(b"Kids").ok().and_then(deref)
