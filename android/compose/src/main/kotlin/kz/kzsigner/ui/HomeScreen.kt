@@ -7,7 +7,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -27,6 +29,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -76,8 +79,10 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
 
     Screen(onBack = null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            KeyChip(keys.firstOrNull()?.name, onKeys)
+            // never broken in two (large text): the name in the chip gives way instead
+            Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, softWrap = false)
+            Spacer(Modifier.width(12.dp).weight(1f))
+            Box(Modifier.weight(1f, fill = false)) { KeyChip(keys.firstOrNull()?.name, onKeys) }
         }
         Spacer(Modifier.size(8.dp))
         Surface(
@@ -138,7 +143,7 @@ private fun KeyChip(name: String?, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(painterResource(R.drawable.ic_key), null, modifier = Modifier.size(18.dp))
-            Text(name?.let { firstName(it) } ?: label, fontWeight = FontWeight.Medium)
+            Text(name?.let { firstName(it) } ?: label, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

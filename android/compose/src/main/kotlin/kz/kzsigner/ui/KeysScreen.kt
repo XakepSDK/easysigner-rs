@@ -90,7 +90,8 @@ fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbo
         Column(Modifier.padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Label(stringResource(R.string.language))
             LanguagePicker()
-            TextButton(onClick = onAbout, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+            // a small corner radius: the pill shape cuts off the text's ends when it wraps (large text)
+            TextButton(onClick = onAbout, shape = RoundedCornerShape(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                 Text(stringResource(R.string.about_link), style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -174,7 +175,7 @@ private fun KeyCard(k: KeyInfo, onRemove: () -> Unit) {
                 Text(stringResource(opens), color = LocalNotices.current.good, style = MaterialTheme.typography.bodyMedium)
             }
         }
-        TextButton(onClick = onRemove, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+        TextButton(onClick = onRemove, shape = RoundedCornerShape(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
             Text(stringResource(R.string.remove_from_phone), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
         }
     }

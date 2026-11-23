@@ -213,3 +213,25 @@ Most of the behaviour exists; these are new or different:
 - Tests: `tests/who_signed.rs` (page and certification, second box placement, another app's
   stamp, 20 boxes then the note then invisible, a PDF signed elsewhere, changes after
   signing caught). Set `KZ_WHO_SIGNED_OUT=file.pdf` to write a three-signer sample.
+
+## Where phase 6 ended
+
+- The Compose app is the Android app: `android/compose`, applicationId `kz.kzsigner`,
+  version code 2, signed with the same key as the egui build, so it installs over it and
+  opens its keys (same vault file, same chip keys). Kotlin package `kz.kzsigner`.
+- Removed: the egui Android library (`android/src`, `src/android.rs`, the self-test copy),
+  its Java side, the `selftest` feature and the `jni-macros` patch. `scripts/apk.sh` builds
+  `dist/kzsigner-<version>-android.apk`; `KZSIGNER_UITEST=1` also builds the emulator tests.
+  The release job publishes that APK with the desktop downloads.
+- The app now asks for INTERNET (the egui build did; the Compose app had missed it, so it
+  could not reach NCA outside the emulator's chain check).
+- Emulator tests (`AppFlows`, Android 11, 15, 16): they set up the screen PIN and a finger
+  themselves; each screen they visit is checked for accessibility (every control named for
+  TalkBack, at least 48 dp); Home, Sign and Your keys run with text at 200 %; a
+  fingerprint-only key is reset when another finger is enrolled.
+- Compared with the design screens: layouts match. Large text broke the Home title and
+  clipped "Remove from this phone"; both fixed.
+- Left for a person: a check on a real phone with a hardware key chip (emulators keep keys
+  in software, so they use the key's password), a native speaker's read of the Kazakh and
+  Russian texts, the release signing key in the CI secrets, and the version bump that cuts
+  the release.
