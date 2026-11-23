@@ -144,6 +144,8 @@ private fun KeyCard(k: KeyInfo, onRemove: () -> Unit) {
             CantSign.EXPIRED -> Bad(stringResource(R.string.expired_on, longDate(k.expiresMs)), stringResource(R.string.expired_detail))
             CantSign.GOST2004 -> Bad(stringResource(R.string.gost2004_short), stringResource(R.string.new_key_detail))
             CantSign.NOT_YET_VALID -> WarnNotice(stringResource(R.string.not_yet_valid), null)
+            // known only when signing: the list never says these
+            CantSign.REVOKED, CantSign.NOT_RECOGNIZED -> {}
             null -> if (days < WARN_DAYS) {
                 val title = if (days <= 0) {
                     stringResource(R.string.expires_today)

@@ -17,6 +17,7 @@ data class Notices(
     val warnText: Color,
     val infoBg: Color,
     val good: Color,
+    val goodBg: Color,
     val badBg: Color,
 )
 
@@ -26,6 +27,7 @@ private val LightNotices = Notices(
     warnText = Color(0xFF6B4500),
     infoBg = Color(0xFFEEF3FC),
     good = Color(0xFF1E7F4F),
+    goodBg = Color(0xFFE8F5EE),
     badBg = Color(0xFFFCEBEA),
 )
 
@@ -35,6 +37,7 @@ private val DarkNotices = Notices(
     warnText = Color(0xFFF2D28F),
     infoBg = Color(0xFF1C2638),
     good = Color(0xFF6FD39F),
+    goodBg = Color(0xFF16301F),
     badBg = Color(0xFF3B1C1A),
 )
 

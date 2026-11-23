@@ -16,9 +16,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * The test key files (tests/fixtures/keys, in this APK's assets) as content:// URIs, read-only:
- * content://kz.kzsigner.uitest.keys/alice_rsa.p12. What a files app or a messenger hands over
- * with "Open with".
+ * The test key files and PDFs (tests/fixtures/keys and pdf, in this APK's assets) as
+ * content:// URIs, read-only: content://kz.kzsigner.uitest.keys/alice_rsa.p12. What a files app
+ * or a messenger hands over with "Open with" or Share.
  */
 public class KeyFiles extends ContentProvider {
     static final String AUTHORITY = "kz.kzsigner.uitest.keys";
@@ -68,7 +68,7 @@ public class KeyFiles extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return "application/x-pkcs12";
+        return uri.getPath().endsWith(".pdf") ? "application/pdf" : "application/x-pkcs12";
     }
 
     @Override

@@ -28,8 +28,8 @@ import kz.kzsigner.next.R
 const val EGOV = "https://egov.kz"
 
 /**
- * Screen 3f: the key can't sign (expired, not valid yet, or a GOST 2004 key), and how to get
- * a new one. Nothing was added or signed.
+ * Screen 3f: the key can't sign (expired, not valid yet, a GOST 2004 key, or, as NCA says
+ * when signing, revoked or not NCA's), and how to get a new one. Nothing was added or signed.
  */
 @Composable
 fun CantSignScreen(reason: CantSign, validFromMs: Long, expiresMs: Long, onBack: () -> Unit, onAddNew: () -> Unit) {
@@ -41,6 +41,10 @@ fun CantSignScreen(reason: CantSign, validFromMs: Long, expiresMs: Long, onBack:
             stringResource(R.string.cant_sign_future_body, longDate(validFromMs))
         CantSign.GOST2004 -> stringResource(R.string.cant_sign_gost2004_title) to
             stringResource(R.string.cant_sign_gost2004_body)
+        CantSign.REVOKED -> stringResource(R.string.cant_sign_revoked_title) to
+            stringResource(R.string.cant_sign_revoked_body)
+        CantSign.NOT_RECOGNIZED -> stringResource(R.string.cant_sign_unknown_title) to
+            stringResource(R.string.cant_sign_unknown_body)
     }
     Screen(
         onBack,

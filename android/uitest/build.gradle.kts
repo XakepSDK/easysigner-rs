@@ -24,8 +24,9 @@ android {
     sourceSets["main"].apply {
         manifest.srcFile("AndroidManifest.xml")
         java.directories.add("java")
-        // the test keys (password Qwerty12), served by KeyFiles
+        // the test keys (password Qwerty12) and PDFs, served by KeyFiles
         assets.directories.add("../../tests/fixtures/keys")
+        assets.directories.add("../../tests/fixtures/pdf")
     }
 
     signingConfigs {

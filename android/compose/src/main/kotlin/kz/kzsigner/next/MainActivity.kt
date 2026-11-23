@@ -2,11 +2,14 @@ package kz.kzsigner.next
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.launch
@@ -45,10 +48,24 @@ class MainActivity : AppCompatActivity() {
         model.refresh()
     }
 
-    /** A key file opened with the app ("Open with kzsigner"). */
+    /**
+     * A file opened with the app ("Open with kzsigner") or shared to it (Share in Telegram,
+     * WhatsApp, a files app): a key file goes to Add key, anything else to Sign.
+     */
     private fun take(intent: Intent?) {
-        val uri = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
-        lifecycleScope.launch { model.incoming = model.read(uri) }
+        val uri = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            else -> null
+        } ?: return
+        lifecycleScope.launch {
+            val why = when (model.open(uri)) {
+                Opened.TOO_BIG -> R.string.too_big
+                Opened.UNREADABLE -> R.string.cant_read_file
+                else -> return@launch
+            }
+            Toast.makeText(this@MainActivity, why, Toast.LENGTH_LONG).show()
+        }
     }
 
     /** CI's check of the key chip ([ChipSelfTest]), on emulators only. */

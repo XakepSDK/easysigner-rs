@@ -29,3 +29,10 @@ fun dayMonth(ms: Long): String = DateTimeFormatter.ofPattern("d MMMM", locale())
 
 /** Whole days from today until [ms]'s day (0: today). */
 fun daysUntil(ms: Long): Long = ChronoUnit.DAYS.between(LocalDate.now(), day(ms))
+
+/** "23 November 2026, 12:41", in the app's language and the phone's time zone. */
+@Composable
+@ReadOnlyComposable
+fun dateTime(ms: Long): String = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.LONG, FormatStyle.SHORT)
+    .withLocale(locale())
+    .format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))

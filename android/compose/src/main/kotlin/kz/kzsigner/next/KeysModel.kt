@@ -1,6 +1,8 @@
 package kz.kzsigner.next
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
@@ -15,12 +17,24 @@ import kotlinx.coroutines.withContext
 import kz.kzsigner.core.AddKeyException
 import kz.kzsigner.core.ChipPrompt
 import kz.kzsigner.core.CoreException
+import kz.kzsigner.core.Doc
+import kz.kzsigner.core.DocKind
 import kz.kzsigner.core.Keys
+import kz.kzsigner.core.Nca
+import kz.kzsigner.core.SignException
+import kz.kzsigner.core.Signed
 import kz.kzsigner.core.Unlock
 import kz.kzsigner.core.Vault
+import kz.kzsigner.core.inspect
 
 /** A key file the owner picked or opened with the app. */
 class KeyFile(val name: String, val bytes: ByteArray?)
+
+/** A document to sign, read into memory, and what the core made of it. */
+class DocFile(val name: String, val bytes: ByteArray, val info: Doc)
+
+/** What a file opened with the app (or chosen on Home) turned out to be. */
+enum class Opened { DOCUMENT, KEY, TOO_BIG, UNREADABLE }
 
 /** How adding a key went. */
 sealed interface Added {
@@ -55,6 +69,15 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
 
     /** A key file opened with the app (Open with, Share), waiting for its password. */
     var incoming by mutableStateOf<KeyFile?>(null)
+
+    /** The document being signed: shared to the app, opened with it, or chosen on Home. */
+    var document by mutableStateOf<DocFile?>(null)
+
+    /** The document's signed copy, once signed. */
+    var signed by mutableStateOf<Signed?>(null)
+
+    /** NCA's servers; made on first use (it reads the bundled NCA certificates). */
+    private val nca by lazy { Nca.kazakhstan() }
 
     init {
         viewModelScope.launch {
@@ -123,7 +146,56 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Reads a key file the owner chose (it is small: a .p12 is a few kilobytes). */
-    suspend fun read(uri: Uri): KeyFile = withContext(Dispatchers.IO) {
+    suspend fun read(uri: Uri): KeyFile = readFile(uri, MAX_KEY_FILE).key()
+
+    /**
+     * Reads a file opened with the app or chosen on Home: a key file goes to [incoming], a
+     * document to [document].
+     */
+    suspend fun open(uri: Uri): Opened {
+        val f = readFile(uri, MAX_DOCUMENT)
+        val bytes = f.bytes ?: return if (f.tooBig) Opened.TOO_BIG else Opened.UNREADABLE
+        val info = withContext(Dispatchers.Default) { inspect(f.name, bytes) }
+        if (info.kind == DocKind.KEY) {
+            incoming = KeyFile(f.name, bytes)
+            return Opened.KEY
+        }
+        signed = null
+        document = DocFile(f.name, bytes, info)
+        return Opened.DOCUMENT
+    }
+
+    /** Puts the document away (Done, or back from signing). */
+    fun closeDocument() {
+        document = null
+        signed = null
+    }
+
+    /**
+     * Signs [document] with key [keyId]: NCA checks the key first, then the phone asks for
+     * the fingerprint or screen lock ([prompt]), or [password] opens a key kept under it.
+     * [lang]: the app's language, for the PDF's stamp. Throws [SignException].
+     */
+    suspend fun sign(keyId: String, password: String?, prompt: ChipPrompt, lang: String): Signed {
+        val v = vault ?: throw SignException.Failed("no key vault")
+        val d = document ?: throw SignException.Failed("no document")
+        val s = withContext(Dispatchers.IO) { v.sign(nca, keyId, d.name, d.bytes, password, prompt, lang) }
+        signed = s
+        return s
+    }
+
+    /** The phone has a working internet connection (else "No internet", not "NCA is down"). */
+    fun online(): Boolean {
+        val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private class ReadFile(val name: String, val bytes: ByteArray?, val tooBig: Boolean) {
+        fun key() = KeyFile(name, bytes)
+    }
+
+    private suspend fun readFile(uri: Uri, max: Int): ReadFile = withContext(Dispatchers.IO) {
         val app = getApplication<Application>()
         val name = try {
             app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -132,26 +204,31 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             null
         } ?: uri.lastPathSegment ?: "?"
+        var tooBig = false
         val bytes = try {
             app.contentResolver.openInputStream(uri)?.use { s ->
                 // InputStream.readNBytes is Android 13+: read in pieces, up to the limit
                 val out = java.io.ByteArrayOutputStream()
                 val buf = ByteArray(8192)
-                while (out.size() <= MAX_KEY_FILE) {
+                while (out.size() <= max) {
                     val n = s.read(buf)
                     if (n < 0) break
                     out.write(buf, 0, n)
                 }
-                if (out.size() > MAX_KEY_FILE) null else out.toByteArray()
+                tooBig = out.size() > max
+                if (tooBig) null else out.toByteArray()
             }
         } catch (e: Exception) {
             null
         }
-        KeyFile(name, bytes)
+        ReadFile(name, bytes, tooBig)
     }
 
     private companion object {
         /** Larger than any key file: anything bigger is not one. */
         const val MAX_KEY_FILE = 1 shl 20
+
+        /** The largest document signed on the phone: it is held in memory, twice. */
+        const val MAX_DOCUMENT = 50 shl 20
     }
 }

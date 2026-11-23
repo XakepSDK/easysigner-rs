@@ -140,3 +140,30 @@ Most of the behaviour exists; these are new or different:
 - Emulator: `ComposeApp` opens test keys from the test APK (`KeyFiles`), checks the GOST
   2004 screen, the wrong-password hint for a Russian keyboard, adds the key with a touch of
   the fingerprint sensor, and removes it.
+
+## Where phase 3 ended
+
+- Core (ffi): `inspect(name, bytes)` says what a file is (PDF, XML, .cms, key file, other),
+  who signed it already (name, company, time; their validity is phase 4's), and what signing
+  makes (`InsidePdf`, `InsideXml`, `NewCms`, `JoinCms`, or `Cannot` for a detached .cms or an
+  XML document another signature would break), with the output's name. `Vault.sign` checks
+  the key with NCA before any prompt (expired, not yet valid, GOST 2004, not NCA's,
+  revoked, or no answer from NCA), then opens it (one prompt, or the key's password) and signs
+  as the desktop app does by default: with NCA's time, made long-term (LTA). It returns the
+  file, its name and NCA's time. `Nca` holds the servers and trust; tests make one with the
+  fake servers, which moved to `tests/common/nca.rs` so the core and ffi tests share them.
+- `CantSign` gained `Revoked` and `NotRecognized`, found when signing.
+- Screens 1, 3, 3b (Sign unlocks once the file was opened in its app), 3c (no internet, or
+  NCA not answering, told apart with the phone's connectivity), 3d, 3e, 3f at signing time,
+  3g, 4, and 2c. PDFs are read in the app with Android's `PdfRenderer`; other files open in
+  the app that reads them, through a `FileProvider` copy in the cache. Send is the share
+  sheet; Save to phone is the system's save dialog.
+- The PDF still gets today's corner stamp on its last page (in the app's language), and the
+  wording says so; the Who signed page is phase 5.
+- Files come in with Share (`ACTION_SEND`, any type) and Open with (`ACTION_VIEW` for PDF,
+  XML, CMS, Office, key files and octet-stream), up to 50 MB.
+- Emulator: `ComposeApp` shares a PDF in, sees its first page and the reader, and signing
+  with the test key stops at "isn't recognized" before any prompt (the test CA is not NCA's).
+  After the key is removed, a shared PDF waits on Add key (2c) and comes back once a key is
+  added. The Signed screen itself is reached only by the core's tests (fake NCA servers),
+  not on the emulator.
