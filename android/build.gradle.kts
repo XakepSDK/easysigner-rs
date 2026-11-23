@@ -1,8 +1,8 @@
 // kzsigner's APK. The Rust library comes from cargo (scripts/apk.sh copies it into the folder
 // given as -Pkzsigner.jniLibs); this only adds the Java side, resources and AndroidX, and signs.
 plugins {
-    id("com.android.application") version "8.10.1"
-    id("com.android.test") version "8.10.1" apply false
+    id("com.android.application") version "9.5.2"
+    id("com.android.test") version "9.5.2" apply false
 }
 
 val jniLibsDir = providers.gradleProperty("kzsigner.jniLibs").getOrElse("../target/android-jni")
@@ -13,7 +13,7 @@ layout.buildDirectory = file("../target/gradle")
 android {
     namespace = "kz.kzsigner"
     compileSdk = 35
-    buildToolsVersion = "35.0.0"
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "kz.kzsigner"
@@ -25,9 +25,9 @@ android {
 
     sourceSets["main"].apply {
         manifest.srcFile("AndroidManifest.xml")
-        java.srcDirs("java")
-        res.srcDirs("res")
-        jniLibs.srcDirs(jniLibsDir)
+        java.directories.add("java")
+        res.directories.add("res")
+        jniLibs.directories.add(jniLibsDir)
     }
 
     signingConfigs {

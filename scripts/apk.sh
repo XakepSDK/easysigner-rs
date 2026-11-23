@@ -5,8 +5,8 @@
 #
 #   ANDROID_HOME=... ANDROID_NDK_ROOT=... sh scripts/apk.sh
 #
-# Needs: the NDK (r27), build-tools 35.0.0, platforms;android-35 and a JDK 17 to 24 (Gradle
-# 8.14 runs on no newer one). Gradle itself is downloaded once (pinned version, checked against its SHA-256) into
+# Needs: the NDK (r27), build-tools 36.0.0, platforms;android-35 and a JDK 17 or newer (25
+# on CI). Gradle itself is downloaded once (pinned version, checked against its SHA-256) into
 # ~/.cache/kzsigner-gradle, or taken from KZSIGNER_GRADLE. Two builds of a commit give the same
 # APK.
 #
@@ -26,8 +26,8 @@ cd "$(dirname "$0")/.."
 export ANDROID_HOME
 TC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
 V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-GRADLE_VERSION=8.14.3
-GRADLE_SHA256=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531
+GRADLE_VERSION=9.9.2
+GRADLE_SHA256=971fcd7150ca4ba04852c0b2ca0d2d0ab9468e14b03473eab19528809914c76b
 
 TARGETS="aarch64-linux-android x86_64-linux-android"
 FEATURES=
@@ -90,15 +90,6 @@ else
     fi
 fi
 
-# Gradle 8.14 runs on JDK 17 to 24; GitHub's runners default to a newer one but also carry 17
-# and 21, named by JAVA_HOME_<n>_X64
-for n in 21 17; do
-    eval "j=\${JAVA_HOME_${n}_X64:-}"
-    if [ -n "$j" ]; then
-        export JAVA_HOME="$j"
-        break
-    fi
-done
 # shellcheck disable=SC2086
 "$GRADLE" -q -p android --no-daemon --console=plain $TASKS \
     -Pkzsigner.version="$V" -Pkzsigner.jniLibs="$(pwd)/$JNI"
@@ -107,5 +98,5 @@ cp target/gradle/outputs/apk/release/kzsigner-release.apk "$OUT"
 if [ -n "${KZSIGNER_SELFTEST:-}" ]; then
     cp target/gradle-uitest/outputs/apk/debug/uitest-debug.apk "$(dirname "$OUT")/kzsigner-uitest.apk"
 fi
-"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$OUT" | head -3
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$OUT" | head -3
 ls -la "$OUT"

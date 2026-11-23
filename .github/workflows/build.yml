@@ -181,7 +181,7 @@ jobs:
           key: android
       - name: Android SDK parts (pinned)
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "build-tools;35.0.0" "platforms;android-35" > /dev/null
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "build-tools;36.0.0" "platforms;android-35" > /dev/null
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - name: Release signing key (secrets; none for -dev versions)
         env:

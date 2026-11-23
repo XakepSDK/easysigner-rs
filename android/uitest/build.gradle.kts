@@ -10,7 +10,7 @@ layout.buildDirectory = file("../../target/gradle-uitest")
 android {
     namespace = "kz.kzsigner.uitest"
     compileSdk = 35
-    buildToolsVersion = "35.0.0"
+    buildToolsVersion = "36.0.0"
     targetProjectPath = ":"
 
     defaultConfig {
@@ -19,7 +19,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    sourceSets["main"].java.srcDirs("java")
+    sourceSets["main"].java.directories.add("java")
 
     signingConfigs {
         create("dev") {

@@ -42,8 +42,8 @@ It is distributed as an APK on the GitHub release page, next to the Windows and 
   emulator in CI. Optionally `armv7-linux-androideabi` for old phones.
 - **minSdk:** 30 (Android 11), target 35. Raised from 26 for the key store: per-use
   fingerprint-or-PIN keys (`setUserAuthenticationParameters`) need Android 11.
-- **Tooling:** cargo builds the .so (`scripts/apk.sh`), and Gradle (pinned 8.14.3, checked by
-  SHA-256; Android Gradle plugin 8.10.1) adds the Java side and signs. Gradle came in with
+- **Tooling:** cargo builds the .so (`scripts/apk.sh`), and Gradle (pinned 9.9.2, checked by
+  SHA-256; Android Gradle plugin 9.5.2) adds the Java side and signs. Gradle came in with
   GameActivity, which TalkBack support needs (AccessKit's Android adapter reads its view) and
   which is an AndroidX library. The NDK, build-tools, Gradle and Rust versions are pinned so the
   build stays reproducible; CI builds every commit twice and compares the APKs.
