@@ -40,6 +40,41 @@ impl Dialogs for Scripted {
 /// The window's language is global: one test at a time.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+/// Everything a person can press or type into must have a name a screen reader can say
+/// (Narrator, NVDA, Orca, TalkBack read the same tree these tests query).
+#[track_caller]
+fn all_named(h: &Harness<'_, App>, screen: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, NodeT};
+    let interactive = [
+        Role::Button,
+        Role::Link,
+        Role::TextInput,
+        Role::PasswordInput,
+        Role::MultilineTextInput,
+        Role::CheckBox,
+        Role::RadioButton,
+        Role::ComboBox,
+        Role::Switch,
+        Role::Slider,
+        Role::SpinButton,
+        Role::MenuItem,
+        Role::Tab,
+    ];
+    let unnamed: Vec<String> = h
+        .query_all(By::new().predicate(move |n| {
+            interactive.contains(&n.role())
+                && !n.is_hidden()
+                && n.label().is_none_or(|l| l.trim().is_empty())
+        }))
+        .map(|n| format!("{:?} at {:?}", n.accesskit_node().role(), n.rect()))
+        .collect();
+    assert!(
+        unnamed.is_empty(),
+        "{screen}: controls a screen reader can't name: {unnamed:#?}"
+    );
+}
+
 fn settle(h: &mut Harness<'_, App>) {
     for _ in 0..400 {
         h.run_steps(2);
@@ -72,12 +107,14 @@ fn sign_then_verify_in_the_window() {
         .with_size([780.0, 720.0])
         .build_ui_state(|ui, app: &mut App| app.ui(ui), app);
     h.run();
+    all_named(&h, "start");
     h.get_all_by_label("Sign a document")
         .next()
         .unwrap()
         .click();
     h.run();
     assert_eq!(h.state().screen, Screen::Sign);
+    all_named(&h, "sign, empty");
 
     // 1. document, 2. key and password
     dialogs.next(doc.clone());
@@ -114,6 +151,7 @@ fn sign_then_verify_in_the_window() {
         h.query_by_label_contains("ИВАНОВ АЛИБЕК").is_some(),
         "key details are shown"
     );
+    all_named(&h, "sign, key open");
 
     // the document can be read before signing (Art. 50)
     h.get_by_label("Open the document").click();
@@ -134,6 +172,7 @@ fn sign_then_verify_in_the_window() {
         h.query_by_label_contains("doc.txt is signed by ИВАНОВ АЛИБЕК")
             .is_some()
     );
+    all_named(&h, "signed");
 
     // check the new file
     h.get_by_label("Back").click();
@@ -155,6 +194,7 @@ fn sign_then_verify_in_the_window() {
         h.query_by_label_contains("Not changed since signing")
             .is_some()
     );
+    all_named(&h, "check report");
 
     // save the original document back out
     let back = dir.join("back.txt");
@@ -535,6 +575,7 @@ fn kept_key_signs_with_one_touch() {
             .is_none(),
         "no password for a kept key"
     );
+    all_named(&h, "sign, kept key");
     // the owner closes the prompt: nothing happens, no error
     chip.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     h.get_by_label("Sign").click();
@@ -566,6 +607,7 @@ fn kept_key_signs_with_one_touch() {
     h.run();
     h.get_by_label("Remove this key from the phone…").click();
     h.run();
+    all_named(&h, "remove question");
     h.get_by_label("Remove").click();
     settle(&mut h);
     assert!(h.state().stored_keys().is_empty());

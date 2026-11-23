@@ -61,12 +61,12 @@ ndk-context = "0.1"
 winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
 
 [target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
-eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland"] }
+eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }
 wgpu = { version = "30", optional = true, default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # Direct3D 12, with Windows' own software renderer (WARP) when there is no graphics driver
-eframe = { version = "0.37", optional = true, default-features = false, features = ["wgpu_no_default_features"] }
+eframe = { version = "0.37", optional = true, default-features = false, features = ["wgpu_no_default_features", "accesskit"] }
 wgpu = { version = "30", optional = true, default-features = false, features = ["dx12", "wgsl", "std"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
