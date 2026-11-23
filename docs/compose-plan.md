@@ -238,9 +238,12 @@ Most of the behaviour exists; these are new or different:
 
 ## After phase 6: Home is the only landing page
 
-- The app always opens on Home, with or without a key. With none, the Sign card says the
-  key is added the first time, and the key chip reads "Add key". Choosing a document to sign
-  with no key goes to Add key with the document waiting (2c), then on to Sign. Checking never
+- The app always opens on Home, with or without a key. With none, the key chip reads "Add
+  key", and "Sign a document" opens Add key first ("To sign, first add your key... then
+  choose the document"): the file picker can't say which of two files it wants, so the key
+  comes first, then the document picker opens by itself. With a key, the picker opens
+  directly. A document shared with no key goes to Add key with the document waiting (2c),
+  then on to Sign. Checking never
   needs a key. Removing the last key goes back to Home. (Earlier the app opened on Add key
   when there was none, which hid Check and repeated Add key as a second home.)
 - Adding a key refuses one not from NCA or another CA recognized in Kazakhstan, offline,

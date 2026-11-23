@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,7 +44,7 @@ import kz.kzsigner.hasFingerprint
 
 /** Screen 1: Sign a document, Check a signature, the key chip (to Your keys), and Share. */
 @Composable
-fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
+fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tooBig = stringResource(R.string.too_big)
@@ -73,6 +74,14 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
         }
     }
     val keys = model.keys?.keys.orEmpty()
+    val noKey = keys.isEmpty() && model.keys?.hidden != true
+    // back from Add key with the key that signing needed: on to the document
+    LaunchedEffect(model.pickDocument) {
+        if (model.pickDocument) {
+            model.pickDocument = false
+            pick.launch(arrayOf("*/*"))
+        }
+    }
     val confirm = if (keys.isEmpty()) R.string.home_sign_first else when (keys.firstOrNull()?.unlock) {
         Unlock.PASSWORD -> R.string.home_sign_password
         Unlock.FINGERPRINT, Unlock.FINGERPRINT_AND_PASSWORD -> R.string.home_sign_fingerprint
@@ -84,11 +93,19 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
             // the app's name is a wordmark: a fixed size, so large text leaves room for the chip
             Text("kzsigner", fontSize = with(LocalDensity.current) { 20.dp.toSp() }, fontWeight = FontWeight.Bold, softWrap = false, modifier = Modifier.weight(1f))
             Spacer(Modifier.width(12.dp))
-            Box { KeyChip(keys.firstOrNull()?.name, keys.isEmpty() && model.keys?.hidden != true, onKeys) }
+            Box { KeyChip(keys.firstOrNull()?.name, noKey, onKeys) }
         }
         Spacer(Modifier.size(8.dp))
         Surface(
-            onClick = { pick.launch(arrayOf("*/*")) },
+            onClick = {
+                if (noKey) {
+                    // two different files to pick: the key comes first, and Add key says so
+                    model.signAfterAdd = true
+                    onAddKey()
+                } else {
+                    pick.launch(arrayOf("*/*"))
+                }
+            },
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,

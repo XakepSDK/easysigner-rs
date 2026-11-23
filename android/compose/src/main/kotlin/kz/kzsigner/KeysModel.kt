@@ -75,6 +75,15 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     /** A key file opened with the app (Open with, Share), waiting for its password. */
     var incoming by mutableStateOf<KeyFile?>(null)
 
+    /**
+     * "Sign a document" tapped with no key: Add key comes first and says so, and once the key
+     * is added Home opens the document picker ([pickDocument]).
+     */
+    var signAfterAdd by mutableStateOf(false)
+
+    /** Home opens the document picker once (after adding the key that signing needed). */
+    var pickDocument by mutableStateOf(false)
+
     /** The document being signed: shared to the app, opened with it, or chosen on Home. */
     var document by mutableStateOf<DocFile?>(null)
 

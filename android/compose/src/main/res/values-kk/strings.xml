@@ -211,6 +211,7 @@
     <string name="copy_details">Толығырақты көшіру</string>
     <string name="copied">Көшірілді</string>
     <string name="who_signed_page">«Кім қол қойды» беті</string>
-    <string name="home_sign_first">Файлды таңдаңыз. Алғаш рет кілтіңізді қосасыз.</string>
+    <string name="home_sign_first">PDF, Word немесе кез келген файл</string>
     <string name="add_key_short">Кілт қосу</string>
+    <string name="sign_needs_key">Қол қою үшін алдымен кілтіңізді қосыңыз. Мұны бір рет жасайсыз, содан кейін құжатты таңдайсыз.</string>
 </resources>

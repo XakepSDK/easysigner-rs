@@ -133,6 +133,10 @@ fun AddKeyScreen(
         Screen(onBack, buttons = { MainButton(stringResource(R.string.choose_key_file), choose) }) {
             // 2c: a document shared before any key: it waits
             model.document?.let { InfoNotice(stringResource(R.string.shared_needs_key, it.name), R.drawable.ic_file) }
+            // "Sign a document" with no key: the key first, then the document
+            if (model.document == null && model.signAfterAdd) {
+                InfoNotice(stringResource(R.string.sign_needs_key), R.drawable.ic_pen)
+            }
             Title(stringResource(R.string.add_key_title))
             Body(stringResource(R.string.choose_key_hint))
             Small(stringResource(R.string.no_key_yet))

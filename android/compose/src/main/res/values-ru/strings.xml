@@ -217,6 +217,7 @@
     <string name="copy_details">Скопировать подробности</string>
     <string name="copied">Скопировано</string>
     <string name="who_signed_page">страница «Кто подписал»</string>
-    <string name="home_sign_first">Выберите файл. В первый раз вы добавите свой ключ.</string>
+    <string name="home_sign_first">PDF, Word или любой файл</string>
     <string name="add_key_short">Добавить ключ</string>
+    <string name="sign_needs_key">Чтобы подписать, сначала добавьте свой ключ. Это делается один раз, затем выберите документ.</string>
 </resources>

@@ -154,8 +154,15 @@ public class AppFlows {
         // Home, even with no key: checking needs none, and signing asks for one when needed
         see("Sign a document");
         see("Check a signature");
-        see("The first time, you add your key");
+        see("PDF, Word or any file");
         screen("android-1-home-no-key");
+        // signing with no key: two different files to pick, so the key comes first, and says so
+        tap("Sign a document");
+        see("To sign, first add your key");
+        see("Choose the key file");
+        screen("android-1-sign-no-key");
+        phone.device.pressBack();
+        see("Sign a document");
         // what TalkBack reads, through Compose's semantics
         if (!phone.appNames("Add key")) {
             phone.fail("the accessibility tree has no Add key. The tree:\n" + phone.tree());
@@ -269,7 +276,7 @@ public class AppFlows {
         see("from this phone\\?");
         screen("android-9-remove");
         tap("Remove");
-        see("The first time, you add your key");
+        see("PDF, Word or any file");
         Phone.say("the Compose app adds, lists and removes a key");
 
         // 2c: a PDF shared with no key waits on Add key, and comes back once one is added

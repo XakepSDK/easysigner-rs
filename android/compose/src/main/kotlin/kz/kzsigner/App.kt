@@ -100,7 +100,14 @@ fun App(model: KeysModel, finish: () -> Unit) {
 
     NavHost(nav, startDestination = start) {
         composable(Route.HOME) {
-            HomeScreen(model, onKeys = { nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD) })
+            HomeScreen(
+                model,
+                onKeys = {
+                    model.signAfterAdd = false
+                    nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD)
+                },
+                onAddKey = { nav.navigate(Route.ADD) },
+            )
         }
         composable(Route.SIGN) {
             val leave: () -> Unit = {
@@ -140,11 +147,22 @@ fun App(model: KeysModel, finish: () -> Unit) {
             )
         }
         composable(Route.ADD) {
+            val leave: () -> Unit = {
+                model.signAfterAdd = false
+                back()
+            }
+            BackHandler(onBack = leave)
             AddKeyScreen(
                 model,
-                onBack = back,
+                onBack = leave,
                 onAdded = {
                     when {
+                        // "Sign a document" with no key: Home, and its document picker
+                        model.signAfterAdd && model.document == null -> {
+                            model.signAfterAdd = false
+                            model.pickDocument = true
+                            nav.restart(Route.HOME)
+                        }
                         // 2c: straight back to the document
                         model.document != null && model.signed == null -> {
                             nav.restart(Route.HOME)

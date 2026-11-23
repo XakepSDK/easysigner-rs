@@ -213,6 +213,7 @@
     <string name="copy_details">Copy details</string>
     <string name="copied">Copied</string>
     <string name="who_signed_page">“Who signed” page</string>
-    <string name="home_sign_first">Choose a file. The first time, you add your key.</string>
+    <string name="home_sign_first">PDF, Word or any file</string>
     <string name="add_key_short">Add key</string>
+    <string name="sign_needs_key">To sign, first add your key. You do this once, then choose the document.</string>
 </resources>
