@@ -5,7 +5,6 @@ import android.util.Log;
 
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.uiautomator.By;
-import androidx.test.uiautomator.BySelector;
 import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
@@ -164,30 +163,77 @@ final class Phone {
 
     /**
      * Whether kzsigner's accessibility tree has something whose text or description contains
-     * the name (what TalkBack reads; a button's label may carry its explanation too). The app
-     * builds its tree once a reader first asks for it, so this asks for up to 15 seconds.
+     * the name: what TalkBack reads (a button's label may carry its explanation too). The tree
+     * is walked node by node, as a screen reader does, hidden nodes included (UI Automator's
+     * own search leaves some out). The app builds its tree once a reader first asks for it, so
+     * this asks for up to 15 seconds.
      */
     boolean appNames(String name) {
-        Pattern p = Pattern.compile(".*" + Pattern.quote(name) + ".*", Pattern.DOTALL);
-        BySelector text = By.pkg(APP).text(p);
-        BySelector desc = By.pkg(APP).desc(p);
         for (int i = 0; i < 15; i++) {
-            if (device.hasObject(text) || device.hasObject(desc)) {
-                return true;
+            for (android.view.accessibility.AccessibilityWindowInfo w : automation().getWindows()) {
+                android.view.accessibility.AccessibilityNodeInfo root = w.getRoot();
+                if (root != null && APP.contentEquals(String.valueOf(root.getPackageName()))
+                        && has(root, name, 0)) {
+                    return true;
+                }
             }
             sleep(1000);
         }
         return false;
     }
 
-    /** The screen's accessibility tree, as XML. */
+    private static android.app.UiAutomation automation() {
+        android.app.UiAutomation a = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        android.accessibilityservice.AccessibilityServiceInfo info = a.getServiceInfo();
+        int want = android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                | android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        if ((info.flags & want) != want) {
+            info.flags |= want;
+            a.setServiceInfo(info);
+        }
+        return a;
+    }
+
+    private static boolean has(android.view.accessibility.AccessibilityNodeInfo n, String name, int depth) {
+        if (n == null || depth > 40) {
+            return false;
+        }
+        if (String.valueOf(n.getText()).contains(name)
+                || String.valueOf(n.getContentDescription()).contains(name)) {
+            return true;
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            if (has(n.getChild(i), name, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** kzsigner's accessibility tree, one node a line, hidden nodes included. */
     String tree() {
-        try {
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            device.dumpWindowHierarchy(out);
-            return out.toString();
-        } catch (IOException e) {
-            return "no accessibility tree: " + e;
+        StringBuilder out = new StringBuilder();
+        for (android.view.accessibility.AccessibilityWindowInfo w : automation().getWindows()) {
+            android.view.accessibility.AccessibilityNodeInfo root = w.getRoot();
+            if (root != null && APP.contentEquals(String.valueOf(root.getPackageName()))) {
+                print(root, 0, out);
+            }
+        }
+        return out.length() > 0 ? out.toString() : "(no kzsigner window)";
+    }
+
+    private static void print(android.view.accessibility.AccessibilityNodeInfo n, int depth, StringBuilder out) {
+        if (n == null || depth > 40) {
+            return;
+        }
+        out.append("  ".repeat(depth)).append(n.getClassName())
+                .append(" text=").append(n.getText())
+                .append(" desc=").append(n.getContentDescription())
+                .append(" visible=").append(n.isVisibleToUser())
+                .append(" important=").append(n.isImportantForAccessibility())
+                .append(" children=").append(n.getChildCount()).append('\n');
+        for (int i = 0; i < n.getChildCount(); i++) {
+            print(n.getChild(i), depth + 1, out);
         }
     }
 
