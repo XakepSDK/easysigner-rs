@@ -38,8 +38,7 @@ public class ReleasedApp {
         // screen's choices and the language menu
         for (String want : new String[] {"Sign a document", "Check a signed file", "English"}) {
             if (!phone.appNames(want)) {
-                phone.dumpTree();
-                phone.fail("the accessibility tree has no \"" + want + "\": a screen reader can't see it");
+                phone.fail("the accessibility tree has no \"" + want + "\": a screen reader can't see it. The tree:\n" + phone.tree());
             }
         }
         Phone.say("accessibility tree OK");

@@ -65,12 +65,28 @@ final class Phone {
         sh("am start -W -n " + APP + "/.MainActivity " + extras);
     }
 
+    /** When the tests last forgot the app's log, in seconds since 1970 (the emulator's clock). */
+    private double since;
+
+    /** The app's log (tag KZSELFTEST) since clearLog. */
     String appLog() {
-        return sh("logcat -d -s KZSELFTEST:*");
+        StringBuilder out = new StringBuilder();
+        for (String line : sh("logcat -d -v epoch -s KZSELFTEST:*").split("\n")) {
+            String[] f = line.trim().split("\\s+", 2);
+            try {
+                if (Double.parseDouble(f[0]) >= since) {
+                    out.append(line).append('\n');
+                }
+            } catch (NumberFormatException e) {
+                // "--------- beginning of main"
+            }
+        }
+        return out.toString();
     }
 
+    /** Forgets the app's log so far (the log itself stays, with the tests' own lines). */
     void clearLog() {
-        sh("logcat -c");
+        since = Double.parseDouble(sh("date +%s").trim());
     }
 
     /** Types the PIN and Enter: into a PIN prompt if one is up, else ignored by the screen. */
@@ -157,14 +173,14 @@ final class Phone {
         return device.hasObject(text) || device.hasObject(desc);
     }
 
-    /** The screen's accessibility tree, into the test log. */
-    void dumpTree() {
+    /** The screen's accessibility tree, as XML. */
+    String tree() {
         try {
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
             device.dumpWindowHierarchy(out);
-            say("accessibility tree:\n" + out);
+            return out.toString();
         } catch (IOException e) {
-            say("no accessibility tree: " + e);
+            return "no accessibility tree: " + e;
         }
     }
 
