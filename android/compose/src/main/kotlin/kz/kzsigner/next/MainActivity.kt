@@ -1,35 +1,58 @@
 package kz.kzsigner.next
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
-import java.io.File
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import java.lang.ref.WeakReference
+import kotlinx.coroutines.launch
+import kz.kzsigner.next.ui.KzsignerTheme
 
-class MainActivity : ComponentActivity() {
+/**
+ * The one activity. AppCompat for the per-app language on Android 11 and 12 (13 and newer
+ * have it built in); the screens are Compose.
+ */
+class MainActivity : AppCompatActivity() {
+    private val model: KeysModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        current = WeakReference(this)
         enableEdgeToEdge()
-        // the vault file name the egui app uses (src/android.rs); this app has its own copy
-        // until it replaces that one (phase 6)
-        val vault = File(filesDir, "keys.kzs")
+        if (savedInstanceState == null) take(intent)
         setContent {
             KzsignerTheme {
-                KeysScreen(vault)
+                App(model, finish = ::finish)
             }
         }
     }
-}
 
-@Composable
-fun KzsignerTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
-        content = content,
-    )
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        take(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        current = WeakReference(this)
+        // a screen lock set in Settings meanwhile changes what a new key opens with
+        model.refresh()
+    }
+
+    /** A key file opened with the app ("Open with kzsigner"). */
+    private fun take(intent: Intent?) {
+        val uri = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
+        lifecycleScope.launch { model.incoming = model.read(uri) }
+    }
+
+    companion object {
+        private var current: WeakReference<Activity>? = null
+
+        /** The activity on screen, for the key chip's prompt. */
+        fun current(): Activity? = current?.get()
+    }
 }

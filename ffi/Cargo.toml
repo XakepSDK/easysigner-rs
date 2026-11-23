@@ -22,3 +22,4 @@ bindgen = ["uniffi/cli"]
 [dependencies]
 kzsigner = { path = "..", default-features = false }
 uniffi = "0.32.2"
+zeroize = "1"

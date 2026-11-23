@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The test APK's own parts; package, runner and SDK levels come from build.gradle.kts -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- test key files (tests/fixtures/keys), opened in the Compose app as "Open with" does -->
+        <provider
+            android:name=".KeyFiles"
+            android:authorities="kz.kzsigner.uitest.keys"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

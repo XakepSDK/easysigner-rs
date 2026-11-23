@@ -116,3 +116,27 @@ Most of the behaviour exists; these are new or different:
   of a release.
 - The emulator job runs `ComposeApp` (android/uitest): the app starts and its keys screen
   shows "No keys yet", which only a working UniFFI call can produce.
+
+## Where phase 2 ended
+
+- The core's `Vault` object (ffi): `keys()` with each key's unlock and why it can't sign
+  (expired, not valid yet, GOST 2004; revocation is checked when signing), `add_key`,
+  `remove_key`, `unlock` for a list hidden in the egui app, `new_key_unlock`. `add_key` says
+  why a file was refused (`WrongPassword`, `NotAKey`, `KeyCantSign`, `AlreadyAdded`,
+  `Cancelled`) and checks those before any prompt. `p12::problem` tells a wrong password
+  from a file that is not a key.
+- The chip is the UniFFI foreign trait `Chip`, implemented by `KeystoreChip.kt`: a port of
+  KeyGuard.java with the same key parameters and the same sealed layout, so the vault file
+  moves over unchanged. The Rust test `reads_the_egui_apps_vault` checks a vault written by
+  the egui side, hidden list included, opens through the app's chip.
+- Screens 2, 2b, 3f (when adding), 7, 7b and 7c, after the design. The app opens on Your
+  keys, or on Add key when there are none; Home comes with signing. "Open with kzsigner" on
+  a .p12 goes to Add key with the file chosen.
+- Language: AppCompat's per-app language (Android 11 and 12 need it; 13+ have it built in),
+  so the activity is an `AppCompatActivity`.
+- Moved to phase 3, where the file comes in: 2c (a shared document before any key) and 3e
+  (signing with the password on a phone with no screen lock). The password path itself
+  works already: a key added on such a phone is kept under its own password.
+- Emulator: `ComposeApp` opens test keys from the test APK (`KeyFiles`), checks the GOST
+  2004 screen, the wrong-password hint for a Russian keyboard, adds the key with a touch of
+  the fingerprint sensor, and removes it.

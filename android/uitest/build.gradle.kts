@@ -21,7 +21,12 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    sourceSets["main"].java.directories.add("java")
+    sourceSets["main"].apply {
+        manifest.srcFile("AndroidManifest.xml")
+        java.directories.add("java")
+        // the test keys (password Qwerty12), served by KeyFiles
+        assets.directories.add("../../tests/fixtures/keys")
+    }
 
     signingConfigs {
         create("dev") {

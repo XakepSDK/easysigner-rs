@@ -2193,6 +2193,7 @@ version = "0.1.0-dev"
 dependencies = [
  "kzsigner",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

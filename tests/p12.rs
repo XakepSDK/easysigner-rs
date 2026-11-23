@@ -154,3 +154,21 @@ fn not_pkcs12() {
     .unwrap();
     assert!(e.0.contains("no private key"), "{e}");
 }
+
+#[test]
+fn problem_tells_wrong_password_from_not_a_key() {
+    use kzsigner::p12::Problem;
+    let f = std::fs::read("tests/fixtures/keys/alice_rsa.p12").unwrap();
+    assert_eq!(p12::problem(&f, "Qwerty12"), None);
+    assert_eq!(p12::problem(&f, "Qwerty1"), Some(Problem::WrongPassword));
+    // typed with the keyboard in Russian: the same keys, other letters
+    assert_eq!(p12::problem(&f, "Йцукен12"), Some(Problem::WrongPassword));
+    assert_eq!(
+        p12::problem(b"%PDF-1.7 not a key", "Qwerty12"),
+        Some(Problem::NotAKey)
+    );
+    assert_eq!(
+        p12::problem(&f[..f.len() / 2], "Qwerty12"),
+        Some(Problem::NotAKey)
+    );
+}

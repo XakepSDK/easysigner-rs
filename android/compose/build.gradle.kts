@@ -93,6 +93,10 @@ dependencies {
     implementation("androidx.compose.material3:material3:1.5.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.navigation:navigation-compose:2.10.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.1")
+    // the per-app language on Android 11 and 12, and its theme
+    implementation("androidx.appcompat:appcompat:1.8.0")
     // the UniFFI bindings call the Rust library through JNA; the aar carries its Android .so
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.21"))

@@ -121,8 +121,35 @@ fn pick(
     Ok((key, pkcs8))
 }
 
-/// Checks the MAC and returns the AuthenticatedSafe bytes.
-fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
+/// Why a key file did not open, for screens that pick their own words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Problem {
+    /// Not a .p12 key at all, or one without a usable private key.
+    NotAKey,
+    WrongPassword,
+}
+
+/// Why [`open`] fails on this file and password, or None when it opens.
+pub fn problem(p12: &[u8], password: &str) -> Option<Problem> {
+    let Ok((auth_safe, mac)) = pfx_parts(p12) else {
+        return Some(Problem::NotAKey);
+    };
+    let has_mac = mac.is_some();
+    if let Some(mac) = mac
+        && !check_mac(&mac, &auth_safe, password).unwrap_or(false)
+    {
+        return Some(Problem::WrongPassword);
+    }
+    match open_with_pkcs8(p12, password, None) {
+        Ok(_) => None,
+        // without a MAC, a wrong password shows only as contents that don't decrypt
+        Err(_) if !has_mac => Some(Problem::WrongPassword),
+        Err(_) => Some(Problem::NotAKey),
+    }
+}
+
+/// The AuthenticatedSafe bytes and the MAC, unchecked.
+fn pfx_parts(p12: &[u8]) -> Result<(Vec<u8>, Option<Tlv<'_>>)> {
     let not_p12 = |e: Error| {
         Error::new(trf(
             "Could not open the key file: it is not a PKCS#12 (.p12) key ({})",
@@ -142,8 +169,14 @@ fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
         )));
     }
     let auth_safe = ci[1].inner().and_then(|o| o.octets()).map_err(not_p12)?;
-    if let Some(mac) = pfx.get(2) {
-        let ok = check_mac(mac, &auth_safe, password).unwrap_or(false);
+    Ok((auth_safe, pfx.get(2).copied()))
+}
+
+/// Checks the MAC and returns the AuthenticatedSafe bytes.
+fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
+    let (auth_safe, mac) = pfx_parts(p12)?;
+    if let Some(mac) = mac {
+        let ok = check_mac(&mac, &auth_safe, password).unwrap_or(false);
         if !ok {
             return Err(Error::new(tr(
                 "Could not open the key file. The password is probably wrong.",
