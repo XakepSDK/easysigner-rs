@@ -146,11 +146,26 @@ final class Phone {
         return true;
     }
 
-    /** Whether kzsigner's accessibility tree names something exactly so (what TalkBack reads). */
+    /**
+     * Whether kzsigner's accessibility tree has something whose text or description contains
+     * the name (what TalkBack reads; a button's label may carry its explanation too).
+     */
     boolean appNames(String name) {
-        BySelector text = By.pkg(APP).text(name);
-        BySelector desc = By.pkg(APP).desc(name);
+        Pattern p = Pattern.compile(".*" + Pattern.quote(name) + ".*", Pattern.DOTALL);
+        BySelector text = By.pkg(APP).text(p);
+        BySelector desc = By.pkg(APP).desc(p);
         return device.hasObject(text) || device.hasObject(desc);
+    }
+
+    /** The screen's accessibility tree, into the test log. */
+    void dumpTree() {
+        try {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            device.dumpWindowHierarchy(out);
+            say("accessibility tree:\n" + out);
+        } catch (IOException e) {
+            say("no accessibility tree: " + e);
+        }
     }
 
     int fingers() {
