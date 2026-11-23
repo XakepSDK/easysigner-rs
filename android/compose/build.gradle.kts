@@ -1,5 +1,5 @@
 // The Kotlin + Compose app (docs/compose-plan.md), built next to the egui app until it covers
-// every screen: kz.kzsigner.next, so both install side by side. The Rust core comes from cargo
+// every screen: kz.kzsigner, so both install side by side. The Rust core comes from cargo
 // (libkzsigner_ffi.so, copied by scripts/apk.sh into -Pkzsigner.ffiLibs) and its Kotlin
 // bindings from uniffi-bindgen (-Pkzsigner.ffiKotlin); neither is checked in.
 plugins {
@@ -14,17 +14,19 @@ val appVersion = providers.gradleProperty("kzsigner.version").getOrElse("0.0.0-d
 layout.buildDirectory = file("../../target/gradle-compose")
 
 android {
-    namespace = "kz.kzsigner.next"
+    namespace = "kz.kzsigner"
     compileSdk = 37
     // Compose 1.13 asks for 37.1 or newer; the whole build uses one platform
     compileSdkMinor = 2
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        applicationId = "kz.kzsigner.next"
+        // the id and signing key of the earlier egui app, so it installs over it and keeps the
+        // keys (the same vault file and chip keys, see KeystoreChip.kt)
+        applicationId = "kz.kzsigner"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
+        versionCode = 2
         versionName = appVersion
         // the architectures the core is built for; JNA's aar carries seven more
         ndk.abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
@@ -33,7 +35,6 @@ android {
     sourceSets["main"].apply {
         // the generated bindings (uniffi-bindgen), outside the module
         kotlin.directories.add(ffiKotlin)
-        res.directories.add("../res")
         jniLibs.directories.add(ffiLibs)
     }
 

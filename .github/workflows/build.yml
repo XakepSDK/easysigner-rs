@@ -194,9 +194,10 @@ jobs:
             echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
             echo "KZSIGNER_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
           fi
-      - name: Build the APK
+      - name: Build the APK, and the emulator tests
         env:
           KZSIGNER_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KZSIGNER_UITEST: 1
         run: sh scripts/apk.sh
       - name: Same APK when built again in another folder
         id: again
@@ -215,8 +216,6 @@ jobs:
               exit 1
             }
           done
-      - name: The emulator test copy (x86_64, with the test of the real screens)
-        run: KZSIGNER_SELFTEST=1 sh scripts/apk.sh
       - name: The second build must have matched (checked above)
         if: steps.again.outcome != 'success'
         run: exit 1
@@ -228,8 +227,8 @@ jobs:
           path: dist/
       - uses: actions/upload-artifact@v4
         with:
-          name: android-selftest
-          path: target/apk-selftest/
+          name: android-uitest
+          path: target/apk-uitest/
   # the APK on emulators: the oldest Android the app supports, the one it targets, the newest
   android-emulator:
     needs: android
@@ -246,14 +245,14 @@ jobs:
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          name: android-selftest
-          path: selftest
+          name: android-uitest
+          path: uitest
       - name: KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Starts, Back works, the security chip code and the real screens pass their tests
+      - name: Keys, signing, checking and the security chip, as a person uses them
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
@@ -261,7 +260,7 @@ jobs:
           target: google_apis
           disable-animations: true
           disk-size: 2048M
-          script: sh scripts/android-selftest.sh dist/kzsigner-[0-9]*-android.apk selftest/kzsigner-selftest.apk selftest/kzsigner-uitest.apk dist/kzsigner-next-*-android.apk
+          script: sh scripts/android-selftest.sh dist/kzsigner-[0-9]*-android.apk uitest/kzsigner-uitest.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -287,7 +286,5 @@ jobs:
         run: |
           V=${{ needs.build.outputs.version }}
           if gh release view "v$V" >/dev/null 2>&1; then echo "v$V already released"; exit 0; fi
-          # the Compose app is not released until it replaces the egui one (docs/compose-plan.md)
-          rm -f dist/kzsigner-next-*
-          cat dist/*.sha256 | grep -v kzsigner-next- > dist/SHA256SUMS && rm dist/*.sha256
+          cat dist/*.sha256 > dist/SHA256SUMS && rm dist/*.sha256
           gh release create "v$V" --target "$GITHUB_SHA" --title "kzsigner $V" --notes-file "release-notes/$V.md" dist/*

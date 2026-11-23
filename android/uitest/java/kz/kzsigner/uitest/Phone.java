@@ -21,21 +21,12 @@ import java.util.regex.Pattern;
 final class Phone {
     static final String PIN = "1111";
     static final String APP = "kz.kzsigner";
-    /** The Kotlin + Compose app, installed next to it until it replaces it. */
-    static final String NEXT = "kz.kzsigner.next";
     static final String TAG = "KZUITEST";
 
     final UiDevice device =
             UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
 
-    /** Which app the tests drive: {@link #APP} or {@link #NEXT}. */
-    String app = APP;
-
-    Phone() {}
-
-    Phone(String app) {
-        this.app = app;
-    }
+    final String app = APP;
 
     String sh(String command) {
         try {
@@ -56,7 +47,7 @@ final class Phone {
     /** Fails the test with a screenshot and the app's log. */
     void fail(String why) {
         shot("android-fail");
-        say("app log:\n" + sh("logcat -d -s KZSELFTEST:* kzsigner:* RustStdoutStderr:* AndroidRuntime:* DEBUG:*"));
+        say("app log:\n" + sh("logcat -d -s KZSELFTEST:* kzsigner:* AndroidRuntime:* DEBUG:*"));
         org.junit.Assert.fail(why);
     }
 
@@ -70,7 +61,7 @@ final class Phone {
         return !sh("pidof " + app).trim().isEmpty();
     }
 
-    /** Starts kzsigner's activity, with extras as in "am start" (e.g. "--ez selftest true"). */
+    /** Starts kzsigner's activity, with extras as in "am start" (e.g. "--ez chiptest true"). */
     void start(String extras) {
         sh("am start -W -n " + app + "/.MainActivity " + extras);
     }

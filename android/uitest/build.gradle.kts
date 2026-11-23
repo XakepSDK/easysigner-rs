@@ -1,6 +1,6 @@
 // The emulator tests (UI Automator), as their own APK: kz.kzsigner.uitest. It runs in its own
-// process ("self-instrumenting"), so it keeps going while kzsigner is restarted, uninstalled
-// or replaced by the test copy. scripts/android-selftest.sh installs and runs it on CI.
+// process ("self-instrumenting"), so it keeps going while kzsigner is restarted or cleared.
+// scripts/android-selftest.sh installs and runs it on CI.
 plugins {
     id("com.android.test")
 }
@@ -13,7 +13,7 @@ android {
     // Compose 1.13 asks for 37.1 or newer; the whole build uses one platform
     compileSdkMinor = 2
     buildToolsVersion = "37.0.0"
-    targetProjectPath = ":"
+    targetProjectPath = ":compose"
 
     defaultConfig {
         minSdk = 30

@@ -159,11 +159,6 @@ impl App {
             return;
         };
         self.message = Some(match std::fs::write(&out, &data) {
-            // Android's own "Save as" comes next and says where it went
-            Ok(()) if cfg!(target_os = "android") => {
-                self.dialogs.saved(&out);
-                return;
-            }
             Ok(()) => (
                 trf("Saved {} bytes to\n{}", &[&data.len(), &out.display()]),
                 false,

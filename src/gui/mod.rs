@@ -34,9 +34,7 @@ pub trait Dialogs {
     fn open(&mut self, field: &'static str, start: Option<&Path>) -> Option<PathBuf>;
     /// The save location; the system dialog asks before replacing a file.
     fn save(&mut self, suggested: &Path) -> Option<PathBuf>;
-    /// Called after `path` (from [`Dialogs::save`]) was written.
-    fn saved(&mut self, _path: &Path) {}
-    /// Shows a saved file: its folder on the desktop, the share sheet on a phone.
+    /// Shows a saved file in its folder.
     fn reveal(&mut self, path: &Path) {
         show_in_folder(path);
     }
@@ -68,10 +66,8 @@ pub enum DialogEvent {
 }
 
 /// The operating system's file dialogs.
-#[cfg(not(target_os = "android"))]
 pub struct SystemDialogs;
 
-#[cfg(not(target_os = "android"))]
 impl Dialogs for SystemDialogs {
     fn open(&mut self, _field: &'static str, start: Option<&Path>) -> Option<PathBuf> {
         let mut d = rfd::FileDialog::new();
@@ -94,7 +90,6 @@ impl Dialogs for SystemDialogs {
 }
 
 /// Opens the window and runs until it is closed. `file`: a document, .cms or key to start with.
-#[cfg(not(target_os = "android"))]
 pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
     i18n::set(i18n::detect());
     let options = eframe::NativeOptions {
@@ -126,17 +121,14 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
     .map_err(|e| trf("Could not open the window: {}", &[&e]))
 }
 
-#[cfg(not(target_os = "android"))]
 struct Window(App);
 
-#[cfg(not(target_os = "android"))]
 impl Window {
     fn new(app: App) -> Window {
         Window(app)
     }
 }
 
-#[cfg(not(target_os = "android"))]
 impl eframe::App for Window {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| self.0.ui(ui));
@@ -613,19 +605,6 @@ impl App {
         }
         ui.add_space(18.0);
         card(ui, |ui| {
-            if cfg!(target_os = "android") {
-                ui.horizontal_top(|ui| {
-                    icons::show(ui, Icon::Share, 24.0, Tone::Muted.color(ui));
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(tr("Got a file in Telegram, WhatsApp or e-mail?")).strong());
-                        ui.add(egui::Label::new(Tone::Muted.text(
-                            ui,
-                            tr("Tap Share or Open with on the file, then choose kzsigner. It opens in the right place."),
-                        )).wrap());
-                    });
-                });
-                return;
-            }
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
                 icons::show(ui, Icon::Download, 28.0, Tone::Muted.color(ui));
@@ -670,28 +649,6 @@ impl App {
             field.shown = current.clone();
         }
         let dialogs = &mut self.dialogs;
-        if cfg!(target_os = "android") {
-            // a phone has no paths to type: one big button opens Android's file chooser
-            let w = ui.available_width();
-            let text = if current.is_some() {
-                tr("Choose another…")
-            } else {
-                tr("Choose a file…")
-            };
-            // the document fields show their file in a title above; the others show it here
-            if let Some(c) = current
-                && !matches!(id, "doc" | "cms")
-            {
-                file_title(ui, c);
-            }
-            if icons::button(ui, Icon::File, text, 15.0, egui::vec2(w, 44.0), false)
-                .labelled_by(l.id)
-                .clicked()
-            {
-                chosen = dialogs.open(id, current.as_deref());
-            }
-            return chosen;
-        }
         ui.horizontal(|ui| {
             let w = ui.available_width() - 90.0;
             let r = ui

@@ -9,9 +9,7 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer", "dep:accesskit_winit"]
-# the emulator test copy of the Android app (scripts/apk.sh, KZSIGNER_SELFTEST=1)
-selftest = ["gui", "dep:egui_kittest"]
+gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer"]
 
 [dependencies]
 gost94 = "0.11"
@@ -32,6 +30,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 lexopt = "0.3"
 rpassword = "7"
 eframe = { version = "0.37", optional = true, default-features = false }
+# file dialogs in the window (the window is desktop only: the Android app is android/compose)
+rfd = { version = "0.18", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
 ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
 cbc = "0.2.1"
@@ -50,19 +50,7 @@ argon2 = { version = "0.6", default-features = false, features = ["alloc", "zero
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
 zeroize = "1"
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
-rfd = { version = "0.18", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
-
-[target.'cfg(target_os = "android")'.dependencies]
-egui_kittest = { version = "0.37", optional = true }
-# GameActivity (AndroidX): the on-screen keyboard, and the view AccessKit's TalkBack adapter needs
-eframe = { version = "0.37", optional = true, default-features = false, features = ["android-game-activity", "glow", "accesskit"] }
-accesskit_winit = { version = "0.34", optional = true, default-features = false, features = ["accesskit_android", "rwh_06"] }
-jni = "0.22"
-ndk-context = "0.1"
-winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
-
-[target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
+[target.'cfg(not(windows))'.dependencies]
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -72,14 +60,8 @@ wgpu = { version = "30", optional = true, default-features = false, features = [
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["android", "ffi"]
+members = ["ffi"]
 default-members = ["."]
-
-# jni-macros 0.22.4 (used by android-activity) writes its generated checks in HashMap order,
-# which changes from one build to the next: the Android library was not reproducible. The copy
-# in third_party sorts them; see third_party/README.md.
-[patch.crates-io]
-jni-macros = { path = "third_party/jni-macros" }
 
 [profile.release]
 opt-level = "z"

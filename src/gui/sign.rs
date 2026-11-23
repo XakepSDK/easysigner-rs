@@ -371,9 +371,7 @@ impl App {
         });
         card(ui, |ui| {
             file_title_with(ui, &d.saved, Icon::FileCheck);
-            // on Android the file is in the app's own folder until Android's Save as or Share
-            // takes it somewhere the user can see
-            if !cfg!(target_os = "android") {
+            {
                 ui.label(
                     Tone::Muted.text(
                         ui,
@@ -408,28 +406,9 @@ impl App {
             warning(ui, w);
         }
         ui.add_space(14.0);
-        let android = cfg!(target_os = "android");
         action_row(ui, self.narrow, |ui, size, min| {
-            let (icon, reveal) = if android {
-                (Icon::Share, tr("Share"))
-            } else {
-                (Icon::Folder, tr("Show in folder"))
-            };
-            if icons::button(ui, icon, reveal, size, min, true).clicked() {
+            if icons::button(ui, Icon::Folder, tr("Show in folder"), size, min, true).clicked() {
                 self.dialogs.reveal(&d.saved);
-            }
-            if android
-                && icons::button(
-                    ui,
-                    Icon::Download,
-                    tr("Save to the phone…"),
-                    size,
-                    min,
-                    false,
-                )
-                .clicked()
-            {
-                self.dialogs.saved(&d.saved);
             }
             if icons::button(ui, Icon::Pen, tr("Sign another document"), size, min, false).clicked()
             {
@@ -710,7 +689,6 @@ impl App {
             self.message = Some((trf("Could not save: {}", &[&e]), true));
             return;
         }
-        self.dialogs.saved(&out);
         let doc_name = doc
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

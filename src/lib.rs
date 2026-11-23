@@ -1,7 +1,5 @@
 //! kzsigner: sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer.
 
-#[cfg(all(target_os = "android", feature = "gui"))]
-pub mod android;
 pub mod cert;
 pub mod cms;
 pub mod crl;

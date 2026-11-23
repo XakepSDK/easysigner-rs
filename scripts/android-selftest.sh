@@ -1,25 +1,16 @@
 #!/bin/sh
 # Runs on CI's Android emulators (see .github/workflows/build.yml):
 #
-#   sh scripts/android-selftest.sh APK SELFTEST_APK UITEST_APK [NEXT_APK]
+#   sh scripts/android-selftest.sh APK UITEST_APK
 #
-# The tests are UI Automator tests in android/uitest (UITEST_APK, built next to the test copy
-# by KZSIGNER_SELFTEST=1 sh scripts/apk.sh); they run on the emulator in their own process.
-# This script only installs the APKs, runs the tests, and does the one thing a test on the
-# phone can't: touching the virtual fingerprint sensor, while a test logs "FINGER n".
-#
-# 1. ReleasedApp, with APK (the one released): starts, shows its start screen to screen
-#    readers, keeps running after Back, and its security chip code works with a screen PIN.
-# 2. TestCopy, with SELFTEST_APK: the test of the real screens (src/android/selftest.rs),
-#    then a fingerprint-only key with fingers enrolled through Settings.
-# 3. ComposeApp, with NEXT_APK when given (the Kotlin + Compose app, docs/compose-plan.md):
-#    it starts and shows the keys screen, which only the Rust core can fill.
+# The tests are UI Automator tests in android/uitest (UITEST_APK, built by
+# KZSIGNER_UITEST=1 sh scripts/apk.sh); they run on the emulator in their own process. This
+# script only installs the APKs, runs the tests (AppFlows), and does the one thing a test on
+# the phone can't: touching the virtual fingerprint sensor, while a test logs "FINGER n".
 # Screenshots: android-*.png, also printed into the log.
 set -u
 APK=$1
-TEST_APK=$2
-UITEST_APK=$3
-NEXT_APK=${4:-}
+UITEST_APK=$2
 RUNNER=kz.kzsigner.uitest/androidx.test.runner.AndroidJUnitRunner
 
 # a screenshot, also printed into the log (base64 between markers): CI's artifacts are not
@@ -59,11 +50,4 @@ run() {
 
 adb install -r "$UITEST_APK" || exit 1
 adb install -r "$APK" || exit 1
-run ReleasedApp
-adb uninstall kz.kzsigner > /dev/null
-adb install -r "$TEST_APK" || exit 1
-run TestCopy
-if [ -n "$NEXT_APK" ]; then
-    adb install -r "$NEXT_APK" || exit 1
-    run ComposeApp
-fi
+run AppFlows
