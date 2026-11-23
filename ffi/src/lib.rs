@@ -17,6 +17,9 @@ use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
+mod sign;
+pub use sign::*;
+
 /// Why a call failed.
 #[derive(Debug, uniffi::Error)]
 pub enum CoreError {
@@ -94,6 +97,11 @@ pub enum CantSign {
     NotYetValid,
     /// A GOST 2004 key: NCA no longer gives its signatures a signing time.
     Gost2004,
+    /// NCA says it was revoked (found when signing).
+    Revoked,
+    /// Not a key from NCA (Kazakhstan's certification authority), or NCA doesn't know it
+    /// (found when signing).
+    NotRecognized,
 }
 
 /// What opens a saved key each time it signs.

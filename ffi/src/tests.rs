@@ -262,3 +262,5 @@ fn reads_the_egui_apps_vault() {
     let key = s.key(&id, None, &Prompt::default()).unwrap();
     assert_eq!(key.alias, "alice");
 }
+
+mod sign;
