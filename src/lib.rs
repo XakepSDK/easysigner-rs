@@ -126,6 +126,24 @@ impl Engine {
         Ok(r)
     }
 
+    /// Signs a PDF with the signer's box on the Who signed page ([`pdf::whosigned`]): the
+    /// first signer adds the page and locks the PDF to signatures and form filling. The key
+    /// is checked first.
+    pub fn sign_pdf_page(
+        &self,
+        input: &[u8],
+        key: &Key,
+        tsa_url: Option<&str>,
+        ocsp_url: Option<&str>,
+        page: &pdf::whosigned::WhoSigned,
+    ) -> Result<SignResult> {
+        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
+        let mut r = pdf::sign_with(input, key, tsa_url, &self.trust, pdf::Look::WhoSigned(page))?;
+        warnings.append(&mut r.warnings);
+        r.warnings = warnings;
+        Ok(r)
+    }
+
     /// Signs a document known only by its hash into a detached .cms; see [`sign::sign_hash`].
     /// The key is checked first.
     pub fn sign_hash(

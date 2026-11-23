@@ -529,7 +529,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("This JPEG logo is not supported (use 8 bits per channel), or use a PNG.", "Бұл JPEG логотипіне қолдау көрсетілмейді (арнаға 8 бит қолданыңыз) немесе PNG қолданыңыз.", "Этот логотип JPEG не поддерживается (нужны 8 бит на канал), или используйте PNG."),
     ("The page is too small for the stamp.", "Бет мөр үшін тым кішкентай.", "Страница слишком мала для штампа."),
     ("There is no free room for one more stamp in that corner of the page.", "Беттің осы бұрышында тағы бір мөрге бос орын жоқ.", "В этом углу страницы нет места для ещё одного штампа."),
-    ("Show a stamp with your name and the signing time on the last page", "Соңғы бетте атыңыз және қол қойылған уақыт көрсетілген мөрді көрсету", "Показать на последней странице штамп с вашим именем и временем подписания"),
+    ("Add a “Who signed” page at the end, with your name and the signing time", "Соңына атыңыз бен қол қойылған уақыт жазылған «Кім қол қойды» бетін қосу", "Добавить в конец страницу «Кто подписал» с вашим именем и временем подписания"),
     ("Inside the XML", "XML ішінде", "Внутри XML"),
     ("Keeps the XML document, with the signature inside it (XAdES). Only for XML files.", "XML құжаты сақталады, қолтаңба оның ішінде болады (XAdES). Тек XML файлдары үшін.", "XML-документ остаётся прежним, подпись внутри него (XAdES). Только для файлов XML."),
     ("This XML document carries your signature inside it (XAdES).", "Бұл XML құжатының ішінде сіздің қолтаңбаңыз бар (XAdES).", "Этот XML-документ содержит вашу подпись внутри (XAdES)."),

@@ -87,6 +87,8 @@ pub struct Drawn {
     pub rect: [f64; 4],
     pub appearance: ObjectId,
     pub objects: Vec<(ObjectId, Object)>,
+    /// A page added for it (the Who signed page), not yet in the document.
+    pub new_page: Option<Dictionary>,
 }
 
 /// Draws the stamp for `c`, signing at `at` (ms), onto the page `stamp` names, beside any
@@ -159,6 +161,7 @@ pub fn draw(
         rect,
         appearance,
         objects,
+        new_page: None,
     })
 }
 
@@ -385,7 +388,7 @@ impl PageSpace {
 }
 
 /// The rectangles of the signature widgets already on `page` that show something.
-fn widget_rects(doc: &Document, page: &Dictionary) -> Vec<[f64; 4]> {
+pub(super) fn widget_rects(doc: &Document, page: &Dictionary) -> Vec<[f64; 4]> {
     let Some(annots) = page
         .get(b"Annots")
         .ok()

@@ -314,7 +314,7 @@ impl App {
                 if self.sign.sign_as == SignAs::Pdf {
                     ui.checkbox(
                         &mut self.sign.stamp,
-                        tr("Show a stamp with your name and the signing time on the last page"),
+                        tr("Add a “Who signed” page at the end, with your name and the signing time"),
                     );
                 }
                 if self.sign.sign_as == SignAs::Cms {
@@ -602,9 +602,11 @@ impl App {
         // the long-term data comes from NCA's OCSP server: not when online checks are off
         let long_term =
             tsa.is_some() && self.ocsp && self.sign.long_term && self.sign.sign_as != SignAs::Card;
-        let stamp = self.sign.stamp.then(|| crate::pdf::stamp::Stamp {
-            lang: Some(crate::i18n::lang()),
-            ..Default::default()
+        let page = self.sign.stamp.then(|| crate::pdf::whosigned::WhoSigned {
+            document: doc
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         });
         // check that the key is not revoked (Order 500/НҚ p.4.3), unless online checks are off
         let ocsp = self.ocsp.then(|| DEFAULT_OCSP_URL.to_string());
@@ -640,13 +642,12 @@ impl App {
                         o.as_deref(),
                     ),
                     SignAs::Xml => e.sign_xml(&input, &key, tsa.as_deref(), ocsp.as_deref()),
-                    SignAs::Pdf => e.sign_pdf_with(
-                        &input,
-                        &key,
-                        tsa.as_deref(),
-                        ocsp.as_deref(),
-                        stamp.as_ref(),
-                    ),
+                    SignAs::Pdf => match &page {
+                        Some(p) => {
+                            e.sign_pdf_page(&input, &key, tsa.as_deref(), ocsp.as_deref(), p)
+                        }
+                        None => e.sign_pdf(&input, &key, tsa.as_deref(), ocsp.as_deref()),
+                    },
                     SignAs::Card => {
                         let name = doc
                             .file_name()

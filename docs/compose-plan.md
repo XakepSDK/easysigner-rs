@@ -187,3 +187,29 @@ Most of the behaviour exists; these are new or different:
 - Emulator: `ComposeApp` checks an unsigned PDF ("isn't signed") and a .cms signed with a
   test key ("do not trust", not recognized in Kazakhstan), and opens its details. A valid
   verdict needs NCA's real keys, so it is reached only by the core's tests (fake NCA).
+
+## Where phase 5 ended
+
+- **Who signed page** (`src/pdf/whosigned.rs`, `Engine::sign_pdf_page`): the first signer
+  appends an A4 page (trilingual title and note, footer listing the apps as plain text until
+  store links exist) and draws their box in the grid's first spot. Later signers take the
+  first spot after the last one used, clear of every widget and below the lowest widget
+  another app placed on the page. Twenty boxes in two columns, then one note box across the
+  page, then invisible signatures. Each box is the signature's own widget appearance: name,
+  company and BIN or IIN, and the signing time in Astana time, marked as NCA's when a
+  timestamp backs it. The desktop's option and the app both use it.
+- **Departure from the plan**: a PDF that someone signed elsewhere first (no Who signed
+  page) gets an invisible signature. Finding an empty margin reliably needs content
+  analysis, and a box over the document's text is worse than none.
+- **DocMDP P=2**: the first signature certifies the PDF when it adds the page (no earlier
+  signatures and no certification already there), so a viewer flags anything but signatures
+  and form filling after it; the change check already turned such changes red.
+- **Reasons as codes**: `SignerReport::reason()` in the core gives the `report::Reason`;
+  the app's `Reason` maps from it one to one.
+- **Pre-sign gate and "expired since"**: done in phases 3 and 4 for the app (ffi). The
+  desktop keeps today's behaviour.
+- The app tells the signer about the page (Sign screen wording, "N pages + Who signed page"
+  on the document card, and "your name is added next to …" when joining).
+- Tests: `tests/who_signed.rs` (page and certification, second box placement, another app's
+  stamp, 20 boxes then the note then invisible, a PDF signed elsewhere, changes after
+  signing caught). Set `KZ_WHO_SIGNED_OUT=file.pdf` to write a three-signer sample.

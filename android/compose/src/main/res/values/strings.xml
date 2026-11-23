@@ -98,7 +98,8 @@
     <string name="sign">Sign</string>
     <string name="add_my_signature">Add my signature</string>
     <string name="unlocks_after_read">Unlocks after you open the document</string>
-    <string name="out_pdf">Your signature goes inside this PDF, and a stamp with your name is added on its last page, so anyone can see it\'s signed.</string>
+    <string name="out_pdf">Your signature goes inside this PDF, and a “Who signed” page is added at the end with your name and the signing time, so anyone can see it\'s signed.</string>
+    <string name="out_pdf_join_page">Your name is added next to %1$s\'s on the “Who signed” page. Send this PDF back.</string>
     <string name="out_pdf_join">Your signature is added inside this PDF, next to %1$s\'s. Send this PDF back.</string>
     <string name="out_xml">Your signature goes inside this XML file. Send that file.</string>
     <string name="out_cms">You get one .cms file with the document and your signature inside. Send that file.</string>
@@ -122,7 +123,7 @@
     <string name="signed_time">Signing time confirmed by NCA, %1$s</string>
     <string name="with_signature_inside">With your signature inside</string>
     <string name="send_file_title">Send the file, not a printout</string>
-    <string name="send_file_pdf">The signature is inside the file. The stamp on the last page only shows who signed; a printed copy is just paper.</string>
+    <string name="send_file_pdf">The signature is inside the file. The boxes on the last page only show who signed; a printed copy is just paper.</string>
     <string name="send_file_other">The signature is inside the file. A printed copy is just paper.</string>
     <string name="send">Send</string>
     <string name="save_to_phone">Save to phone</string>
@@ -211,4 +212,5 @@
     <string name="d_fingerprint">Document fingerprint</string>
     <string name="copy_details">Copy details</string>
     <string name="copied">Copied</string>
+    <string name="who_signed_page">“Who signed” page</string>
 </resources>

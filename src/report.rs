@@ -56,7 +56,66 @@ pub struct SignerReport {
     pub notes: Vec<String>,
 }
 
+/// Why one signature is not valid, as a code a screen can turn into words: the first that
+/// applies, the most serious first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    /// The document was changed after it was signed.
+    Changed,
+    /// The CA says the signer's key was revoked.
+    Revoked,
+    /// The key was no longer (or not yet) valid at the trusted signing time.
+    Expired,
+    /// No trusted signing time, and the key is no longer valid: it can't be checked anymore.
+    ExpiredSince,
+    /// Not a key from a recognized CA, or not one for signing.
+    NotRecognized,
+    /// The signature itself is broken (cut or damaged file, a bad timestamp).
+    Damaged,
+    /// The CA did not answer whether the key was valid.
+    NotConfirmed,
+}
+
 impl SignerReport {
+    /// Why this signature is not valid; None when it is.
+    pub fn reason(&self) -> Option<Reason> {
+        if self.valid {
+            return None;
+        }
+        Some(if self.cert_der.is_none() {
+            // the signature could not even be read
+            Reason::Damaged
+        } else if !self.signature_ok {
+            // read, but the document doesn't match it
+            Reason::Changed
+        } else if self.ocsp_answer == Some("revoked") {
+            Reason::Revoked
+        } else if !self.chain_ok
+            || self.usage_error.is_some()
+            || self.ocsp_answer == Some("unknown")
+        {
+            Reason::NotRecognized
+        } else if self.timestamp_ok == Some(false) {
+            Reason::Damaged
+        } else if self.cert_valid_at_signing == Some(false) {
+            if self.trusted_time().is_some() {
+                Reason::Expired
+            } else {
+                Reason::ExpiredSince
+            }
+        } else if self.ocsp_answer.is_none_or(str::is_empty)
+            || self
+                .revocation_source
+                .is_some_and(|r| r.starts_with("kept"))
+        {
+            // no answer now, and none kept in the signature that settles it
+            Reason::NotConfirmed
+        } else {
+            // the CA said good: what failed is an archive timestamp
+            Reason::Damaged
+        })
+    }
+
     /// The time a valid timestamp from a trusted TSA proves; None when there is none.
     pub fn trusted_time(&self) -> Option<i64> {
         (self.timestamp_ok == Some(true) && self.timestamp_trusted == Some(true))

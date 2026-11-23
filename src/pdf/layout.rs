@@ -160,6 +160,21 @@ impl Writer {
         ));
     }
 
+    /// One line of text in colour `rgb` ("r g b", 0 to 1).
+    pub fn text_rgb(&mut self, p: &mut Page, x: f64, y: f64, size: f64, rgb: &str, s: &str) {
+        let mut hex = String::new();
+        for (g, c) in self.font.shape(s) {
+            self.used.insert(g, c);
+            hex.push_str(&format!("{g:04X}"));
+        }
+        p.ops.push_str(&format!(
+            "BT {rgb} rg /F1 {} Tf {} {} Td <{hex}> Tj ET\n",
+            f(size),
+            f(x * MM),
+            f(p.y(y))
+        ));
+    }
+
     /// Text centred on `cx`, rotated by `deg` degrees, semi-transparent (a watermark).
     pub fn watermark(&mut self, p: &mut Page, cx: f64, cy: f64, size: f64, deg: f64, s: &str) {
         let mut hex = String::new();

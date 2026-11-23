@@ -304,10 +304,10 @@ fn pdf_signing_and_cards_in_the_window() {
         .click();
     h.run();
     assert_eq!(h.state().sign.sign_as, kzsigner::gui::SignAs::Pdf);
-    // with a visible stamp (More options)
+    // with a Who signed page (More options)
     h.get_by_label("More options").click();
     h.run();
-    h.get_by_label("Show a stamp with your name and the signing time on the last page")
+    h.get_by_label("Add a “Who signed” page at the end, with your name and the signing time")
         .click();
     h.run();
     assert!(h.state().sign.stamp);
@@ -322,7 +322,7 @@ fn pdf_signing_and_cards_in_the_window() {
     assert!(signed.starts_with(&doc));
     assert!(
         signed[doc.len()..].windows(3).any(|w| w == b"/AP"),
-        "the stamp is drawn"
+        "the Who signed box is drawn"
     );
 
     // check the signed PDF, then the card, and save the card's document

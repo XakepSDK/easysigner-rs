@@ -114,10 +114,10 @@ fn an_expired_key_is_expired_or_expired_since() {
         ..Default::default()
     };
     // no NCA time: checked as of today, when the key has expired since
-    assert_eq!(crate::check::reason(&s), Reason::ExpiredSince);
+    assert_eq!(s.reason().map(Reason::from), Some(Reason::ExpiredSince));
     // NCA's time says the key had expired when it signed
     s.timestamp_time = Some(1);
     s.timestamp_ok = Some(true);
     s.timestamp_trusted = Some(true);
-    assert_eq!(crate::check::reason(&s), Reason::Expired);
+    assert_eq!(s.reason().map(Reason::from), Some(Reason::Expired));
 }

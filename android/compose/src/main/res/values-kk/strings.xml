@@ -96,7 +96,8 @@
     <string name="sign">Қол қою</string>
     <string name="add_my_signature">Қолымды қосу</string>
     <string name="unlocks_after_read">Құжатты ашқаннан кейін қолжетімді болады</string>
-    <string name="out_pdf">Қолыңыз осы PDF-тің ішіне қойылады, ал соңғы бетіне атыңыз жазылған мөртабан қосылады, сонда кез келген адам оған қол қойылғанын көреді.</string>
+    <string name="out_pdf">Қолыңыз осы PDF-тің ішіне қойылады, ал соңына атыңыз бен қол қойылған уақыт жазылған «Кім қол қойды» беті қосылады, сонда кез келген адам оған қол қойылғанын көреді.</string>
+    <string name="out_pdf_join_page">Атыңыз «Кім қол қойды» бетінде %1$s есімінің жанына қосылады. Осы PDF-ті кері жіберіңіз.</string>
     <string name="out_pdf_join">Қолыңыз осы PDF-тің ішіне, мына адамның қолының қасына қосылады: %1$s. Осы PDF-ті кері жіберіңіз.</string>
     <string name="out_xml">Қолыңыз осы XML файлдың ішіне қойылады. Сол файлды жіберіңіз.</string>
     <string name="out_cms">Ішінде құжат пен қолыңыз бар бір .cms файлы шығады. Сол файлды жіберіңіз.</string>
@@ -120,7 +121,7 @@
     <string name="signed_time">Қол қою уақытын ҰКО растады: %1$s</string>
     <string name="with_signature_inside">Ішінде қолыңыз бар</string>
     <string name="send_file_title">Басып шығарылған қағазды емес, файлды жіберіңіз</string>
-    <string name="send_file_pdf">Қол файлдың ішінде. Соңғы беттегі мөртабан тек кім қол қойғанын көрсетеді; басып шығарылған көшірме — жай қағаз.</string>
+    <string name="send_file_pdf">Қол файлдың ішінде. Соңғы беттегі жақтаулар тек кім қол қойғанын көрсетеді; басып шығарылған көшірме — жай қағаз.</string>
     <string name="send_file_other">Қол файлдың ішінде. Басып шығарылған көшірме — жай қағаз.</string>
     <string name="send">Жіберу</string>
     <string name="save_to_phone">Телефонға сақтау</string>
@@ -209,4 +210,5 @@
     <string name="d_fingerprint">Құжаттың саусақ ізі</string>
     <string name="copy_details">Толығырақты көшіру</string>
     <string name="copied">Көшірілді</string>
+    <string name="who_signed_page">«Кім қол қойды» беті</string>
 </resources>

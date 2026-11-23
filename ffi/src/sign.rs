@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use kzsigner::cert::{self, Cert, get, rdns};
 use kzsigner::i18n::Lang;
-use kzsigner::pdf::stamp::Stamp;
+use kzsigner::pdf::whosigned::WhoSigned;
 use kzsigner::report::{SignResult, SignerReport};
 use kzsigner::trust::TrustStore;
 use kzsigner::vault::VaultError;
@@ -101,6 +101,8 @@ pub struct Doc {
     /// Check, not here.
     pub signers: Vec<SignedBy>,
     pub output: Output,
+    /// A PDF with the Who signed page at its end (its last page): a signature adds a box there.
+    pub who_signed_page: bool,
     /// The signed file's name.
     pub output_name: String,
 }
@@ -163,12 +165,14 @@ pub fn inspect(name: String, bytes: Vec<u8>) -> Doc {
         inner_kind: None,
         signers: vec![],
         output: Output::NewCms,
+        who_signed_page: false,
         output_name: format!("{name}.cms"),
     };
     match kind {
         DocKind::Pdf => {
             doc.signers = signers(&e, &bytes);
             doc.output = Output::InsidePdf;
+            doc.who_signed_page = kzsigner::pdf::whosigned::ends_with_page(&bytes);
             doc.output_name = signed_name(&name, "pdf");
         }
         DocKind::Xml => {
@@ -306,7 +310,7 @@ impl Vault {
     /// Signs `bytes`, a file named `name`, with key `key_id`: checks the key with NCA first
     /// (no prompt for a key that can't sign, or without internet), then opens it (one
     /// prompt, or `password` for a key kept under its password) and signs with NCA's time.
-    /// `lang`: the app's language, for the PDF's stamp. Blocks: call it off the main thread.
+    /// `lang`: the app's language, for the core's messages. Blocks: call it off the main thread.
     #[allow(clippy::too_many_arguments)]
     pub fn sign(
         &self,
@@ -318,7 +322,8 @@ impl Vault {
         prompt: ChipPrompt,
         lang: String,
     ) -> Result<Signed, SignError> {
-        let doc = inspect(name, bytes.clone());
+        kzsigner::i18n::set(Lang::parse(&lang).unwrap_or(Lang::En));
+        let doc = inspect(name.clone(), bytes.clone());
         if doc.output == Output::Cannot {
             return Err(SignError::Cannot);
         }
@@ -355,11 +360,10 @@ impl Vault {
         // revocation was checked above: not twice
         let r = match doc.output {
             Output::InsidePdf => {
-                let stamp = Stamp {
-                    lang: Some(Lang::parse(&lang).unwrap_or(Lang::Kk)),
-                    ..Default::default()
+                let page = WhoSigned {
+                    document: name.clone(),
                 };
-                e.sign_pdf_with(&bytes, &key, tsa, None, Some(&stamp))
+                e.sign_pdf_page(&bytes, &key, tsa, None, &page)
             }
             Output::InsideXml => e.sign_xml(&bytes, &key, tsa, None),
             _ => e.sign(&bytes, &key, false, tsa, None, true, None),

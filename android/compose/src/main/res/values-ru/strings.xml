@@ -98,7 +98,8 @@
     <string name="sign">Подписать</string>
     <string name="add_my_signature">Добавить мою подпись</string>
     <string name="unlocks_after_read">Станет доступно, когда вы откроете документ</string>
-    <string name="out_pdf">Ваша подпись будет внутри этого PDF, а на его последней странице появится штамп с вашим именем, чтобы любой видел, что он подписан.</string>
+    <string name="out_pdf">Ваша подпись будет внутри этого PDF, а в конце добавится страница «Кто подписал» с вашим именем и временем подписи, чтобы любой видел, что он подписан.</string>
+    <string name="out_pdf_join_page">Ваше имя добавится рядом с именем %1$s на странице «Кто подписал». Отправьте этот PDF обратно.</string>
     <string name="out_pdf_join">Ваша подпись добавится внутрь этого PDF, рядом с подписью: %1$s. Отправьте этот PDF обратно.</string>
     <string name="out_xml">Ваша подпись будет внутри этого XML-файла. Отправьте этот файл.</string>
     <string name="out_cms">Вы получите один файл .cms с документом и вашей подписью внутри. Отправьте этот файл.</string>
@@ -122,7 +123,7 @@
     <string name="signed_time">Время подписи подтверждено НУЦ: %1$s</string>
     <string name="with_signature_inside">С вашей подписью внутри</string>
     <string name="send_file_title">Отправляйте файл, а не распечатку</string>
-    <string name="send_file_pdf">Подпись находится внутри файла. Штамп на последней странице лишь показывает, кто подписал; распечатка — просто бумага.</string>
+    <string name="send_file_pdf">Подпись находится внутри файла. Рамки на последней странице лишь показывают, кто подписал; распечатка — просто бумага.</string>
     <string name="send_file_other">Подпись находится внутри файла. Распечатка — просто бумага.</string>
     <string name="send">Отправить</string>
     <string name="save_to_phone">Сохранить на телефон</string>
@@ -215,4 +216,5 @@
     <string name="d_fingerprint">Отпечаток документа</string>
     <string name="copy_details">Скопировать подробности</string>
     <string name="copied">Скопировано</string>
+    <string name="who_signed_page">страница «Кто подписал»</string>
 </resources>

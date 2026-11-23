@@ -256,7 +256,11 @@ fun SignScreen(
         Grey(
             stringResource(
                 when (info.output) {
-                    Output.INSIDE_PDF -> if (joins) R.string.out_pdf_join else R.string.out_pdf
+                    Output.INSIDE_PDF -> when {
+                        joins && info.whoSignedPage -> R.string.out_pdf_join_page
+                        joins -> R.string.out_pdf_join
+                        else -> R.string.out_pdf
+                    }
                     Output.INSIDE_XML -> R.string.out_xml
                     Output.JOIN_CMS -> R.string.out_cms_join
                     else -> R.string.out_cms
@@ -369,7 +373,9 @@ private fun DocCard(doc: DocFile, onRead: () -> Unit) {
                 Text(doc.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
                 val pages = pdf?.pages
                 Small(
-                    if (pages != null) {
+                    if (pages != null && doc.info.whoSignedPage && pages > 1) {
+                        pluralStringResource(R.plurals.pages, pages - 1, pages - 1) + " + " + stringResource(R.string.who_signed_page)
+                    } else if (pages != null) {
                         pluralStringResource(R.plurals.pages, pages, pages)
                     } else {
                         ext(doc.name) + " · " + Formatter.formatShortFileSize(context, doc.bytes.size.toLong())

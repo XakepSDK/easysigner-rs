@@ -244,7 +244,7 @@ fn signer(s: &SignerReport) -> SignerCheck {
     problems.extend(s.warnings.iter().cloned());
     SignerCheck {
         valid: s.valid,
-        reason: if s.valid { None } else { Some(reason(s)) },
+        reason: s.reason().map(Reason::from),
         name: s.name(),
         iin: s.get("IIN").map(str::to_string),
         company,
@@ -262,37 +262,17 @@ fn signer(s: &SignerReport) -> SignerCheck {
     }
 }
 
-/// The one reason `s` is not valid, the most serious first.
-pub(crate) fn reason(s: &SignerReport) -> Reason {
-    if s.cert_der.is_none() {
-        // the signature could not even be read
-        return Reason::Damaged;
+impl From<kzsigner::report::Reason> for Reason {
+    fn from(r: kzsigner::report::Reason) -> Self {
+        use kzsigner::report::Reason as R;
+        match r {
+            R::Changed => Reason::Changed,
+            R::Revoked => Reason::Revoked,
+            R::Expired => Reason::Expired,
+            R::ExpiredSince => Reason::ExpiredSince,
+            R::NotRecognized => Reason::NotRecognized,
+            R::Damaged => Reason::Damaged,
+            R::NotConfirmed => Reason::NotConfirmed,
+        }
     }
-    if !s.signature_ok {
-        // read, but the document doesn't match it
-        return Reason::Changed;
-    }
-    if s.ocsp_answer == Some("revoked") {
-        return Reason::Revoked;
-    }
-    if !s.chain_ok || s.usage_error.is_some() || s.ocsp_answer == Some("unknown") {
-        return Reason::NotRecognized;
-    }
-    if s.timestamp_ok == Some(false) {
-        return Reason::Damaged;
-    }
-    if s.cert_valid_at_signing == Some(false) {
-        return if s.trusted_time().is_some() {
-            Reason::Expired
-        } else {
-            Reason::ExpiredSince
-        };
-    }
-    let kept = s.revocation_source.is_some_and(|r| r.starts_with("kept"));
-    if s.ocsp_answer.is_none_or(str::is_empty) || kept {
-        // no answer from NCA now, and none kept in the signature that settles it
-        return Reason::NotConfirmed;
-    }
-    // NCA said good: what failed is an archive timestamp
-    Reason::Damaged
 }

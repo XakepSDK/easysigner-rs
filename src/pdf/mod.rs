@@ -8,8 +8,9 @@ pub mod import;
 pub mod layout;
 pub mod qr;
 pub mod stamp;
+pub mod whosigned;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, ObjectId, Stream, StringFormat};
 
@@ -57,6 +58,17 @@ fn open(data: &[u8]) -> Result<Document> {
     Ok(doc)
 }
 
+/// How a signature shows in the PDF.
+#[derive(Clone, Copy, Debug)]
+pub enum Look<'a> {
+    Invisible,
+    /// A stamp in a corner of a page.
+    Stamp(&'a stamp::Stamp),
+    /// A box on the Who signed page; the first signer adds the page and certifies the PDF
+    /// (DocMDP: only signatures and form filling after it).
+    WhoSigned(&'a whosigned::WhoSigned),
+}
+
 /// Signs a PDF inside the PDF. A PDF that already has signatures gets one more.
 pub fn sign(
     input: &[u8],
@@ -64,6 +76,23 @@ pub fn sign(
     tsa_url: Option<&str>,
     trust: &TrustStore,
     stamp: Option<&stamp::Stamp>,
+) -> Result<SignResult> {
+    sign_with(
+        input,
+        key,
+        tsa_url,
+        trust,
+        stamp.map_or(Look::Invisible, Look::Stamp),
+    )
+}
+
+/// [`sign`], showing the signature as `look` says.
+pub fn sign_with(
+    input: &[u8],
+    key: &Key,
+    tsa_url: Option<&str>,
+    trust: &TrustStore,
+    look: Look,
 ) -> Result<SignResult> {
     let doc = open(input)?;
     let now = time::now_ms();
@@ -83,45 +112,108 @@ pub fn sign(
     } else {
         ROOM
     };
-    let sig = Dictionary::from_iter([
+    let mut sig = Dictionary::from_iter([
         ("Type", Object::from("Sig")),
         ("Filter", "Adobe.PPKLite".into()),
         ("SubFilter", "ETSI.CAdES.detached".into()),
         ("M", Object::string_literal(pdf_date(now))),
         ("Name", text_string(&cert::holder_name(&key.cert))),
     ]);
-    let visible = stamp.map(|s| (s, &key.cert, now));
-    let data = add_field(input, doc, "Signature", sig, room, visible, |signed| {
-        let mut sd = cms::sign_once_with(
-            signed,
-            cms::ID_DATA,
-            false,
-            &key.private_key,
-            &key.cert,
-            false,
-            &[],
-        )
-        .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
-        if let Some(url) = tsa_url {
-            sign::timestamp(&mut sd, url, key, trust, &mut r)?;
+    // the first signer of a Who signed page locks the document: signatures and form
+    // filling only (DocMDP P=2), so nothing else can change what was signed
+    let certify =
+        matches!(look, Look::WhoSigned(_)) && existing == 0 && docmdp_level(&doc).is_none();
+    if certify {
+        sig.set(
+            "Reference",
+            Object::Array(vec![
+                Dictionary::from_iter([
+                    ("Type", Object::from("SigRef")),
+                    ("TransformMethod", "DocMDP".into()),
+                    (
+                        "TransformParams",
+                        Dictionary::from_iter([
+                            ("Type", Object::from("TransformParams")),
+                            ("P", 2.into()),
+                            ("V", "1.2".into()),
+                        ])
+                        .into(),
+                    ),
+                ])
+                .into(),
+            ]),
+        );
+    }
+    let cert = &key.cert;
+    let mut draw = |d: &Document,
+                    pages: &BTreeMap<u32, ObjectId>,
+                    alloc: &mut dyn FnMut() -> ObjectId|
+     -> Result<Option<stamp::Drawn>> {
+        match look {
+            Look::Invisible => Ok(None),
+            Look::Stamp(st) => stamp::draw(d, pages, st, cert, now, alloc).map(Some),
+            Look::WhoSigned(ws) => whosigned::draw(
+                d,
+                pages,
+                ws,
+                cert,
+                now,
+                tsa_url.is_some(),
+                existing == 0,
+                alloc,
+            ),
         }
-        Ok(sd.encode())
-    })?;
+    };
+    let data = add_field(
+        input,
+        doc,
+        "Signature",
+        sig,
+        room,
+        &mut draw,
+        certify,
+        |signed| {
+            let mut sd = cms::sign_once_with(
+                signed,
+                cms::ID_DATA,
+                false,
+                &key.private_key,
+                &key.cert,
+                false,
+                &[],
+            )
+            .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+            if let Some(url) = tsa_url {
+                sign::timestamp(&mut sd, url, key, trust, &mut r)?;
+            }
+            Ok(sd.encode())
+        },
+    )?;
     r.cms = data;
     r.signer_count = existing + 1;
     Ok(r)
 }
 
+/// Draws a signature's appearance: None for an invisible one.
+type Draw<'a> = dyn FnMut(
+        &Document,
+        &BTreeMap<u32, ObjectId>,
+        &mut dyn FnMut() -> ObjectId,
+    ) -> Result<Option<stamp::Drawn>>
+    + 'a;
+
 /// Adds a signature field named `prefix`N to the PDF in an incremental update, with the
 /// signature dictionary `sig` and `room` bytes for its value, which `fill` makes from the bytes
 /// the value's byte range covers.
+#[allow(clippy::too_many_arguments)]
 fn add_field(
     input: &[u8],
     doc: Document,
     prefix: &str,
     mut sig: Dictionary,
     room: usize,
-    visible: Option<(&stamp::Stamp, &Cert, i64)>,
+    draw: &mut Draw,
+    certify: bool,
     fill: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
     let existing = signature_fields(&doc);
@@ -143,10 +235,11 @@ fn add_field(
     }
     let pages = doc.get_pages();
     // an invisible signature's widget sits on the first page; a visible one where its stamp is
-    let (first_page, rect, appearance) = match visible {
-        Some((st, c, at)) => {
-            let d = stamp::draw(&doc, &pages, st, c, at, &mut alloc)?;
+    let mut new_page = None;
+    let (first_page, rect, appearance) = match draw(&doc, &pages, &mut alloc)? {
+        Some(d) => {
             out.extend(d.objects);
+            new_page = d.new_page;
             (d.page, d.rect, Some(d.appearance))
         }
         None => {
@@ -176,26 +269,32 @@ fn add_field(
     out.push((widget_id, widget.into()));
 
     // the widget joins its page's annotations
-    let mut page = doc.get_dictionary(first_page).map_err(bad)?.clone();
-    match page.get(b"Annots") {
-        Ok(Object::Reference(id)) => {
-            let mut a = doc
-                .get_object(*id)
-                .and_then(Object::as_array)
-                .cloned()
-                .unwrap_or_default();
-            a.push(widget_id.into());
-            out.push((*id, Object::Array(a)));
-        }
-        other => {
-            let mut a = other
-                .ok()
-                .and_then(|o| o.as_array().ok())
-                .cloned()
-                .unwrap_or_default();
-            a.push(widget_id.into());
-            page.set("Annots", Object::Array(a));
-            out.push((first_page, page.into()));
+    if let Some(mut p) = new_page {
+        // a page added now: it holds only this widget
+        p.set("Annots", Object::Array(vec![widget_id.into()]));
+        out.push((first_page, p.into()));
+    } else {
+        let mut page = doc.get_dictionary(first_page).map_err(bad)?.clone();
+        match page.get(b"Annots") {
+            Ok(Object::Reference(id)) => {
+                let mut a = doc
+                    .get_object(*id)
+                    .and_then(Object::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                a.push(widget_id.into());
+                out.push((*id, Object::Array(a)));
+            }
+            other => {
+                let mut a = other
+                    .ok()
+                    .and_then(|o| o.as_array().ok())
+                    .cloned()
+                    .unwrap_or_default();
+                a.push(widget_id.into());
+                page.set("Annots", Object::Array(a));
+                out.push((first_page, page.into()));
+            }
         }
     }
 
@@ -229,6 +328,7 @@ fn add_field(
                 form.set("SigFlags", 3);
             }
         };
+    let mut catalog_changed = false;
     match catalog.get(b"AcroForm") {
         Ok(Object::Reference(id)) => {
             let id = *id;
@@ -244,8 +344,18 @@ fn add_field(
                 .unwrap_or_default();
             add_field(&mut form, &mut out);
             catalog.set("AcroForm", form);
-            out.push((root_id, catalog.into()));
+            catalog_changed = true;
         }
+    }
+    if certify {
+        catalog.set(
+            "Perms",
+            Dictionary::from_iter([("DocMDP", Object::Reference(sig_id))]),
+        );
+        catalog_changed = true;
+    }
+    if catalog_changed {
+        out.push((root_id, catalog.into()));
     }
 
     // the signature dictionary, with room for the byte range and the signature
@@ -366,7 +476,8 @@ pub fn extend(
             "Timestamp",
             sig,
             ROOM_DOC_TIMESTAMP,
-            None,
+            &mut |_, _, _| Ok(None),
+            false,
             |signed| tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy),
         )?;
         r.timestamped = true;
