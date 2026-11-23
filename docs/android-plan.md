@@ -78,6 +78,8 @@ It is distributed as an APK on the GitHub release page, next to the Windows and 
 
 ## TODO: a native UI on each platform
 
+Planned in detail in [compose-plan.md](compose-plan.md).
+
 Decided for later; the current order of work stays (GameActivity and TalkBack, UI Automator
 tests, then the Gradle 9 and dependency upgrades).
 

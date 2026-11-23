@@ -21,3 +21,12 @@ Options looked at:
   was removed from this file" when a listed signature is missing. Needs our own OID.
 
 Only protects files co-signed with kzsigner; a file co-signed only in NCALayer stays as it is.
+
+## Before release
+
+- Native-speaker check of the Kazakh and Russian text that goes into signed PDFs (the Who
+  signed page note, box headings, footer) and of the app's strings.
+- Check on a real Pixel: typing, TalkBack, StrongBox, fingerprint.
+- Match NCALayer's box size and spacing from a PDF signed with its current version.
+- Pricing: decides the footer's "free" and About's "no accounts, no tracking".
+- The footer's desktop link needs the repository public, and the iOS link an App Store id.
