@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs on CI's Android emulators (see .github/workflows/build.yml):
 #
-#   sh scripts/android-selftest.sh APK SELFTEST_APK UITEST_APK
+#   sh scripts/android-selftest.sh APK SELFTEST_APK UITEST_APK [NEXT_APK]
 #
 # The tests are UI Automator tests in android/uitest (UITEST_APK, built next to the test copy
 # by KZSIGNER_SELFTEST=1 sh scripts/apk.sh); they run on the emulator in their own process.
@@ -12,11 +12,14 @@
 #    readers, keeps running after Back, and its security chip code works with a screen PIN.
 # 2. TestCopy, with SELFTEST_APK: the test of the real screens (src/android/selftest.rs),
 #    then a fingerprint-only key with fingers enrolled through Settings.
+# 3. ComposeApp, with NEXT_APK when given (the Kotlin + Compose app, docs/compose-plan.md):
+#    it starts and shows the keys screen, which only the Rust core can fill.
 # Screenshots: android-*.png, also printed into the log.
 set -u
 APK=$1
 TEST_APK=$2
 UITEST_APK=$3
+NEXT_APK=${4:-}
 RUNNER=kz.kzsigner.uitest/androidx.test.runner.AndroidJUnitRunner
 
 # a screenshot, also printed into the log (base64 between markers): CI's artifacts are not
@@ -60,3 +63,7 @@ run ReleasedApp
 adb uninstall kz.kzsigner > /dev/null
 adb install -r "$TEST_APK" || exit 1
 run TestCopy
+if [ -n "$NEXT_APK" ]; then
+    adb install -r "$NEXT_APK" || exit 1
+    run ComposeApp
+fi

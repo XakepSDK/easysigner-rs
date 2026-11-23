@@ -100,3 +100,19 @@ Most of the behaviour exists; these are new or different:
 - UniFFI and Compose BOM versions: the newest at the start of phase 1.
 - Whether desktop also drops its option-rich screens for the simple flow.
 - Pricing (affects the footer's "free" and About's "no accounts, no tracking").
+
+## Where phase 1 ended
+
+- `ffi/` (`kzsigner-ffi`): `version()` and `list_keys(vault_path)` over UniFFI 0.32, with the
+  core as `default-features = false` (no egui). Its tests run in CI as their own step, because
+  the workspace's `default-members` is the core alone.
+- The Kotlin + Compose app is `android/compose`, applicationId `kz.kzsigner.next`, so it
+  installs next to the egui app until it replaces it (phase 6). Compose BOM 2026.11.01,
+  Material 3, `compileSdk` 37.2 (Compose 1.13 asks for 37.1 or newer, so all three modules
+  moved). Its keys screen reads the vault through the core; text is in `res/values{,-ru,-kk}`.
+- `scripts/apk.sh` builds both APKs: it generates the Kotlin bindings with `uniffi-bindgen`
+  from a host build of the library (the release `.so` is stripped of what the generator reads)
+  and keeps them out of the repository. `dist/kzsigner-next-<version>-android.apk` is not part
+  of a release.
+- The emulator job runs `ComposeApp` (android/uitest): the app starts and its keys screen
+  shows "No keys yet", which only a working UniFFI call can produce.

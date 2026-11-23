@@ -3,6 +3,7 @@
 plugins {
     id("com.android.application") version "9.5.2"
     id("com.android.test") version "9.5.2" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
 }
 
 val jniLibsDir = providers.gradleProperty("kzsigner.jniLibs").getOrElse("../target/android-jni")
@@ -13,6 +14,8 @@ layout.buildDirectory = file("../target/gradle")
 android {
     namespace = "kz.kzsigner"
     compileSdk = 37
+    // Compose 1.13 asks for 37.1 or newer; the whole build uses one platform
+    compileSdkMinor = 2
     buildToolsVersion = "37.0.0"
 
     defaultConfig {

@@ -72,7 +72,7 @@ wgpu = { version = "30", optional = true, default-features = false, features = [
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["android"]
+members = ["android", "ffi"]
 default-members = ["."]
 
 # jni-macros 0.22.4 (used by android-activity) writes its generated checks in HashMap order,

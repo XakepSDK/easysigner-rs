@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="your_keys">Ваши ключи</string>
+    <string name="no_keys">Ключей пока нет</string>
+    <string name="no_keys_detail">Добавьте ключ НУЦ, чтобы подписывать документы.</string>
+    <string name="keys_hidden">Список ключей закрыт.</string>
+    <string name="iin">ИИН %1$s</string>
+    <string name="bin">БИН %1$s</string>
+    <string name="valid_until">Действует до %1$s</string>
+    <string name="cant_read_keys">Не удалось прочитать ваши ключи.</string>
+    <string name="version">Версия %1$s</string>
+</resources>

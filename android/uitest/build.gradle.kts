@@ -10,6 +10,8 @@ layout.buildDirectory = file("../../target/gradle-uitest")
 android {
     namespace = "kz.kzsigner.uitest"
     compileSdk = 37
+    // Compose 1.13 asks for 37.1 or newer; the whole build uses one platform
+    compileSdkMinor = 2
     buildToolsVersion = "37.0.0"
     targetProjectPath = ":"
 

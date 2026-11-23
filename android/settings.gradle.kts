@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "kzsigner"
 include(":uitest")
+// the Kotlin + Compose app (docs/compose-plan.md)
+include(":compose")

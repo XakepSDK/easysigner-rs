@@ -21,10 +21,21 @@ import java.util.regex.Pattern;
 final class Phone {
     static final String PIN = "1111";
     static final String APP = "kz.kzsigner";
+    /** The Kotlin + Compose app, installed next to it until it replaces it. */
+    static final String NEXT = "kz.kzsigner.next";
     static final String TAG = "KZUITEST";
 
     final UiDevice device =
             UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+
+    /** Which app the tests drive: {@link #APP} or {@link #NEXT}. */
+    String app = APP;
+
+    Phone() {}
+
+    Phone(String app) {
+        this.app = app;
+    }
 
     String sh(String command) {
         try {
@@ -56,12 +67,12 @@ final class Phone {
     }
 
     boolean running() {
-        return !sh("pidof " + APP).trim().isEmpty();
+        return !sh("pidof " + app).trim().isEmpty();
     }
 
     /** Starts kzsigner's activity, with extras as in "am start" (e.g. "--ez selftest true"). */
     void start(String extras) {
-        sh("am start -W -n " + APP + "/.MainActivity " + extras);
+        sh("am start -W -n " + app + "/.MainActivity " + extras);
     }
 
     /** When the tests last forgot the app's log, in seconds since 1970 (the emulator's clock). */
@@ -172,7 +183,7 @@ final class Phone {
         for (int i = 0; i < 15; i++) {
             for (android.view.accessibility.AccessibilityWindowInfo w : automation().getWindows()) {
                 android.view.accessibility.AccessibilityNodeInfo root = w.getRoot();
-                if (root != null && APP.contentEquals(String.valueOf(root.getPackageName()))
+                if (root != null && app.contentEquals(String.valueOf(root.getPackageName()))
                         && has(root, name, 0)) {
                     return true;
                 }
@@ -215,11 +226,11 @@ final class Phone {
         StringBuilder out = new StringBuilder();
         for (android.view.accessibility.AccessibilityWindowInfo w : automation().getWindows()) {
             android.view.accessibility.AccessibilityNodeInfo root = w.getRoot();
-            if (root != null && APP.contentEquals(String.valueOf(root.getPackageName()))) {
+            if (root != null && app.contentEquals(String.valueOf(root.getPackageName()))) {
                 print(root, 0, out);
             }
         }
-        return out.length() > 0 ? out.toString() : "(no kzsigner window)";
+        return out.length() > 0 ? out.toString() : "(no " + app + " window)";
     }
 
     private static void print(android.view.accessibility.AccessibilityNodeInfo n, int depth, StringBuilder out) {

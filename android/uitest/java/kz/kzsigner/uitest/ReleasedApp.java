@@ -28,7 +28,7 @@ public class ReleasedApp {
         phone.clearLog();
         phone.start("");
         phone.device.wait(androidx.test.uiautomator.Until.hasObject(
-                androidx.test.uiautomator.By.pkg(Phone.APP)), 20000);
+                androidx.test.uiautomator.By.pkg(phone.app)), 20000);
         Phone.sleep(5000);
         if (!phone.running()) {
             phone.fail("the app stopped after starting");

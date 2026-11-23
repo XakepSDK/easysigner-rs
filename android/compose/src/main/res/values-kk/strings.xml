@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="your_keys">Сіздің кілттеріңіз</string>
+    <string name="no_keys">Әзірге кілт жоқ</string>
+    <string name="no_keys_detail">Құжаттарға қол қою үшін ҰКО кілтін қосыңыз.</string>
+    <string name="keys_hidden">Кілттер тізімі жабық.</string>
+    <string name="iin">ЖСН %1$s</string>
+    <string name="bin">БСН %1$s</string>
+    <string name="valid_until">%1$s дейін жарамды</string>
+    <string name="cant_read_keys">Кілттеріңізді оқу мүмкін болмады.</string>
+    <string name="version">Нұсқа %1$s</string>
+</resources>

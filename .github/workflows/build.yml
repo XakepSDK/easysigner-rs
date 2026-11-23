@@ -41,7 +41,7 @@ jobs:
           case "$V" in *-*)
             if [ "${{ github.event_name }}" != workflow_dispatch ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               git diff --name-only "$BEFORE" HEAD | tee changed.txt
-              grep -qE '^(android/|src/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
+              grep -qE '^(android/|ffi/|src/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
             fi ;;
           esac
           echo "android=$android" | tee -a "$GITHUB_OUTPUT"
@@ -72,6 +72,9 @@ jobs:
       - name: Test
         shell: bash
         run: sh scripts/cargo.sh test --release --locked
+      - name: Test the app's calls into the core (ffi, not in default-members)
+        shell: bash
+        run: sh scripts/cargo.sh test --release --locked -p kzsigner-ffi
       - name: Build
         shell: bash
         run: sh scripts/cargo.sh
@@ -204,11 +207,14 @@ jobs:
           git clone -q . "$RUNNER_TEMP/again"
           (cd "$RUNNER_TEMP/again" && KZSIGNER_KEYSTORE_PASS="$PASS" sh scripts/apk.sh > /dev/null)
           sha256sum dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk
-          cmp dist/*.apk "$RUNNER_TEMP"/again/dist/*.apk || {
-            unzip -lv dist/*.apk > a.txt; unzip -lv "$RUNNER_TEMP"/again/dist/*.apk > b.txt
-            diff a.txt b.txt
-            exit 1
-          }
+          for a in dist/*.apk; do
+            b=$RUNNER_TEMP/again/$a
+            cmp "$a" "$b" || {
+              unzip -lv "$a" > a.txt; unzip -lv "$b" > b.txt
+              diff a.txt b.txt
+              exit 1
+            }
+          done
       - name: The emulator test copy (x86_64, with the test of the real screens)
         run: KZSIGNER_SELFTEST=1 sh scripts/apk.sh
       - name: The second build must have matched (checked above)
@@ -255,7 +261,7 @@ jobs:
           target: google_apis
           disable-animations: true
           disk-size: 2048M
-          script: sh scripts/android-selftest.sh dist/kzsigner-*-android.apk selftest/kzsigner-selftest.apk selftest/kzsigner-uitest.apk
+          script: sh scripts/android-selftest.sh dist/kzsigner-[0-9]*-android.apk selftest/kzsigner-selftest.apk selftest/kzsigner-uitest.apk dist/kzsigner-next-*-android.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -281,5 +287,7 @@ jobs:
         run: |
           V=${{ needs.build.outputs.version }}
           if gh release view "v$V" >/dev/null 2>&1; then echo "v$V already released"; exit 0; fi
-          cat dist/*.sha256 > dist/SHA256SUMS && rm dist/*.sha256
+          # the Compose app is not released until it replaces the egui one (docs/compose-plan.md)
+          rm -f dist/kzsigner-next-*
+          cat dist/*.sha256 | grep -v kzsigner-next- > dist/SHA256SUMS && rm dist/*.sha256
           gh release create "v$V" --target "$GITHUB_SHA" --title "kzsigner $V" --notes-file "release-notes/$V.md" dist/*

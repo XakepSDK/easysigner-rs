@@ -1,0 +1,3 @@
+[bindings.kotlin]
+package_name = "kz.kzsigner.core"
+cdylib_name = "kzsigner_ffi"

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">kzsigner</string>
+    <string name="your_keys">Your keys</string>
+    <string name="no_keys">No keys yet</string>
+    <string name="no_keys_detail">Add your NCA key to sign documents.</string>
+    <string name="keys_hidden">The key list is locked.</string>
+    <string name="iin">IIN %1$s</string>
+    <string name="bin">BIN %1$s</string>
+    <string name="valid_until">Valid until %1$s</string>
+    <string name="cant_read_keys">Can\'t read your keys.</string>
+    <string name="version">Version %1$s</string>
+</resources>
