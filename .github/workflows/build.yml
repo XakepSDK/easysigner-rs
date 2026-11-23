@@ -241,10 +241,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: kzsigner-android
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
           name: android-uitest
           path: uitest
       - name: KVM for the emulator
@@ -260,7 +256,7 @@ jobs:
           target: google_apis
           disable-animations: true
           disk-size: 2048M
-          script: sh scripts/android-selftest.sh dist/kzsigner-[0-9]*-android.apk uitest/kzsigner-uitest.apk
+          script: sh scripts/android-selftest.sh uitest/kzsigner-test-app.apk uitest/kzsigner-uitest.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:

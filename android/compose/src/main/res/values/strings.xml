@@ -213,4 +213,5 @@
     <string name="copy_details">Copy details</string>
     <string name="copied">Copied</string>
     <string name="who_signed_page">“Who signed” page</string>
+    <string name="only_check">Only check a signed file</string>
 </resources>

@@ -88,6 +88,20 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     /** NCA's servers; made on first use (it reads the bundled NCA certificates). */
     private val nca by lazy { Nca.kazakhstan() }
 
+    /**
+     * Who may issue a key to add: NCA and the CAs recognized in Kazakhstan. The emulator
+     * tests' build (build type "uitest") also trusts its test CAs, from its assets, so its
+     * test keys can be added; signing and checking still use [nca] alone.
+     */
+    private val issuers by lazy {
+        if (BuildConfig.TEST_CAS) {
+            val a = getApplication<Application>().assets
+            Nca.withTestCas(a.list("testca").orEmpty().map { a.open("testca/$it").use { s -> s.readBytes() } })
+        } else {
+            nca
+        }
+    }
+
     init {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -133,7 +147,7 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     suspend fun add(file: ByteArray, password: String, prompt: ChipPrompt): Added {
         val v = vault ?: return Added.Refused(AddKeyException.Failed("no key vault"))
         return try {
-            withContext(Dispatchers.IO) { v.addKey(file, password, prompt) }
+            withContext(Dispatchers.IO) { v.addKey(issuers, file, password, prompt) }
             keys = withContext(Dispatchers.IO) { v.keys() }
             Added.Done
         } catch (e: AddKeyException.Cancelled) {

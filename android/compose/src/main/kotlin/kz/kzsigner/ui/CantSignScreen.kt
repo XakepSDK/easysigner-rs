@@ -28,8 +28,9 @@ import kz.kzsigner.R
 const val EGOV = "https://egov.kz"
 
 /**
- * Screen 3f: the key can't sign (expired, not valid yet, a GOST 2004 key, or, as NCA says
- * when signing, revoked or not NCA's), and how to get a new one. Nothing was added or signed.
+ * Screen 3f: the key can't sign (expired, not valid yet, a GOST 2004 key, not from NCA or
+ * another CA recognized in Kazakhstan, or, as NCA says when signing, revoked), and how to get a
+ * new one. Nothing was added or signed.
  */
 @Composable
 fun CantSignScreen(reason: CantSign, validFromMs: Long, expiresMs: Long, onBack: () -> Unit, onAddNew: () -> Unit) {

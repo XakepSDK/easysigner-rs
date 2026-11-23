@@ -153,6 +153,8 @@ public class AppFlows {
         phone.device.wait(Until.hasObject(By.pkg(phone.app)), 20000);
         see("Add your signature key");
         see("Choose the key file");
+        // checking needs no key
+        see("Only check a signed file");
         screen("android-1-add");
         // what TalkBack reads, through Compose's semantics
         if (!phone.appNames("Add your signature key")) {

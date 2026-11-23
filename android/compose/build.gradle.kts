@@ -39,6 +39,13 @@ android {
     }
 
     signingConfigs {
+        // the public development key, for the emulator tests' build
+        create("dev") {
+            storeFile = file("../dev.keystore")
+            storePassword = "kzsigner-dev"
+            keyAlias = "kzsigner-dev"
+            keyPassword = "kzsigner-dev"
+        }
         create("kzsigner") {
             val ks = System.getenv("KZSIGNER_KEYSTORE")
             if (!ks.isNullOrEmpty()) {
@@ -63,6 +70,18 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("kzsigner")
             vcsInfo.include = false
+            buildConfigField("boolean", "TEST_CAS", "false")
+        }
+        // the emulator tests' build: the release build, plus the test keys' CAs trusted when
+        // adding a key (KeysModel.issuers), so the tests can add one. Never released.
+        create("uitest") {
+            initWith(getByName("release"))
+            buildConfigField("boolean", "TEST_CAS", "true")
+            signingConfig = signingConfigs.getByName("dev")
+            matchingFallbacks += "release"
+        }
+        getByName("debug") {
+            buildConfigField("boolean", "TEST_CAS", "false")
         }
     }
 
@@ -73,6 +92,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

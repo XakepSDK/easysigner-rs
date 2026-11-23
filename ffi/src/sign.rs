@@ -37,9 +37,29 @@ impl Nca {
             vec![],
         ))
     }
+
+    /// NCA's servers, with the CA certificates in `cas` trusted too: for the emulator tests'
+    /// keys only (the app's test build). Certificates that don't parse are left out.
+    #[uniffi::constructor]
+    pub fn with_test_cas(cas: Vec<Vec<u8>>) -> Arc<Nca> {
+        let cas = cas.iter().filter_map(|c| Cert::parse_any(c).ok()).collect();
+        Arc::new(Nca::with(
+            kzsigner::DEFAULT_TSA_URL,
+            kzsigner::DEFAULT_OCSP_URL,
+            cas,
+        ))
+    }
 }
 
 impl Nca {
+    /// NotRecognized when `c` is not from NCA or another CA recognized in Kazakhstan, or not a
+    /// key for signing documents; checked offline.
+    pub(crate) fn unrecognized(&self, c: &Cert) -> Option<CantSign> {
+        let chain = self.trust.check(c, now());
+        (!chain.ok || cert::usage_problem(c, chain.issuer.as_ref()).is_some())
+            .then_some(CantSign::NotRecognized)
+    }
+
     /// Other servers and extra trusted CAs: the tests' fake ones.
     pub(crate) fn with(tsa: &str, ocsp: &str, extra_trust: Vec<Cert>) -> Nca {
         Nca {

@@ -58,7 +58,12 @@ fn sign_prompt() -> ChipPrompt {
 pub(super) fn carol(test: &str, g: &Arc<SoftwareGuard>) -> (Arc<Vault>, String) {
     let v = vault(&dir(test).join("keys.kzs"), g);
     let id = v
-        .add_key(file("ocsp/carol.p12"), "Qwerty12".into(), prompt())
+        .add_key(
+            super::test_nca(),
+            file("ocsp/carol.p12"),
+            "Qwerty12".into(),
+            prompt(),
+        )
         .unwrap();
     g.prompts.lock().unwrap().clear();
     (v, id)

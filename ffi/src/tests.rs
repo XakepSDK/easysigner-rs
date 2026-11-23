@@ -3,6 +3,15 @@ use kzsigner::vault::SoftwareGuard;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+/// NCA's servers out of reach, and the test keys' CAs trusted.
+fn test_nca() -> Arc<crate::sign::Nca> {
+    Arc::new(crate::sign::Nca::with(
+        "http://127.0.0.1:9/",
+        "http://127.0.0.1:9/",
+        sign::test_cas(),
+    ))
+}
+
 fn fixture(name: &str) -> Vec<u8> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../tests/fixtures/keys")
@@ -140,7 +149,12 @@ fn adds_lists_and_removes_a_key() {
     assert_eq!(v.new_key_unlock(), Unlock::FingerprintOrScreenLock);
 
     let id = v
-        .add_key(fixture("alice_rsa.p12"), "Qwerty12".into(), prompt())
+        .add_key(
+            test_nca(),
+            fixture("alice_rsa.p12"),
+            "Qwerty12".into(),
+            prompt(),
+        )
         .unwrap();
     // one prompt, with the app's text
     assert_eq!(g.prompts.lock().unwrap().len(), 1);
@@ -158,7 +172,12 @@ fn adds_lists_and_removes_a_key() {
     assert_eq!(k.cant_sign, None);
 
     assert!(matches!(
-        v.add_key(fixture("alice_rsa.p12"), "Qwerty12".into(), prompt()),
+        v.add_key(
+            test_nca(),
+            fixture("alice_rsa.p12"),
+            "Qwerty12".into(),
+            prompt()
+        ),
         Err(AddKeyError::AlreadyAdded)
     ));
 
@@ -174,7 +193,10 @@ fn says_why_a_key_was_not_added() {
     let d = dir("why");
     let g = Arc::new(SoftwareGuard::default());
     let v = vault(&d.join("keys.kzs"), &g);
-    let add = |file: Vec<u8>, pw: &str| v.add_key(file, pw.into(), prompt()).unwrap_err();
+    let add = |file: Vec<u8>, pw: &str| {
+        v.add_key(test_nca(), file, pw.into(), prompt())
+            .unwrap_err()
+    };
 
     assert!(matches!(
         add(fixture("alice_rsa.p12"), "Йцукен12"),
@@ -188,6 +210,20 @@ fn says_why_a_key_was_not_added() {
         add(fixture("alice_gost2004.p12"), "Qwerty12"),
         AddKeyError::KeyCantSign {
             reason: CantSign::Gost2004,
+            ..
+        }
+    ));
+    // a key from a CA that isn't recognized in Kazakhstan (NCA's real list): not added
+    assert!(matches!(
+        v.add_key(
+            crate::sign::Nca::kazakhstan(),
+            fixture("alice_rsa.p12"),
+            "Qwerty12".into(),
+            prompt()
+        )
+        .unwrap_err(),
+        AddKeyError::KeyCantSign {
+            reason: CantSign::NotRecognized,
             ..
         }
     ));
@@ -212,8 +248,13 @@ fn a_phone_without_screen_lock_uses_the_password() {
     let g = Arc::new(sg);
     let v = vault(&d.join("keys.kzs"), &g);
     assert_eq!(v.new_key_unlock(), Unlock::Password);
-    v.add_key(fixture("alice_rsa.p12"), "Qwerty12".into(), prompt())
-        .unwrap();
+    v.add_key(
+        test_nca(),
+        fixture("alice_rsa.p12"),
+        "Qwerty12".into(),
+        prompt(),
+    )
+    .unwrap();
     assert_eq!(v.keys().keys[0].unlock, Unlock::Password);
     assert!(g.prompts.lock().unwrap().is_empty(), "no prompt to show");
 }

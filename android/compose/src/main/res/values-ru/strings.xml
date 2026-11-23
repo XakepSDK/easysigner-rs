@@ -217,4 +217,5 @@
     <string name="copy_details">Скопировать подробности</string>
     <string name="copied">Скопировано</string>
     <string name="who_signed_page">страница «Кто подписал»</string>
+    <string name="only_check">Только проверить подписанный файл</string>
 </resources>

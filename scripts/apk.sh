@@ -13,7 +13,9 @@
 # APK.
 #
 # KZSIGNER_UITEST=1 also builds the emulator tests (UI Automator, android/uitest) as
-# target/apk-uitest/kzsigner-uitest.apk. CI runs them with scripts/android-selftest.sh.
+# target/apk-uitest/kzsigner-uitest.apk, and the app they drive: the same app with the test
+# keys' CAs trusted for adding a key (build type "uitest"), target/apk-uitest/kzsigner-test-app.apk.
+# CI runs them with scripts/android-selftest.sh.
 #
 # Signing: with KZSIGNER_KEYSTORE (+ KZSIGNER_KEYSTORE_PASS, KZSIGNER_KEY_ALIAS) when set,
 # else with android/dev.keystore, a development key whose password is in
@@ -31,7 +33,9 @@ GRADLE_SHA256=971fcd7150ca4ba04852c0b2ca0d2d0ab9468e14b03473eab19528809914c76b
 
 TARGETS="aarch64-linux-android x86_64-linux-android"
 TASKS=":compose:assembleRelease"
-[ -n "${KZSIGNER_UITEST:-}" ] && TASKS="$TASKS :uitest:assembleDebug"
+if [ -n "${KZSIGNER_UITEST:-}" ]; then
+    TASKS="$TASKS :compose:assembleUitest :uitest:assembleDebug"
+fi
 FFI=target/android-ffi
 OUT=dist/kzsigner-$V-android.apk
 # a release must not be signed with the development key, whose password is public
@@ -94,6 +98,7 @@ cp target/gradle-compose/outputs/apk/release/compose-release.apk "$OUT"
 if [ -n "${KZSIGNER_UITEST:-}" ]; then
     mkdir -p target/apk-uitest
     cp target/gradle-uitest/outputs/apk/debug/uitest-debug.apk target/apk-uitest/kzsigner-uitest.apk
+    cp target/gradle-compose/outputs/apk/uitest/compose-uitest.apk target/apk-uitest/kzsigner-test-app.apk
 fi
 "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$OUT" | head -3
 ls -la "$OUT"

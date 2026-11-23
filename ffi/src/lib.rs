@@ -388,6 +388,7 @@ impl Vault {
     /// one, the key's own password guards it. Returns the new key's id.
     pub fn add_key(
         &self,
+        nca: Arc<crate::sign::Nca>,
         p12: Vec<u8>,
         password: String,
         prompt: ChipPrompt,
@@ -397,7 +398,11 @@ impl Vault {
         // checked before the prompt: a key that can't sign is not worth one
         match kzsigner::p12::open(&p12, &password, None) {
             Ok(key) => {
-                if let Some(reason) = cant_sign(&key.cert, now()) {
+                // expired, GOST 2004, or not from NCA or another CA recognized in Kazakhstan
+                // (offline: whether NCA revoked it is asked when signing)
+                if let Some(reason) =
+                    cant_sign(&key.cert, now()).or_else(|| nca.unrecognized(&key.cert))
+                {
                     return Err(AddKeyError::KeyCantSign {
                         reason,
                         valid_from_ms: key.cert.not_before,

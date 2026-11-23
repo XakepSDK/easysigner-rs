@@ -3,6 +3,8 @@
 #
 #   sh scripts/android-selftest.sh APK UITEST_APK
 #
+# APK is the app's test build (kzsigner-test-app.apk): the released app, except that it also
+# trusts the test keys' CAs when adding a key, so the tests can add one.
 # The tests are UI Automator tests in android/uitest (UITEST_APK, built by
 # KZSIGNER_UITEST=1 sh scripts/apk.sh); they run on the emulator in their own process. This
 # script only installs the APKs, runs the tests (AppFlows), and does the one thing a test on
