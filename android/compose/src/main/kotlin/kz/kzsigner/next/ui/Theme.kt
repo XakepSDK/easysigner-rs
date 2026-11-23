@@ -53,6 +53,12 @@ private val Light = lightColorScheme(
     outlineVariant = Color(0xFFE4E8EF),
     error = Color(0xFFB42318),
     onError = Color.White,
+    // Material's containers are tinted with the primary colour; the design's are neutral
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color.White,
+    surfaceContainer = Color.White,
+    surfaceContainerHigh = Color(0xFFF7F8FA),
+    surfaceContainerHighest = Color(0xFFF3F5F9),
 )
 
 private val Dark = darkColorScheme(
@@ -68,6 +74,11 @@ private val Dark = darkColorScheme(
     outlineVariant = Color(0xFF2A3038),
     error = Color(0xFFFF8A80),
     onError = Color(0xFF3B0A06),
+    surfaceContainerLowest = Color(0xFF0C0F12),
+    surfaceContainerLow = Color(0xFF161A1F),
+    surfaceContainer = Color(0xFF1A1E24),
+    surfaceContainerHigh = Color(0xFF1F242B),
+    surfaceContainerHighest = Color(0xFF252B33),
 )
 
 @Composable

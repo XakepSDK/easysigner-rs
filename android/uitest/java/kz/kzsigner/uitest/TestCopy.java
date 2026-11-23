@@ -99,9 +99,23 @@ public class TestCopy {
     }
 
     private void step(String step) {
-        phone.clearLog();
-        phone.start("--es fptest " + step);
-        Phone.say(phone.waitLog("FP PASS " + step, "FP FAIL", 90, () -> Phone.say("FINGER 1")));
-        Phone.say("FINGER 0");
+        for (int attempt = 1; ; attempt++) {
+            phone.clearLog();
+            phone.start("--es fptest " + step);
+            try {
+                Phone.say(phone.waitLog("FP PASS " + step, "FP FAIL", 90, () -> Phone.say("FINGER 1")));
+                Phone.say("FINGER 0");
+                return;
+            } catch (AssertionError e) {
+                Phone.say("FINGER 0");
+                // "status 1": the prompt closed at once, as Android does when it is asked for
+                // before the app is in front (right after Settings); once more
+                if (attempt >= 2 || String.valueOf(e.getMessage()).indexOf("status 1") < 0) {
+                    throw e;
+                }
+                Phone.say("the prompt closed at once; again");
+                Phone.sleep(3000);
+            }
+        }
     }
 }

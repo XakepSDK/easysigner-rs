@@ -34,7 +34,7 @@ sealed interface Added {
  * runs off the main thread, because the chip waits there for the fingerprint/PIN prompt.
  */
 class KeysModel(app: Application) : AndroidViewModel(app) {
-    private val chip = KeystoreChip(app) { MainActivity.current() }
+    val chip = KeystoreChip(app) { MainActivity.current() }
     private var vault: Vault? = null
 
     /** The keys, once read; null while reading. */
@@ -47,6 +47,10 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
 
     /** What a key added now will open with. */
     var newKeyUnlock by mutableStateOf(Unlock.FINGERPRINT_OR_SCREEN_LOCK)
+        private set
+
+    /** The phone has a screen lock (else a new key opens with its password for that reason). */
+    var screenLock by mutableStateOf(true)
         private set
 
     /** A key file opened with the app (Open with, Share), waiting for its password. */
@@ -62,8 +66,10 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
                     vault = v
                     val k = v.keys()
                     val u = v.newKeyUnlock()
+                    val lock = chip.capabilities().screenLock
                     withContext(Dispatchers.Main) {
                         newKeyUnlock = u
+                        screenLock = lock
                         keys = k
                     }
                 } catch (e: CoreException) {
@@ -77,8 +83,9 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         val v = vault ?: return
         viewModelScope.launch {
-            val u = withContext(Dispatchers.IO) { v.newKeyUnlock() }
+            val (u, lock) = withContext(Dispatchers.IO) { v.newKeyUnlock() to chip.capabilities().screenLock }
             newKeyUnlock = u
+            screenLock = lock
         }
     }
 

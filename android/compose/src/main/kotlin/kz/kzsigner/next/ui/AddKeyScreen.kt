@@ -152,7 +152,11 @@ fun AddKeyScreen(
         Title(stringResource(R.string.add_key_title))
         Body(
             stringResource(
-                if (model.newKeyUnlock == Unlock.PASSWORD) R.string.add_key_once_password else R.string.add_key_once_device,
+                when {
+                    model.newKeyUnlock != Unlock.PASSWORD -> R.string.add_key_once_device
+                    model.screenLock -> R.string.add_key_once_nochip
+                    else -> R.string.add_key_once_password
+                },
             ),
         )
         FileCard(f.name, if (problem == Problem.NOT_A_KEY) stringResource(R.string.not_a_key) else null, choose)
@@ -195,7 +199,11 @@ fun AddKeyScreen(
         } else {
             InfoNotice(
                 stringResource(
-                    if (model.newKeyUnlock == Unlock.PASSWORD) R.string.key_stays_password else R.string.key_stays_device,
+                    when {
+                        model.newKeyUnlock != Unlock.PASSWORD -> R.string.key_stays_device
+                        model.screenLock -> R.string.key_stays_nochip
+                        else -> R.string.key_stays_password
+                    },
                 ),
             )
         }

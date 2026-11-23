@@ -72,6 +72,8 @@
     <string name="talks_to_value">NCA: key check and signing time (pki.gov.kz)</string>
     <string name="license">License</string>
     <string name="license_value">See the source code</string>
+    <string name="add_key_once_nochip">Only once. This phone can\'t keep keys in a security chip, so you\'ll type the key\'s password each time you sign.</string>
+    <string name="key_stays_nochip">This phone has no security chip for keys, so the key will ask for this password each time you sign.</string>
     <plurals name="expires_in">
         <item quantity="one">Expires in %1$d day, on %2$s</item>
         <item quantity="other">Expires in %1$d days, on %2$s</item>

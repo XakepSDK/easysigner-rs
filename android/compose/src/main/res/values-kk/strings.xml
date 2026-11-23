@@ -70,6 +70,8 @@
     <string name="talks_to_value">ҰКО: кілтті тексеру және қол қою уақыты (pki.gov.kz)</string>
     <string name="license">Лицензия</string>
     <string name="license_value">Бастапқы код</string>
+    <string name="add_key_once_nochip">Тек бір рет. Бұл телефон кілттерді қауіпсіздік чипінде сақтай алмайды, сондықтан әр қол қойғанда кілт құпиясөзін енгізесіз.</string>
+    <string name="key_stays_nochip">Бұл телефонда кілттерге арналған қауіпсіздік чипі жоқ, сондықтан кілт әр қол қойғанда осы құпиясөзді сұрайды.</string>
     <plurals name="expires_in">
         <item quantity="one">%1$d күннен кейін, %2$s аяқталады</item>
         <item quantity="other">%1$d күннен кейін, %2$s аяқталады</item>

@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
         current = WeakReference(this)
         enableEdgeToEdge()
         if (savedInstanceState == null) take(intent)
+        chipTest(intent)
         setContent {
             KzsignerTheme {
                 App(model, finish = ::finish)
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         take(intent)
+        chipTest(intent)
     }
 
     override fun onResume() {
@@ -47,6 +49,13 @@ class MainActivity : AppCompatActivity() {
     private fun take(intent: Intent?) {
         val uri = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data ?: return
         lifecycleScope.launch { model.incoming = model.read(uri) }
+    }
+
+    /** CI's check of the key chip ([ChipSelfTest]), on emulators only. */
+    private fun chipTest(intent: Intent?) {
+        if (intent?.getBooleanExtra("chiptest", false) == true && ChipSelfTest.emulator()) {
+            ChipSelfTest.run(model.chip)
+        }
     }
 
     companion object {

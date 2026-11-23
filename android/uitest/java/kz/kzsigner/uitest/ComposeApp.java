@@ -22,7 +22,8 @@ import org.junit.runners.MethodSorters;
  * Keys: a key file opened with the app goes to Add key; a GOST 2004 key gets "too old to
  * sign"; a password typed with a Russian keyboard gets the keyboard hint; the right password
  * and a touch of the fingerprint sensor keep the key, which Your keys then lists; removing it
- * leads back to Add key.
+ * leads back to Add key. Then the chip itself: the app's emulator-only check makes keys that
+ * open with the fingerprint or PIN, and with the fingerprint only, and uses them.
  */
 @RunWith(AndroidJUnit4.class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // the steps build on each other
@@ -125,7 +126,9 @@ public class ComposeApp {
         }
         Phone.say("FINGER 0");
         see("Иванов Алибек");
-        see("Opens with your");
+        // emulators keep keys in software only, so the core uses the key's password there
+        // (step5 checks the fingerprint prompt itself)
+        see("Opens with");
         phone.shot("android-next-4-keys");
     }
 
@@ -137,5 +140,13 @@ public class ComposeApp {
         tap("Remove");
         see("Choose the key file");
         Phone.say("the Compose app adds, lists and removes a key");
+    }
+
+    @Test
+    public void step5ChipPrompts() {
+        phone.clearLog();
+        phone.start("--ez chiptest true");
+        Phone.say(phone.waitLog("CHIP PASS", "CHIP FAIL", 120, () -> Phone.say("FINGER 1")));
+        Phone.say("FINGER 0");
     }
 }

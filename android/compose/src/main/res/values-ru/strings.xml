@@ -70,6 +70,8 @@
     <string name="talks_to_value">НУЦ: проверка ключа и время подписи (pki.gov.kz)</string>
     <string name="license">Лицензия</string>
     <string name="license_value">Исходный код</string>
+    <string name="add_key_once_nochip">Только один раз. Этот телефон не может хранить ключи в чипе безопасности, поэтому при каждой подписи нужно вводить пароль ключа.</string>
+    <string name="key_stays_nochip">В этом телефоне нет чипа безопасности для ключей, поэтому ключ будет спрашивать этот пароль при каждой подписи.</string>
     <plurals name="expires_in">
         <item quantity="one">Истекает через %1$d день, %2$s</item>
         <item quantity="few">Истекает через %1$d дня, %2$s</item>

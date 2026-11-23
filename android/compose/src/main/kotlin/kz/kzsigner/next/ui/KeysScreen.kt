@@ -99,7 +99,11 @@ fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbo
     val k = removing
     if (k != null) {
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(onDismissRequest = { removing = null }, sheetState = sheet) {
+        ModalBottomSheet(
+            onDismissRequest = { removing = null },
+            sheetState = sheet,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
             Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
                     stringResource(R.string.remove_title, displayName(k.name)),
