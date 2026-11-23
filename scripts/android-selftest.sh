@@ -84,22 +84,28 @@ enroll() {
 # locks the screen and unlocks it with the PIN: the Keystore lets keys that need an unlocked
 # device work only after a real unlock with the screen lock
 unlock() {
-    adb shell input keyevent KEYCODE_SLEEP
-    sleep 2
-    adb shell input keyevent KEYCODE_WAKEUP
-    sleep 1
-    adb shell wm dismiss-keyguard
-    sleep 1
-    # swipe the lock screen up, then the PIN
-    size=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
-    w=${size%x*}
-    h=${size#*x}
-    adb shell input swipe $((w / 2)) $((h * 4 / 5)) $((w / 2)) $((h / 5))
-    sleep 1
-    pin
-    sleep 3
-    adb shell dumpsys window | grep -qiE 'mDreamingLockscreen=true|isKeyguardShowing=true|mShowingLockscreen=true' &&
-        echo "the lock screen is still up after unlocking"
+    for attempt in 1 2 3 4 5; do
+        adb shell input keyevent KEYCODE_SLEEP
+        sleep 2
+        adb shell input keyevent KEYCODE_WAKEUP
+        sleep 2
+        adb shell wm dismiss-keyguard
+        sleep 2
+        # swipe the lock screen up, then the PIN
+        size=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
+        w=${size%x*}
+        h=${size#*x}
+        adb shell input swipe $((w / 2)) $((h * 4 / 5)) $((w / 2)) $((h / 5))
+        sleep 2
+        pin
+        sleep 4
+        if ! adb shell dumpsys window | grep -qiE 'mDreamingLockscreen=true|isKeyguardShowing=true|mShowingLockscreen=true'; then
+            echo "unlocked (attempt $attempt)"
+            return 0
+        fi
+        echo "the lock screen is still up after unlocking (attempt $attempt)"
+    done
+    fail "could not unlock the screen with the PIN"
 }
 pin() { adb shell input text "$PIN"; adb shell input keyevent KEYCODE_ENTER; }
 
