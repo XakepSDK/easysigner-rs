@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -79,10 +80,10 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
 
     Screen(onBack = null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            // never broken in two (large text): the name in the chip gives way instead
-            Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, softWrap = false)
-            Spacer(Modifier.width(12.dp).weight(1f))
-            Box(Modifier.weight(1f, fill = false)) { KeyChip(keys.firstOrNull()?.name, keys.isEmpty() && model.keys?.hidden != true, onKeys) }
+            // never broken in two (large text); the chip's text is capped instead
+            Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, softWrap = false, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(12.dp))
+            Box { KeyChip(keys.firstOrNull()?.name, keys.isEmpty() && model.keys?.hidden != true, onKeys) }
         }
         Spacer(Modifier.size(8.dp))
         Surface(
@@ -144,7 +145,7 @@ private fun KeyChip(name: String?, none: Boolean, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(painterResource(R.drawable.ic_key), null, modifier = Modifier.size(18.dp))
-            Text(name?.let { firstName(it) } ?: label, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name?.let { firstName(it) } ?: label, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
         }
     }
 }
