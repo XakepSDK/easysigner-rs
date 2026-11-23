@@ -91,9 +91,11 @@ missing. The way out is to keep Rust as the shared core and give each platform i
 - **Android:** Kotlin + Jetpack Compose. Accessibility, autofill, text input, insets and back
   come from the platform; the fingerprint or PIN prompt is the system's `BiometricPrompt`
   without hand-written JNI; Espresso and UI Automator test the real screens.
-- **iOS (later):** SwiftUI on the same core.
+- **iOS (later):** SwiftUI on the same core, so the core API should not be Android-shaped.
 - **Bindings:** UniFFI (Mozilla) generates the Kotlin and Swift code that calls Rust.
-- **Desktop:** stays on egui for now.
+- **Desktop:** stays on egui for now. Possible later: WinUI 3 on Windows, SwiftUI on macOS
+  (shared with iOS), and on Linux either Qt 6/QML through cxx-qt (native on KDE) or egui with
+  AccessKit. Compose Multiplatform for desktop is ruled out: it bundles a JVM, too heavy.
 
 The screens are few (sign, check, keys, settings), so a second UI is a modest amount of work;
 the phone app has no users yet, which makes Android the place to start.
