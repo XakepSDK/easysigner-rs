@@ -1,6 +1,8 @@
-# Android build: plan (not started)
+# Android build: plan (egui, replaced)
 
-Status: planned only. Do not implement until asked.
+Status: built, then replaced. The egui Android app this plan describes was removed in
+phase 6 of docs/compose-plan.md; the Android app is now android/compose (Kotlin + Compose).
+Kept for the reasoning behind the key vault and the chip, which the new app reuses.
 
 ## Goal
 

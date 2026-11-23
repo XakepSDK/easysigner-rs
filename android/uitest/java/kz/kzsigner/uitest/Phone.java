@@ -212,6 +212,79 @@ final class Phone {
         return false;
     }
 
+    /**
+     * What a TalkBack user and a person with large fingers meet on this screen: every control
+     * kzsigner shows has a name to read aloud (its text, description, or the text inside it),
+     * and is at least 48 dp on each side. A control cut off by a scrolling list is only
+     * checked for its name. Returns the problems, one a line; empty when there are none.
+     */
+    String a11yProblems() {
+        StringBuilder out = new StringBuilder();
+        float dp = InstrumentationRegistry.getInstrumentation().getContext()
+                .getResources().getDisplayMetrics().density;
+        for (android.view.accessibility.AccessibilityWindowInfo w : automation().getWindows()) {
+            android.view.accessibility.AccessibilityNodeInfo root = w.getRoot();
+            if (root != null && app.contentEquals(String.valueOf(root.getPackageName()))) {
+                android.graphics.Rect all = new android.graphics.Rect();
+                root.getBoundsInScreen(all);
+                controls(root, all, dp, 0, out);
+            }
+        }
+        return out.toString();
+    }
+
+    private static void controls(android.view.accessibility.AccessibilityNodeInfo n, android.graphics.Rect viewport,
+                                 float dp, int depth, StringBuilder out) {
+        if (n == null || depth > 40) {
+            return;
+        }
+        android.graphics.Rect r = new android.graphics.Rect();
+        n.getBoundsInScreen(r);
+        if (n.isVisibleToUser() && (n.isClickable() || n.isCheckable() || n.isEditable())) {
+            String name = spoken(n, 0);
+            String what = n.getClassName() + " \"" + name + "\" " + r.toShortString();
+            if (name.isEmpty()) {
+                out.append("no name: ").append(what).append('\n');
+            }
+            boolean cut = r.top <= viewport.top + 1 || r.bottom >= viewport.bottom - 1
+                    || r.left <= viewport.left + 1 || r.right >= viewport.right - 1;
+            float min = 47.5f * dp;
+            if (!cut && (r.width() < min || r.height() < min)) {
+                out.append("smaller than 48 dp: ").append(what).append('\n');
+            }
+        }
+        android.graphics.Rect inner = viewport;
+        if (n.isScrollable()) {
+            inner = new android.graphics.Rect(r);
+            if (!inner.intersect(viewport)) {
+                return;
+            }
+        }
+        for (int i = 0; i < n.getChildCount(); i++) {
+            controls(n.getChild(i), inner, dp, depth + 1, out);
+        }
+    }
+
+    /** What TalkBack reads for a control: its own text or description, else its children's. */
+    private static String spoken(android.view.accessibility.AccessibilityNodeInfo n, int depth) {
+        if (n == null || depth > 10) {
+            return "";
+        }
+        for (CharSequence c : new CharSequence[] {n.getContentDescription(), n.getText(), n.getHintText()}) {
+            if (c != null && c.toString().trim().length() > 0) {
+                return c.toString().trim();
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < n.getChildCount(); i++) {
+            String s = spoken(n.getChild(i), depth + 1);
+            if (!s.isEmpty()) {
+                out.append(out.length() > 0 ? " " : "").append(s);
+            }
+        }
+        return out.toString();
+    }
+
     /** kzsigner's accessibility tree, one node a line, hidden nodes included. */
     String tree() {
         StringBuilder out = new StringBuilder();

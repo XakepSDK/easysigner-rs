@@ -118,6 +118,19 @@ public class AppFlows {
         field.setText(password);
     }
 
+    /**
+     * A screenshot of the screen, and its accessibility check (Phone.a11yProblems): every
+     * control named for TalkBack and at least 48 dp.
+     */
+    private void screen(String name) {
+        Phone.sleep(800);
+        phone.shot(name);
+        String problems = phone.a11yProblems();
+        if (!problems.isEmpty()) {
+            phone.fail(name + ": accessibility problems:\n" + problems + "The tree:\n" + phone.tree());
+        }
+    }
+
     private void tap(String regex) {
         if (!phone.tap(regex)) {
             phone.fail("nothing to tap matches \"" + regex + "\". The tree:\n" + phone.tree());
@@ -140,7 +153,7 @@ public class AppFlows {
         phone.device.wait(Until.hasObject(By.pkg(phone.app)), 20000);
         see("Add your signature key");
         see("Choose the key file");
-        phone.shot("android-next-1-add");
+        screen("android-1-add");
         // what TalkBack reads, through Compose's semantics
         if (!phone.appNames("Add your signature key")) {
             phone.fail("the accessibility tree has no title. The tree:\n" + phone.tree());
@@ -154,7 +167,7 @@ public class AppFlows {
         type("Qwerty12");
         tap("Continue");
         see("This key is too old to sign");
-        phone.shot("android-next-2-old-key");
+        screen("android-2-old-key");
         tap("Add a new key");
         see("Choose the key file");
     }
@@ -168,19 +181,19 @@ public class AppFlows {
         tap("Continue");
         see("That password doesn't open this key");
         see("Is the keyboard in Russian or Kazakh");
-        phone.shot("android-next-3-wrong-password");
+        screen("android-3-wrong-password");
 
         type("Qwerty12");
         tap("Try again");
         // the first key: on to Home
         throughPrompt("Sign a document");
-        phone.shot("android-next-4-home");
+        screen("android-4-home");
         tap("Your keys");
         see("Иванов Алибек");
         // emulators keep keys in software only, so the core uses the key's password there
         // (step6 checks the fingerprint prompt itself)
         see("Opens with");
-        phone.shot("android-next-5-keys");
+        screen("android-5-keys");
         phone.device.pressBack();
         see("Sign a document");
     }
@@ -191,11 +204,11 @@ public class AppFlows {
         see("Sign this document");
         see("plain.pdf");
         see("Иванов Алибек");
-        phone.shot("android-next-6-sign");
+        screen("android-6-sign");
 
         tap("Read it");
         see("Page 1 of");
-        phone.shot("android-next-7-read");
+        screen("android-7-read");
         phone.device.pressBack();
         see("Sign this document");
 
@@ -205,7 +218,7 @@ public class AppFlows {
         }
         tap("Sign");
         throughPrompt("isn't recognized");
-        phone.shot("android-next-8-not-recognized");
+        screen("android-8-not-recognized");
         phone.device.pressBack();
         see("Sign this document");
         phone.device.pressBack();
@@ -218,7 +231,7 @@ public class AppFlows {
         // an unsigned PDF
         checkFile("plain.pdf");
         see("This file isn't signed");
-        phone.shot("android-next-check-1-not-signed");
+        screen("android-check-1-not-signed");
         tap("Check another file");
         see("Sign a document");
 
@@ -226,11 +239,11 @@ public class AppFlows {
         checkFile("lta.cms");
         see("Do not trust this document");
         see("isn't recognized in Kazakhstan");
-        phone.shot("android-next-check-2-not-recognized");
+        screen("android-check-2-not-recognized");
         tap("Details");
         see("Signature details");
         see("CAdES");
-        phone.shot("android-next-check-3-details");
+        screen("android-check-3-details");
         phone.device.pressBack();
         see("Do not trust this document");
         phone.device.pressBack();
@@ -246,7 +259,7 @@ public class AppFlows {
         Phone.sleep(1000);
         tap("Remove from this phone");
         see("from this phone\\?");
-        phone.shot("android-next-9-remove");
+        screen("android-9-remove");
         tap("Remove");
         see("Choose the key file");
         Phone.say("the Compose app adds, lists and removes a key");
@@ -254,7 +267,7 @@ public class AppFlows {
         // 2c: a PDF shared with no key waits on Add key, and comes back once one is added
         share("plain.pdf");
         see("To sign plain.pdf, first add your key");
-        phone.shot("android-next-10-shared-no-key");
+        screen("android-10-shared-no-key");
         open("alice_rsa.p12");
         see("alice_rsa.p12");
         type("Qwerty12");
@@ -270,6 +283,55 @@ public class AppFlows {
         phone.start("--ez chiptest true");
         Phone.say(phone.waitLog("CHIP PASS", "CHIP FAIL", 120, () -> Phone.say("FINGER 1")));
         Phone.say("FINGER 0");
+    }
+
+    /**
+     * Text at 200 % (Settings > Display > Font size, and the accessibility setting beyond
+     * it): the main screens still show their titles and actions, reachable by scrolling, and
+     * pass the same accessibility check.
+     */
+    @Test
+    public void step6bLargeText() {
+        phone.sh("settings put system font_scale 2.0");
+        try {
+            phone.device.pressBack();
+            phone.start("");
+            see("Sign a document");
+            screen("android-big-1-home");
+            share("plain.pdf");
+            see("Sign this document");
+            screen("android-big-2-sign");
+            scrollTo("^Sign$");
+            screen("android-big-3-sign-button");
+            phone.device.pressBack();
+            see("Sign a document");
+            tap("Your keys");
+            see("Иванов Алибек");
+            screen("android-big-4-keys");
+            phone.device.pressBack();
+        } finally {
+            phone.sh("settings put system font_scale 1.0");
+        }
+        Phone.say("the app works with text at 200 %");
+    }
+
+    /** Scrolls the screen's list until something matching `regex` (whole text) shows. */
+    private void scrollTo(String regex) {
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE);
+        for (int i = 0; i < 8; i++) {
+            if (phone.device.hasObject(By.text(p)) || phone.device.hasObject(By.desc(p))) {
+                return;
+            }
+            UiObject2 list = phone.device.findObject(By.scrollable(true));
+            if (list == null) {
+                break;
+            }
+            list.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f);
+            Phone.sleep(500);
+        }
+        if (!phone.device.hasObject(By.text(p)) && !phone.device.hasObject(By.desc(p))) {
+            phone.fail("\"" + regex + "\" can't be reached by scrolling. The tree:\n" + phone.tree());
+        }
     }
 
     @Test
