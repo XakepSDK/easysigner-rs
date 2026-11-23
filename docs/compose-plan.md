@@ -167,3 +167,23 @@ Most of the behaviour exists; these are new or different:
   After the key is removed, a shared PDF waits on Add key (2c) and comes back once a key is
   added. The Signed screen itself is reached only by the core's tests (fake NCA servers),
   not on the emulator.
+
+## Where phase 4 ended
+
+- Core (ffi): `check_file(nca, name, bytes, original, lang)` gives one verdict (`Valid`,
+  `Invalid`, `Unknown` when NCA gave no answer, `NotSigned`, or `NeedsDocument` for a
+  detached .cms) and, per signer, one `Reason` when theirs fails, the first that applies:
+  `Changed`, `Revoked`, `NotRecognized`, `Damaged`, `Expired` (at NCA's time),
+  `ExpiredSince` (no NCA time, and the key has expired since), `NotConfirmed`. The reason is
+  read from the report's fields in the ffi crate, so the core's `SignerReport` is unchanged;
+  phase 5's item 6 can move it into the core. Each signer carries NCA's time or the
+  computer's, the key's dates and the details for 5d, in the app's language.
+- Screens 5, 5b, 5c, 5d, 5e, 6, 6b, and 6c's reasons, plus "choose the document" for a
+  detached .cms. Home's "Check a signature" opens a file to check; "Add my signature" and
+  "Sign it myself" go on to Sign. The Sign screen's "Already signed by" rows now say whether
+  each signature holds, once NCA has answered.
+- Other apps (and the tests) can open the Check screens with the action
+  `kz.kzsigner.action.CHECK` and a content:// file.
+- Emulator: `ComposeApp` checks an unsigned PDF ("isn't signed") and a .cms signed with a
+  test key ("do not trust", not recognized in Kazakhstan), and opens its details. A valid
+  verdict needs NCA's real keys, so it is reached only by the core's tests (fake NCA).

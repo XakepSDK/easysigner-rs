@@ -28,6 +28,9 @@ import org.junit.runners.MethodSorters;
  * CA is not NCA's; the core's tests sign against fake NCA servers). Removing the key leads
  * back to Add key; a PDF shared then waits there (2c) and comes back once a key is added.
  *
+ * Checking: an unsigned PDF is "isn't signed"; a .cms signed with a test key is "do not
+ * trust" (not recognized in Kazakhstan), with its details.
+ *
  * Then the chip itself: the app's emulator-only check makes keys that open with the
  * fingerprint or PIN, and with the fingerprint only, and uses them.
  */
@@ -81,6 +84,17 @@ public class ComposeApp {
             }
         }
         Phone.say("FINGER 0");
+    }
+
+    /** Opens a test file on the app's Check screens (its CHECK action). */
+    private void checkFile(String file) {
+        Context c = InstrumentationRegistry.getInstrumentation().getContext();
+        Intent i = new Intent("kz.kzsigner.action.CHECK")
+                .setData(KeyFiles.uri(file))
+                .setClassName(Phone.NEXT, Phone.NEXT + ".MainActivity")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        c.startActivity(i);
+        phone.device.wait(Until.hasObject(By.pkg(Phone.NEXT)), 10000);
     }
 
     /** Waits up to 20 seconds for text on screen. */
@@ -188,6 +202,31 @@ public class ComposeApp {
         phone.device.pressBack();
         see("Sign a document");
         Phone.say("the Compose app takes a shared PDF to Sign and asks NCA before signing");
+    }
+
+    @Test
+    public void step4bCheck() {
+        // an unsigned PDF
+        checkFile("plain.pdf");
+        see("This file isn't signed");
+        phone.shot("android-next-check-1-not-signed");
+        tap("Check another file");
+        see("Sign a document");
+
+        // a .cms signed with a test key: its CA is not NCA's
+        checkFile("lta.cms");
+        see("Do not trust this document");
+        see("isn't recognized in Kazakhstan");
+        phone.shot("android-next-check-2-not-recognized");
+        tap("Details");
+        see("Signature details");
+        see("CAdES");
+        phone.shot("android-next-check-3-details");
+        phone.device.pressBack();
+        see("Do not trust this document");
+        phone.device.pressBack();
+        see("Sign a document");
+        Phone.say("the Compose app checks an unsigned and a signed file");
     }
 
     @Test

@@ -27,6 +27,8 @@ android {
         // the test keys (password Qwerty12) and PDFs, served by KeyFiles
         assets.directories.add("../../tests/fixtures/keys")
         assets.directories.add("../../tests/fixtures/pdf")
+        // a signed .cms (lta.cms, by a test key) to check
+        assets.directories.add("../../tests/fixtures/ltv")
     }
 
     signingConfigs {

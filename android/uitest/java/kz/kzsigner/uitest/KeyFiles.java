@@ -68,7 +68,9 @@ public class KeyFiles extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return uri.getPath().endsWith(".pdf") ? "application/pdf" : "application/x-pkcs12";
+        String p = uri.getPath();
+        return p.endsWith(".pdf") ? "application/pdf"
+                : p.endsWith(".cms") ? "application/pkcs7-signature" : "application/x-pkcs12";
     }
 
     @Override

@@ -53,6 +53,18 @@ class MainActivity : AppCompatActivity() {
      * WhatsApp, a files app): a key file goes to Add key, anything else to Sign.
      */
     private fun take(intent: Intent?) {
+        if (intent?.action == ACTION_CHECK) {
+            val uri = intent.data ?: return
+            lifecycleScope.launch {
+                val why = when (model.openForCheck(uri)) {
+                    Opened.TOO_BIG -> R.string.too_big
+                    Opened.UNREADABLE -> R.string.cant_read_file
+                    else -> return@launch
+                }
+                Toast.makeText(this@MainActivity, why, Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         val uri = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
@@ -76,6 +88,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** Opens the Check screens on the file in the intent's data (other apps, the tests). */
+        const val ACTION_CHECK = "kz.kzsigner.action.CHECK"
+
         private var current: WeakReference<Activity>? = null
 
         /** The activity on screen, for the key chip's prompt. */

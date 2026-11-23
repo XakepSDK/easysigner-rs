@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kz.kzsigner.core.AddKeyException
+import kz.kzsigner.core.Checked
 import kz.kzsigner.core.ChipPrompt
 import kz.kzsigner.core.CoreException
 import kz.kzsigner.core.Doc
@@ -25,6 +26,7 @@ import kz.kzsigner.core.SignException
 import kz.kzsigner.core.Signed
 import kz.kzsigner.core.Unlock
 import kz.kzsigner.core.Vault
+import kz.kzsigner.core.checkFile
 import kz.kzsigner.core.inspect
 
 /** A key file the owner picked or opened with the app. */
@@ -32,6 +34,9 @@ class KeyFile(val name: String, val bytes: ByteArray?)
 
 /** A document to sign, read into memory, and what the core made of it. */
 class DocFile(val name: String, val bytes: ByteArray, val info: Doc)
+
+/** A file being checked; [original] is the document a detached .cms signs, once chosen. */
+class CheckFile(val name: String, val bytes: ByteArray, val original: ByteArray? = null)
 
 /** What a file opened with the app (or chosen on Home) turned out to be. */
 enum class Opened { DOCUMENT, KEY, TOO_BIG, UNREADABLE }
@@ -75,6 +80,10 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
 
     /** The document's signed copy, once signed. */
     var signed by mutableStateOf<Signed?>(null)
+
+    /** The file on the Check screens, and what checking it found (null while checking). */
+    var checking by mutableStateOf<CheckFile?>(null)
+    var checked by mutableStateOf<Checked?>(null)
 
     /** NCA's servers; made on first use (it reads the bundled NCA certificates). */
     private val nca by lazy { Nca.kazakhstan() }
@@ -163,6 +172,44 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
         signed = null
         document = DocFile(f.name, bytes, info)
         return Opened.DOCUMENT
+    }
+
+    /** Reads a file chosen on Home's Check: it goes to [checking]. */
+    suspend fun openForCheck(uri: Uri): Opened {
+        val f = readFile(uri, MAX_DOCUMENT)
+        val bytes = f.bytes ?: return if (f.tooBig) Opened.TOO_BIG else Opened.UNREADABLE
+        checked = null
+        checking = CheckFile(f.name, bytes)
+        return Opened.DOCUMENT
+    }
+
+    /** Reads the document a detached .cms signs, and checks the two together. */
+    suspend fun addOriginal(uri: Uri): Opened {
+        val c = checking ?: return Opened.UNREADABLE
+        val f = readFile(uri, MAX_DOCUMENT)
+        val bytes = f.bytes ?: return if (f.tooBig) Opened.TOO_BIG else Opened.UNREADABLE
+        checked = null
+        checking = CheckFile(c.name, c.bytes, bytes)
+        return Opened.DOCUMENT
+    }
+
+    /** Checks [checking] with NCA into [checked]. [lang]: the app's, for the details. */
+    suspend fun check(lang: String) {
+        val c = checking ?: return
+        checked = null
+        val r = withContext(Dispatchers.IO) { checkFile(nca, c.name, c.bytes, c.original, lang) }
+        if (checking === c) checked = r
+    }
+
+    /** Checks the signatures already in a file about to be signed (the Sign screen's rows). */
+    suspend fun checkQuietly(name: String, bytes: ByteArray, lang: String): Checked =
+        withContext(Dispatchers.IO) { checkFile(nca, name, bytes, null, lang) }
+
+    /** Goes from Check to Sign with the same file ("Add my signature", "Sign it myself"). */
+    suspend fun signThis(name: String, bytes: ByteArray) {
+        val info = withContext(Dispatchers.Default) { inspect(name, bytes) }
+        signed = null
+        document = DocFile(name, bytes, info)
     }
 
     /** Puts the document away (Done, or back from signing). */

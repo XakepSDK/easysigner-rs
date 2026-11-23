@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,6 +57,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kz.kzsigner.core.CantSign
+import kz.kzsigner.core.Checked
+import kz.kzsigner.core.Reason
+import kz.kzsigner.core.SignerCheck
 import kz.kzsigner.core.ChipPrompt
 import kz.kzsigner.core.DocKind
 import kz.kzsigner.core.KeyInfo
@@ -198,7 +202,16 @@ fun SignScreen(
     ) {
         Title(stringResource(if (joins) R.string.add_sign_title else R.string.sign_title))
         if (info.kind == DocKind.CMS) CmsCard(doc, read_) else DocCard(doc, read_)
-        for (s in info.signers) AlreadySigned(s)
+        // who signed already, and once NCA has answered, whether their signatures hold
+        val checked by produceState<Checked?>(null, doc) {
+            if (info.signers.isNotEmpty()) value = model.checkQuietly(doc.name, doc.bytes, lang)
+        }
+        val rows = checked?.signers?.takeIf { it.isNotEmpty() }
+        if (rows != null) {
+            for (s in rows) AlreadySigned(SignedBy(s.name, s.company, s.signedMs), s)
+        } else {
+            for (s in info.signers) AlreadySigned(s, null)
+        }
         if (!canSign) {
             Body(stringResource(if (info.kind == DocKind.XML) R.string.cannot_xml else R.string.cannot_detached))
             return@Screen
@@ -415,16 +428,35 @@ private fun ReadButton(onClick: () -> Unit) {
 
 /** "Already signed by …": who signed before. Checking their signatures is Check's job. */
 @Composable
-private fun AlreadySigned(s: SignedBy) {
+private fun AlreadySigned(s: SignedBy, check: SignerCheck?) {
     val n = LocalNotices.current
+    val bad = check != null && !check.valid && check.reason != Reason.NOT_CONFIRMED
+    val unsure = check != null && !check.valid && check.reason == Reason.NOT_CONFIRMED
+    val (bg, fg) = when {
+        bad -> n.badBg to MaterialTheme.colorScheme.error
+        unsure -> n.warnBg to n.warnTitle
+        check != null -> n.goodBg to n.good
+        else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurface
+    }
     Row(
-        Modifier.fillMaxWidth().background(n.goodBg, RoundedCornerShape(12.dp)).padding(14.dp),
+        Modifier.fillMaxWidth().background(bg, RoundedCornerShape(12.dp)).padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(painterResource(R.drawable.ic_check), null, tint = n.good, modifier = Modifier.size(20.dp))
+        val icon = when {
+            bad -> R.drawable.ic_x
+            unsure -> R.drawable.ic_clock
+            else -> R.drawable.ic_check
+        }
+        Icon(painterResource(icon), null, tint = fg, modifier = Modifier.size(20.dp))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.already_signed_by, displayName(s.name)), color = n.good, fontWeight = FontWeight.SemiBold)
-            s.signedMs?.let { Small(stringResource(R.string.signed_on, longDate(it))) }
+            Text(stringResource(R.string.already_signed_by, displayName(s.name)), color = fg, fontWeight = FontWeight.SemiBold)
+            val date = s.signedMs?.let { stringResource(R.string.signed_on, longDate(it)) }
+            val state = when {
+                check == null -> null
+                check.valid -> stringResource(R.string.valid_short)
+                else -> stringResource(reasonTitle(check.reason))
+            }
+            listOfNotNull(date, state).joinToString(" · ").takeIf { it.isNotEmpty() }?.let { Small(it, if (bad) fg else MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }

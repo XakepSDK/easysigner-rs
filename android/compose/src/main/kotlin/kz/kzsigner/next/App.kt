@@ -17,6 +17,8 @@ import androidx.navigation.compose.rememberNavController
 import kz.kzsigner.next.ui.AboutScreen
 import kz.kzsigner.next.ui.AddKeyScreen
 import kz.kzsigner.next.ui.CantSignScreen
+import kz.kzsigner.next.ui.CheckDetailsScreen
+import kz.kzsigner.next.ui.CheckScreen
 import kz.kzsigner.next.ui.Center
 import kz.kzsigner.next.ui.HomeScreen
 import kz.kzsigner.next.ui.KeysScreen
@@ -35,6 +37,8 @@ private object Route {
     const val ADD = "add"
     const val CANT_SIGN = "cant-sign"
     const val ABOUT = "about"
+    const val CHECK = "check"
+    const val DETAILS = "check-details"
 }
 
 /** Starts over at [route], with nothing to go back to. */
@@ -74,6 +78,14 @@ fun App(model: KeysModel, finish: () -> Unit) {
             if (here != Route.SIGN) nav.navigate(Route.SIGN) { popUpTo(Route.HOME) }
         } else if (here != Route.ADD) {
             nav.navigate(Route.ADD)
+        }
+    }
+
+    // a file to check goes to Check
+    LaunchedEffect(model.checking) {
+        val here = nav.currentDestination?.route
+        if (model.checking != null && here != Route.CHECK && here != Route.DETAILS) {
+            nav.navigate(Route.CHECK)
         }
     }
 
@@ -163,5 +175,24 @@ fun App(model: KeysModel, finish: () -> Unit) {
             }
         }
         composable(Route.ABOUT) { AboutScreen(onBack = back) }
+        composable(Route.CHECK) {
+            val leave: () -> Unit = {
+                model.checking = null
+                model.checked = null
+                if (!nav.popBackStack()) nav.restart(Route.HOME)
+            }
+            BackHandler(onBack = leave)
+            CheckScreen(
+                model,
+                onBack = leave,
+                onDetails = { nav.navigate(Route.DETAILS) },
+                onRead = {
+                    reading = it
+                    nav.navigate(Route.READ)
+                },
+                onAnother = leave,
+            )
+        }
+        composable(Route.DETAILS) { CheckDetailsScreen(model, onBack = back) }
     }
 }

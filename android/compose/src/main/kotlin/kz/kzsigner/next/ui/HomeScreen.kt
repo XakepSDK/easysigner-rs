@@ -36,10 +36,7 @@ import kz.kzsigner.next.Opened
 import kz.kzsigner.next.R
 import kz.kzsigner.next.hasFingerprint
 
-/**
- * Screen 1: Sign a document, the key chip (to Your keys), and how to share a file in.
- * Check a signature comes with phase 4.
- */
+/** Screen 1: Sign a document, Check a signature, the key chip (to Your keys), and Share. */
 @Composable
 fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
     val context = LocalContext.current
@@ -54,6 +51,18 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
                     Opened.DOCUMENT, Opened.KEY -> {}
                     Opened.TOO_BIG -> Toast.makeText(context, tooBig, Toast.LENGTH_LONG).show()
                     Opened.UNREADABLE -> Toast.makeText(context, unreadable, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+    val pickToCheck = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                when (model.openForCheck(uri)) {
+                    Opened.TOO_BIG -> Toast.makeText(context, tooBig, Toast.LENGTH_LONG).show()
+                    Opened.UNREADABLE -> Toast.makeText(context, unreadable, Toast.LENGTH_LONG).show()
+                    // the app goes to Check (App.kt)
+                    else -> {}
                 }
             }
         }
@@ -85,7 +94,22 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
                 Text(stringResource(confirm), style = MaterialTheme.typography.bodyLarge)
             }
         }
-        Spacer(Modifier.size(80.dp))
+        Surface(
+            onClick = { pickToCheck.launch(arrayOf("*/*")) },
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(Modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_shield_check), null, tint = LocalNotices.current.good, modifier = Modifier.size(28.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.home_check), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Small(stringResource(R.string.home_check_body))
+                }
+            }
+        }
+        Spacer(Modifier.size(60.dp))
         Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
             Text(
                 stringResource(R.string.home_share_hint),
