@@ -193,6 +193,9 @@ public class ComposeApp {
     @Test
     public void step5RemoveThenSharedBeforeKey() {
         tap("Your keys");
+        // the screen slides in: wait for it
+        see("Opens with");
+        Phone.sleep(1000);
         tap("Remove from this phone");
         see("from this phone\\?");
         phone.shot("android-next-9-remove");
