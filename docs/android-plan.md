@@ -75,3 +75,25 @@ It is distributed as an APK on the GitHub release page, next to the Windows and 
 2. File open and save through SAF, with the keyboard fix.
 3. Network config, layout for narrow screens, intent filters.
 4. Release signing, reproducibility check, release asset.
+
+## TODO: a native UI on each platform
+
+Decided for later; the current order of work stays (GameActivity and TalkBack, UI Automator
+tests, then the Gradle 9 and dependency upgrades).
+
+egui draws its own widgets, so on a phone every native behaviour has to be glued on by hand:
+TalkBack (AccessKit + GameActivity), keyboard input (the edit-box bridge in `src/android.rs`),
+screen edges, the back gesture. Autofill, the Material look and native test tools are still
+missing. The way out is to keep Rust as the shared core and give each platform its own UI:
+
+- **Core (Rust, unchanged):** signing, the crypto, the key store, the NCA checks, as one
+  library with a small API made for a UI to call.
+- **Android:** Kotlin + Jetpack Compose. Accessibility, autofill, text input, insets and back
+  come from the platform; the fingerprint or PIN prompt is the system's `BiometricPrompt`
+  without hand-written JNI; Espresso and UI Automator test the real screens.
+- **iOS (later):** SwiftUI on the same core.
+- **Bindings:** UniFFI (Mozilla) generates the Kotlin and Swift code that calls Rust.
+- **Desktop:** stays on egui for now.
+
+The screens are few (sign, check, keys, settings), so a second UI is a modest amount of work;
+the phone app has no users yet, which makes Android the place to start.
