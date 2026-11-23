@@ -217,7 +217,7 @@ fn kind(e: &Engine, bytes: &[u8]) -> DocKind {
     }
 }
 
-fn kind_of(e: &Engine, bytes: &[u8]) -> DocKind {
+pub(crate) fn kind_of(e: &Engine, bytes: &[u8]) -> DocKind {
     if e.is_pdf(bytes) {
         DocKind::Pdf
     } else if e.is_xml(bytes) {
@@ -236,7 +236,7 @@ fn is_key(bytes: &[u8]) -> bool {
 }
 
 /// "Dogovor.pdf.cms" holds "Dogovor.pdf".
-fn inner_name(name: &str) -> String {
+pub(crate) fn inner_name(name: &str) -> String {
     let lower = name.to_lowercase();
     for ext in [".cms", ".p7s", ".p7m", ".sig"] {
         if lower.ends_with(ext) && name.len() > ext.len() {
@@ -254,7 +254,7 @@ fn signed_name(name: &str, ext: &str) -> String {
 }
 
 /// Who signed `bytes`, oldest first, from the file alone.
-fn signers(e: &Engine, bytes: &[u8]) -> Vec<SignedBy> {
+pub(crate) fn signers(e: &Engine, bytes: &[u8]) -> Vec<SignedBy> {
     let Ok(r) = e.verify(bytes, None, None) else {
         return vec![];
     };

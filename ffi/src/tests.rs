@@ -263,4 +263,5 @@ fn reads_the_egui_apps_vault() {
     assert_eq!(key.alias, "alice");
 }
 
+mod check;
 mod sign;

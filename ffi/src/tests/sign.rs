@@ -6,7 +6,7 @@ use super::*;
 #[allow(dead_code)]
 mod nca;
 
-fn file(path: &str) -> Vec<u8> {
+pub(super) fn file(path: &str) -> Vec<u8> {
     std::fs::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/fixtures")
@@ -15,9 +15,9 @@ fn file(path: &str) -> Vec<u8> {
     .unwrap()
 }
 
-/// The test CAs: the OCSP one (carol's) and the test keys' (the fake TSA's).
-fn test_cas() -> Vec<Cert> {
-    [
+/// The test CAs: the OCSP one (carol's), the test keys', and the fake TSA.
+pub(super) fn test_cas() -> Vec<Cert> {
+    let mut cas: Vec<Cert> = [
         "ocsp/ca.cer",
         "keys/ca_rsa.cer",
         "keys/ca_gost2015.cer",
@@ -25,11 +25,18 @@ fn test_cas() -> Vec<Cert> {
     ]
     .iter()
     .map(|p| Cert::parse_any(&file(p)).unwrap())
-    .collect()
+    .collect();
+    // the fake TSA's own certificate (self-signed), so its time counts as NCA's
+    cas.push(
+        kzsigner::p12::open(&file("keys/tsa.p12"), "Qwerty12", None)
+            .unwrap()
+            .cert,
+    );
+    cas
 }
 
 /// NCA played by the fakes; `revoked`: what the OCSP server says of every key.
-fn fake_nca(revoked: bool) -> Arc<Nca> {
+pub(super) fn fake_nca(revoked: bool) -> Arc<Nca> {
     Arc::new(Nca::with(
         &nca::fake_tsa(),
         &nca::fake_ocsp(revoked),
@@ -38,7 +45,7 @@ fn fake_nca(revoked: bool) -> Arc<Nca> {
 }
 
 /// A port nothing listens on: no internet.
-const NOWHERE: &str = "http://127.0.0.1:9/";
+pub(super) const NOWHERE: &str = "http://127.0.0.1:9/";
 
 fn sign_prompt() -> ChipPrompt {
     ChipPrompt {
@@ -48,7 +55,7 @@ fn sign_prompt() -> ChipPrompt {
 }
 
 /// A vault with carol's key (her CA has the fake OCSP server).
-fn carol(test: &str, g: &Arc<SoftwareGuard>) -> (Arc<Vault>, String) {
+pub(super) fn carol(test: &str, g: &Arc<SoftwareGuard>) -> (Arc<Vault>, String) {
     let v = vault(&dir(test).join("keys.kzs"), g);
     let id = v
         .add_key(file("ocsp/carol.p12"), "Qwerty12".into(), prompt())
