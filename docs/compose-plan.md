@@ -235,3 +235,14 @@ Most of the behaviour exists; these are new or different:
   in software, so they use the key's password), a native speaker's read of the Kazakh and
   Russian texts, the release signing key in the CI secrets, and the version bump that cuts
   the release.
+
+## After phase 6: Home is the only landing page
+
+- The app always opens on Home, with or without a key. With none, the Sign card says the
+  key is added the first time, and the key chip reads "Add key". Choosing a document to sign
+  with no key goes to Add key with the document waiting (2c), then on to Sign. Checking never
+  needs a key. Removing the last key goes back to Home. (Earlier the app opened on Add key
+  when there was none, which hid Check and repeated Add key as a second home.)
+- Adding a key refuses one not from NCA or another CA recognized in Kazakhstan, offline,
+  before any prompt. The emulator tests run the "uitest" build type, which also trusts the
+  test keys' CAs when adding a key; the released APK doesn't.

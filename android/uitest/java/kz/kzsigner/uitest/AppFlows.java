@@ -138,7 +138,7 @@ public class AppFlows {
     }
 
     @Test
-    public void step1StartsOnAddKey() {
+    public void step1StartsOnHome() {
         phone.sh("svc power stayon true");
         phone.sh("settings put system screen_off_timeout 1800000");
         Phone.say("Android " + phone.sh("getprop ro.build.version.release").trim());
@@ -151,15 +151,21 @@ public class AppFlows {
         phone.unlock();
         phone.start("");
         phone.device.wait(Until.hasObject(By.pkg(phone.app)), 20000);
+        // Home, even with no key: checking needs none, and signing asks for one when needed
+        see("Sign a document");
+        see("Check a signature");
+        see("The first time, you add your key");
+        screen("android-1-home-no-key");
+        // what TalkBack reads, through Compose's semantics
+        if (!phone.appNames("Add key")) {
+            phone.fail("the accessibility tree has no Add key. The tree:\n" + phone.tree());
+        }
+        tap("Add key");
         see("Add your signature key");
         see("Choose the key file");
-        // checking needs no key
-        see("Only check a signed file");
         screen("android-1-add");
-        // what TalkBack reads, through Compose's semantics
-        if (!phone.appNames("Add your signature key")) {
-            phone.fail("the accessibility tree has no title. The tree:\n" + phone.tree());
-        }
+        phone.device.pressBack();
+        see("Sign a document");
     }
 
     @Test
@@ -263,7 +269,7 @@ public class AppFlows {
         see("from this phone\\?");
         screen("android-9-remove");
         tap("Remove");
-        see("Choose the key file");
+        see("The first time, you add your key");
         Phone.say("the Compose app adds, lists and removes a key");
 
         // 2c: a PDF shared with no key waits on Add key, and comes back once one is added

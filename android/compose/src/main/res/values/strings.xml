@@ -213,5 +213,6 @@
     <string name="copy_details">Copy details</string>
     <string name="copied">Copied</string>
     <string name="who_signed_page">“Who signed” page</string>
-    <string name="only_check">Only check a signed file</string>
+    <string name="home_sign_first">Choose a file. The first time, you add your key.</string>
+    <string name="add_key_short">Add key</string>
 </resources>

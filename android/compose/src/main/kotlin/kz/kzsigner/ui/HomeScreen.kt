@@ -71,7 +71,7 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
         }
     }
     val keys = model.keys?.keys.orEmpty()
-    val confirm = when (keys.firstOrNull()?.unlock) {
+    val confirm = if (keys.isEmpty()) R.string.home_sign_first else when (keys.firstOrNull()?.unlock) {
         Unlock.PASSWORD -> R.string.home_sign_password
         Unlock.FINGERPRINT, Unlock.FINGERPRINT_AND_PASSWORD -> R.string.home_sign_fingerprint
         else -> if (hasFingerprint(context)) R.string.home_sign_fingerprint else R.string.home_sign_lock
@@ -82,7 +82,7 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
             // never broken in two (large text): the name in the chip gives way instead
             Text("kzsigner", fontSize = 20.sp, fontWeight = FontWeight.Bold, softWrap = false)
             Spacer(Modifier.width(12.dp).weight(1f))
-            Box(Modifier.weight(1f, fill = false)) { KeyChip(keys.firstOrNull()?.name, onKeys) }
+            Box(Modifier.weight(1f, fill = false)) { KeyChip(keys.firstOrNull()?.name, keys.isEmpty() && model.keys?.hidden != true, onKeys) }
         }
         Spacer(Modifier.size(8.dp))
         Surface(
@@ -126,10 +126,11 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit) {
     }
 }
 
-/** The owner's first name in a pill: opens Your keys. */
+/** The owner's first name in a pill: opens Your keys (Add key when there is none). */
 @Composable
-private fun KeyChip(name: String?, onClick: () -> Unit) {
-    val label = stringResource(R.string.your_keys)
+private fun KeyChip(name: String?, none: Boolean, onClick: () -> Unit) {
+    // no key yet: the chip adds one
+    val label = stringResource(if (none) R.string.add_key_short else R.string.your_keys)
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(50),

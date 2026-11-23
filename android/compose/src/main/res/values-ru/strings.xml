@@ -217,5 +217,6 @@
     <string name="copy_details">Скопировать подробности</string>
     <string name="copied">Скопировано</string>
     <string name="who_signed_page">страница «Кто подписал»</string>
-    <string name="only_check">Только проверить подписанный файл</string>
+    <string name="home_sign_first">Выберите файл. В первый раз вы добавите свой ключ.</string>
+    <string name="add_key_short">Добавить ключ</string>
 </resources>

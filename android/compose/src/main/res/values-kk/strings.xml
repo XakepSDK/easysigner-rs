@@ -211,5 +211,6 @@
     <string name="copy_details">Толығырақты көшіру</string>
     <string name="copied">Көшірілді</string>
     <string name="who_signed_page">«Кім қол қойды» беті</string>
-    <string name="only_check">Қол қойылған файлды ғана тексеру</string>
+    <string name="home_sign_first">Файлды таңдаңыз. Алғаш рет кілтіңізді қосасыз.</string>
+    <string name="add_key_short">Кілт қосу</string>
 </resources>

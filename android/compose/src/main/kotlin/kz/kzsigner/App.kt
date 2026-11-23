@@ -61,7 +61,8 @@ fun App(model: KeysModel, finish: () -> Unit) {
     val nav = rememberNavController()
     var refused by remember { mutableStateOf<Refusal?>(null) }
     var reading by remember { mutableStateOf<Reading?>(null) }
-    val start = remember { if (keys.keys.isEmpty() && !keys.hidden) Route.ADD else Route.HOME }
+    // always Home: checking needs no key, and the key is asked for when signing first needs it
+    val start = Route.HOME
     val hasKeys = model.keys?.keys?.isNotEmpty() == true
 
     // a key file opened with the app goes to Add key, wherever the app was
@@ -99,7 +100,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
 
     NavHost(nav, startDestination = start) {
         composable(Route.HOME) {
-            HomeScreen(model, onKeys = { nav.navigate(Route.KEYS) })
+            HomeScreen(model, onKeys = { nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD) })
         }
         composable(Route.SIGN) {
             val leave: () -> Unit = {
@@ -135,13 +136,13 @@ fun App(model: KeysModel, finish: () -> Unit) {
                 onBack = back,
                 onAdd = { nav.navigate(Route.ADD) },
                 onAbout = { nav.navigate(Route.ABOUT) },
-                onEmpty = { nav.restart(Route.ADD) },
+                onEmpty = { nav.restart(Route.HOME) },
             )
         }
         composable(Route.ADD) {
             AddKeyScreen(
                 model,
-                onBack = if (hasKeys || nav.previousBackStackEntry != null) back else null,
+                onBack = back,
                 onAdded = {
                     when {
                         // 2c: straight back to the document

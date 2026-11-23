@@ -47,7 +47,6 @@ import kz.kzsigner.core.Unlock
 import kz.kzsigner.Added
 import kz.kzsigner.KeyFile
 import kz.kzsigner.KeysModel
-import kz.kzsigner.Opened
 import kz.kzsigner.R
 
 /** What went wrong with the last try. */
@@ -129,28 +128,9 @@ fun AddKeyScreen(
         }
     }
 
-    // checking a signature needs no key: offered on the first screen too
-    val tooBig = stringResource(R.string.too_big)
-    val unreadable = stringResource(R.string.cant_read_file)
-    val pickToCheck = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            scope.launch {
-                when (model.openForCheck(uri)) {
-                    Opened.TOO_BIG -> Toast.makeText(context, tooBig, Toast.LENGTH_LONG).show()
-                    Opened.UNREADABLE -> Toast.makeText(context, unreadable, Toast.LENGTH_LONG).show()
-                    // the app goes to Check (App.kt)
-                    else -> {}
-                }
-            }
-        }
-    }
-
     val f = file
     if (f == null) {
-        Screen(onBack, buttons = {
-            MainButton(stringResource(R.string.choose_key_file), choose)
-            if (model.document == null) SecondButton(stringResource(R.string.only_check), { pickToCheck.launch(arrayOf("*/*")) })
-        }) {
+        Screen(onBack, buttons = { MainButton(stringResource(R.string.choose_key_file), choose) }) {
             // 2c: a document shared before any key: it waits
             model.document?.let { InfoNotice(stringResource(R.string.shared_needs_key, it.name), R.drawable.ic_file) }
             Title(stringResource(R.string.add_key_title))
