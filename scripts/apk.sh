@@ -5,8 +5,8 @@
 #
 #   ANDROID_HOME=... ANDROID_NDK_ROOT=... sh scripts/apk.sh
 #
-# Needs: the NDK (r27), build-tools 35.0.0, platforms;android-35 and a JDK 17 or newer. Gradle
-# itself is downloaded once (pinned version, checked against its SHA-256) into
+# Needs: the NDK (r27), build-tools 35.0.0, platforms;android-35 and a JDK 17 to 24 (Gradle
+# 8.14 runs on no newer one). Gradle itself is downloaded once (pinned version, checked against its SHA-256) into
 # ~/.cache/kzsigner-gradle, or taken from KZSIGNER_GRADLE. Two builds of a commit give the same
 # APK.
 #
@@ -86,6 +86,15 @@ else
     fi
 fi
 
+# Gradle 8.14 runs on JDK 17 to 24; GitHub's runners default to a newer one but also carry 17
+# and 21, named by JAVA_HOME_<n>_X64
+for n in 21 17; do
+    eval "j=\${JAVA_HOME_${n}_X64:-}"
+    if [ -n "$j" ]; then
+        export JAVA_HOME="$j"
+        break
+    fi
+done
 "$GRADLE" -q -p android --no-daemon --console=plain assembleRelease \
     -Pkzsigner.version="$V" -Pkzsigner.jniLibs="$(pwd)/$JNI"
 mkdir -p "$(dirname "$OUT")"
