@@ -78,6 +78,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
+          retention-days: 1
           name: window-screens
           path: ${{ runner.temp }}/screens/
       - name: Test the app's calls into the core (ffi, not in default-members)
@@ -175,6 +176,7 @@ jobs:
             ${{ runner.os == 'Windows' && 'target/release/kzsigner.exe' || 'target/release/kzsigner' }}
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 2
           name: kzsigner-${{ runner.os }}-x64
           path: dist/
   android:
@@ -235,10 +237,12 @@ jobs:
         run: (cd dist && sha256sum *.apk) | tee "dist/kzsigner-android.sha256"
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 2
           name: kzsigner-android
           path: dist/
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1
           name: android-uitest
           path: target/apk-uitest/
   # the APK on emulators: the oldest Android the app supports, the one it targets, the newest
@@ -272,6 +276,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
+          retention-days: 1
           name: android-screenshots-${{ matrix.api }}
           path: android-*.png
           if-no-files-found: ignore
