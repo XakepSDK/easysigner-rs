@@ -94,7 +94,7 @@ fn pick(
     };
     let kb = &keys[idx];
     let private_key = PrivateKey::from_pkcs8(&kb.value)
-        .map_err(|e| Error::new(trf("Unsupported private key type: {}", &[&e])))?;
+        .map_err(|e| Error::unsupported(trf("Unsupported private key type: {}", &[&e])))?;
     let pool: Vec<Cert> = certs.iter().map(|b| b.value.clone()).collect();
     let mut leaf = None;
     for c in &certs {

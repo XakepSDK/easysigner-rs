@@ -86,6 +86,16 @@ impl Error {
         }
     }
 
+    /// An error of kind [`ErrorKind::Malformed`].
+    pub fn malformed(t: impl Into<Text>) -> Error {
+        Error::of(ErrorKind::Malformed, t)
+    }
+
+    /// An error of kind [`ErrorKind::Unsupported`].
+    pub fn unsupported(t: impl Into<Text>) -> Error {
+        Error::of(ErrorKind::Unsupported, t)
+    }
+
     pub fn of(kind: ErrorKind, t: impl Into<Text>) -> Error {
         Error {
             kind,
@@ -111,34 +121,32 @@ pub trait Rng {
     fn fill(&mut self, buf: &mut [u8]) -> Result<()>;
 }
 
-/// `rand_core` view of an [`Rng`], for the RSA code. A failure of the source is kept and
-/// reported after the operation (rand_core's infallible interface can't return it).
+/// `rand_core` view of an [`Rng`], for the RSA code. A failure of the source stops the
+/// operation; it is kept in `failed` to report the caller's own error.
 pub(crate) struct RandCore<'a> {
     pub rng: &'a mut dyn Rng,
     pub failed: Option<Error>,
 }
 
 impl rand_core::TryRng for RandCore<'_> {
-    type Error = core::convert::Infallible;
+    type Error = Error;
 
-    fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
+    fn try_next_u32(&mut self) -> core::result::Result<u32, Error> {
         let mut b = [0u8; 4];
         self.try_fill_bytes(&mut b)?;
         Ok(u32::from_le_bytes(b))
     }
 
-    fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
+    fn try_next_u64(&mut self) -> core::result::Result<u64, Error> {
         let mut b = [0u8; 8];
         self.try_fill_bytes(&mut b)?;
         Ok(u64::from_le_bytes(b))
     }
 
-    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> core::result::Result<(), Self::Error> {
-        if let Err(e) = self.rng.fill(dst) {
-            // never hand out zeros silently: the caller sees the error afterwards
-            self.failed.get_or_insert(e);
-        }
-        Ok(())
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> core::result::Result<(), Error> {
+        self.rng.fill(dst).inspect_err(|e| {
+            self.failed.get_or_insert(e.clone());
+        })
     }
 }
 

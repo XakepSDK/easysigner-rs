@@ -41,10 +41,35 @@ jobs:
           case "$V" in *-*)
             if [ "${{ github.event_name }}" != workflow_dispatch ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               git diff --name-only "$BEFORE" HEAD | tee changed.txt
-              grep -qE '^(android/|ffi/|src/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
+              grep -qE '^(android/|ffi/|src/|crypto/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
             fi ;;
           esac
           echo "android=$android" | tee -a "$GITHUB_OUTPUT"
+  # The cryptography on its own (crypto/, capi/): it must build with no operating system (a
+  # bare-metal ARM target proves no_std), the C header must match the code, the C test must
+  # pass against the static library, and the sizes are reported in the job summary.
+  crypto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (pinned) with a bare-metal target
+        run: |
+          rustup toolchain install
+          rustup target add thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: crypto
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen@0.29.4
+      - name: kzcrypto builds without an operating system (no_std + alloc)
+        run: cargo build --release --locked -p kzcrypto --target thumbv7em-none-eabihf
+      - name: The C header matches the code
+        run: sh scripts/capi-header.sh --check
+      - name: The C interface, from C
+        run: sh scripts/capi-test.sh
+      - name: Sizes
+        run: sh scripts/crypto-size.sh | tee -a "$GITHUB_STEP_SUMMARY"
   build:
     strategy:
       fail-fast: false

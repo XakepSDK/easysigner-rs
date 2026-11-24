@@ -43,7 +43,7 @@ pub fn alg_id<'a>(t: &Tlv<'a>) -> Result<(String, Option<Tlv<'a>>)> {
     let k = t.items(der::SEQUENCE)?;
     let oid = k
         .first()
-        .ok_or_else(|| Error::new("malformed ASN.1: empty AlgorithmIdentifier"))?
+        .ok_or_else(|| Error::malformed("malformed ASN.1: empty AlgorithmIdentifier"))?
         .oid()?;
     Ok((oid, k.get(1).copied()))
 }
@@ -53,7 +53,7 @@ impl PublicKey {
     pub fn from_spki(spki: &[u8]) -> Result<PublicKey> {
         let k = der::parse(spki)?.items(der::SEQUENCE)?;
         if k.len() < 2 {
-            return Err(Error::new("malformed ASN.1: SubjectPublicKeyInfo"));
+            return Err(Error::malformed("malformed ASN.1: SubjectPublicKeyInfo"));
         }
         let (oid, params) = alg_id(&k[0])?;
         let bits = k[1].bits()?;
@@ -69,7 +69,7 @@ impl PublicKey {
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PublicKey::from_pkcs1_der(bits)
-                .map_err(|e| Error::new(format!("malformed RSA public key: {e}")))?;
+                .map_err(|e| Error::malformed(format!("malformed RSA public key: {e}")))?;
             return Ok(PublicKey::Rsa(k));
         }
         Ok(PublicKey::Other(oid))
@@ -101,7 +101,9 @@ impl PublicKey {
                     .iter()
                     .any(|di| k.verify(Pkcs1v15Sign::new_unprefixed(), di, sig).is_ok()))
             }
-            PublicKey::Other(oid) => Err(Error::new(format!("Unsupported key algorithm {oid}"))),
+            PublicKey::Other(oid) => Err(Error::unsupported(format!(
+                "Unsupported key algorithm {oid}"
+            ))),
         }
     }
 }
@@ -142,7 +144,7 @@ impl PrivateKey {
     pub fn from_pkcs8(pki: &[u8]) -> Result<PrivateKey> {
         let k = der::parse(pki)?.items(der::SEQUENCE)?;
         if k.len() < 3 {
-            return Err(Error::new("malformed PrivateKeyInfo"));
+            return Err(Error::malformed("malformed PrivateKeyInfo"));
         }
         let (oid, params) = alg_id(&k[1])?;
         let key = k[2].expect(der::OCTET_STRING)?.octets()?;
@@ -158,10 +160,12 @@ impl PrivateKey {
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PrivateKey::from_pkcs1_der(&key)
-                .map_err(|e| Error::new(format!("malformed RSA private key: {e}")))?;
+                .map_err(|e| Error::malformed(format!("malformed RSA private key: {e}")))?;
             return Ok(PrivateKey::Rsa(k));
         }
-        Err(Error::new(format!("Unsupported private key type {oid}")))
+        Err(Error::unsupported(format!(
+            "Unsupported private key type {oid}"
+        )))
     }
 
     /// The KZ GOST scheme, or None for RSA.
@@ -195,7 +199,7 @@ impl PrivateKey {
                 let mut r = crate::RandCore { rng, failed: None };
                 let sig = k
                     .sign_with_rng(
-                        &mut rand_core::UnwrapErr(&mut r),
+                        &mut r,
                         Pkcs1v15Sign::new_unprefixed(),
                         &digest_info(gost::H_SHA256, &h),
                     )
@@ -280,6 +284,33 @@ mod tests {
                 .unwrap()
         );
         assert!(public.verify("1.2.3", None, data, &sig).is_err());
+    }
+
+    /// A random source that fails stops signing with its own error, for both key types.
+    #[test]
+    fn failing_random_source() {
+        struct Broken;
+        impl crate::Rng for Broken {
+            fn fill(&mut self, _: &mut [u8]) -> Result<()> {
+                Err(Error::of(crate::ErrorKind::Random, "broken"))
+            }
+        }
+        for name in ["alice_rsa", "alice_gost2015", "alice_gost2004"] {
+            let e = key(name).private_key.sign(b"x", &mut Broken).unwrap_err();
+            assert_eq!(e.kind, crate::ErrorKind::Random, "{name}");
+            let sig = key(name)
+                .private_key
+                .sign(b"x", &mut crate::testing::OsRng)
+                .unwrap();
+            assert!(
+                key(name)
+                    .cert
+                    .public_key()
+                    .unwrap()
+                    .verify(key(name).private_key.sig_oid(), None, b"x", &sig)
+                    .unwrap()
+            );
+        }
     }
 
     #[test]

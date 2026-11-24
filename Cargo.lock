@@ -2198,6 +2198,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kzcrypto-capi"
+version = "0.1.0-dev"
+dependencies = [
+ "getrandom 0.4.3",
+ "kzcrypto",
+]
+
+[[package]]
 name = "kzsigner"
 version = "0.1.0-dev"
 dependencies = [

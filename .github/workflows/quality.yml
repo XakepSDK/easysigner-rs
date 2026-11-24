@@ -113,7 +113,7 @@ jobs:
           set +e
           args="--no-shuffle -j 2 --timeout 180 --output ."
           if [ "${{ github.event_name }}" = pull_request ]; then
-            git diff "$BASE...HEAD" -- src > pr.diff
+            git diff "$BASE...HEAD" -- src crypto/src capi/src > pr.diff
             args="$args --in-diff pr.diff"
           else
             args="$args --shard ${{ matrix.shard }}/$TOTAL"
