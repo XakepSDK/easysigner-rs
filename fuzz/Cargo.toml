@@ -1,0 +1,43 @@
+# Fuzzing (cargo fuzz, nightly): random and mutated files fed to what reads untrusted input, to
+# find crashes (panics, overflows, endless loops) that tests with real files don't reach.
+#
+#   cargo +nightly fuzz run verify -- -max_total_time=60
+#
+# Seeds come from tests/fixtures (fuzz/seed.sh copies them into fuzz/corpus/<target>).
+[package]
+name = "kzsigner-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+kzsigner = { path = ".." }
+
+# not part of the main workspace: it needs nightly and libFuzzer
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "verify"
+path = "fuzz_targets/verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_key"
+path = "fuzz_targets/open_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract"
+path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false

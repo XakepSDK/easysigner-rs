@@ -1,0 +1,47 @@
+# Fuzzing (fuzz/): each target runs for 10 minutes, weekly and by hand, starting from the test
+# files. A crash fails the job; the input that caused it is in the "fuzz-crashes" artifact, to
+# turn into a test (tests/malformed.rs) with the fix. Nightly Rust: cargo fuzz needs it.
+name: fuzz
+on:
+  schedule:
+    - cron: '41 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per target'
+        required: false
+        default: '600'
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [verify, open_key, extract]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly
+        run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+          key: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Seeds
+        run: sh fuzz/seed.sh
+      - name: Fuzz
+        working-directory: fuzz
+        run: >
+          cargo +nightly fuzz run -O ${{ matrix.target }} --
+          -max_total_time=${{ inputs.seconds || '600' }} -rss_limit_mb=2048 -timeout=10
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          retention-days: 7
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts/
