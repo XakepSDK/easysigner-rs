@@ -89,6 +89,8 @@ fn options_only_where_they_mean_something() {
         ("sign", &["--json"]),
         ("verify", &["--tsa"]),
         ("extract", &["--ocsp"]),
+        ("extend", &["--no-ocsp"]),
+        ("extend", &["--offline"]),
         ("info", &["doc.txt"]),
         ("verify", &["doc.txt", "doc.txt"]),
     ];
@@ -269,4 +271,51 @@ fn network_by_default() {
         let (ok, out) = run(args);
         assert!(!ok && out.contains(says), "{args:?}: {out}");
     }
+}
+
+#[test]
+fn version_names_the_build() {
+    let d = work("version");
+    let (ok, out) = kz(&d, &["--version"], None);
+    assert!(ok, "{out}");
+    assert!(
+        out.starts_with(&format!("kzsigner {}\n", env!("CARGO_PKG_VERSION"))),
+        "{out}"
+    );
+    assert!(out.contains("Crypto: "), "{out}");
+}
+
+/// Co-signing a .cms in place keeps the file as it was in FILE.bak; writing elsewhere, or
+/// signing a new file, leaves no .bak.
+#[test]
+fn cosigning_in_place_keeps_a_backup() {
+    let d = work("backup");
+    let ca = fixture("keys/ca_gost2015.cer");
+    let alice = fixture("keys/alice_gost2015.p12");
+    let bob = fixture("keys/bob_gost2015.p12");
+    let sign = |key: &str, extra: &[&str]| {
+        let mut a = vec!["sign", "-k", key, "--trust", &ca];
+        a.extend(extra);
+        let (ok, out) = kz(&d, &a, Some("Qwerty12"));
+        assert!(ok, "{a:?}: {out}");
+    };
+    sign(&alice, &["doc.txt"]);
+    assert!(!d.join("doc.txt.bak").exists());
+    assert!(!d.join("doc.txt.cms.bak").exists());
+    let first = std::fs::read(d.join("doc.txt.cms")).unwrap();
+
+    // a plain file signed over itself is not a co-signature: no backup
+    std::fs::write(d.join("note.txt"), b"note").unwrap();
+    sign(&alice, &["note.txt", "-o", "note.txt"]);
+    assert!(!d.join("note.txt.bak").exists());
+
+    // co-signed into another file: the original stays, so no backup
+    sign(&bob, &["doc.txt.cms", "-o", "both.cms"]);
+    assert!(!d.join("doc.txt.cms.bak").exists());
+    assert_eq!(std::fs::read(d.join("doc.txt.cms")).unwrap(), first);
+
+    // co-signed in place: the previous file is kept
+    sign(&bob, &["doc.txt.cms"]);
+    assert_eq!(std::fs::read(d.join("doc.txt.cms.bak")).unwrap(), first);
+    assert_ne!(std::fs::read(d.join("doc.txt.cms")).unwrap(), first);
 }
