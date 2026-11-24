@@ -1,0 +1,41 @@
+[package]
+name = "kzcrypto"
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.100"
+description = "Kazakhstan NCA RK cryptography: KZ GOST, RSA, PKCS#12, X.509, CMS, TSP, OCSP and CRL, as bytes in and bytes out (no_std + alloc)"
+repository = "https://github.com/XakepSDK/easysigner-rs"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Everything here is no_std + alloc: no files, network, clock or OS random numbers. The caller
+# passes the time and a random source in (see `Rng`), and does all I/O.
+[dependencies]
+gost94 = { version = "0.11", default-features = false }
+streebog = { version = "0.11", default-features = false }
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+digest = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+des = { version = "0.9", default-features = false }
+rc2 = { version = "0.9", default-features = false }
+aes = { version = "0.9", default-features = false }
+cipher = { version = "0.5", default-features = false, features = ["block-padding"] }
+cbc = { version = "0.2.1", default-features = false }
+num-bigint = { version = "0.5", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
+rsa = { version = "0.10", default-features = false, features = ["encoding", "pkcs1v15"] }
+rand_core = { version = "0.10", default-features = false }
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# only for the `testkit` feature (test helpers, never in a release build)
+getrandom = { version = "0.4", optional = true }
+
+[features]
+# test helpers for this crate's and the application's tests (they use std and the OS)
+testkit = ["dep:getrandom"]
+
+[dev-dependencies]
+getrandom = { version = "0.4", features = ["sys_rng"] }

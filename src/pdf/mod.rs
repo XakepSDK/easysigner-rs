@@ -179,10 +179,11 @@ pub fn sign_with(
                 false,
                 &key.private_key,
                 &key.cert,
-                false,
+                None,
                 &[],
+                &mut crate::OsRng,
             )
-            .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+            .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
             if let Some(url) = tsa_url {
                 sign::timestamp(&mut sd, url, key, trust, &mut r)?;
             }

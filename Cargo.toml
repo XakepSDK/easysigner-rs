@@ -7,6 +7,8 @@ description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, 
 repository = "https://github.com/XakepSDK/easysigner-rs"
 
 [dependencies]
+# the cryptography, on its own (no_std): crypto/
+kzcrypto = { path = "crypto" }
 gost94 = "0.11"
 streebog = "0.11"
 sha1 = "0.11"
@@ -42,8 +44,8 @@ zeroize = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["ffi", "desktop"]
-default-members = [".", "desktop"]
+members = ["crypto", "ffi", "desktop"]
+default-members = [".", "crypto", "desktop"]
 
 [profile.release]
 opt-level = "z"
@@ -62,3 +64,7 @@ opt-level = 1
 
 [profile.mutants.package."*"]
 opt-level = 3
+
+[dev-dependencies]
+# test keys and OCSP answers made to order (ltv tests)
+kzcrypto = { path = "crypto", features = ["testkit"] }

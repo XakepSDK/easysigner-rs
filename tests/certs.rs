@@ -51,7 +51,7 @@ fn trust_rests_on_the_ca_signature() {
         let bad_root = forged(&ca);
         let chain = TrustStore::new(vec![bad_root.clone()]).check(&bad_root, now);
         assert!(!chain.ok, "{a}");
-        assert!(chain.status.contains("signature"), "{a}: {}", chain.status);
+        assert!(chain.status.to_string().contains("signature"), "{a}: {}", chain.status);
 
         // a certificate is not its own CA
         assert!(!alice.signed_by(&alice), "{a}");
@@ -71,7 +71,7 @@ fn dates_and_ca_rights() {
     assert!(store.check(&alice, alice.not_before).ok);
     let late = store.check(&alice, alice.not_after + 1);
     assert!(
-        !late.ok && late.status.contains("not valid on"),
+        !late.ok && late.status.to_string().contains("not valid on"),
         "{}",
         late.status
     );
@@ -265,7 +265,7 @@ fn issue_with(issuer: &p12::Key, subject: &Cert, exts: &[(&str, Vec<u8>)]) -> Ce
     }
     let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
     let tbs = der::seq(&refs);
-    let sig = issuer.private_key.sign(&tbs).unwrap();
+    let sig = issuer.private_key.sign(&tbs, &mut kzsigner::OsRng).unwrap();
     Cert::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
 }
 
@@ -282,13 +282,13 @@ fn issuers_must_be_cas() {
     let store = TrustStore::new(vec![ca.clone(), alice.cert.clone()]);
     let chain = store.check(&by_alice, now);
     assert!(!chain.ok, "{}", chain.status);
-    assert!(chain.status.contains("is not a CA"), "{}", chain.status);
+    assert!(chain.status.to_string().contains("is not a CA"), "{}", chain.status);
 
     // a trusted certificate that is not a root still needs its own issuer
     let chain = TrustStore::new(vec![alice.cert.clone()]).check(&alice.cert, now);
     assert!(!chain.ok && chain.issuer.is_none(), "{}", chain.status);
     assert!(
-        chain.status.contains("Issuer not found"),
+        chain.status.to_string().contains("Issuer not found"),
         "{}",
         chain.status
     );

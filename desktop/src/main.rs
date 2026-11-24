@@ -172,6 +172,12 @@ impl From<Error> for Fail {
     }
 }
 
+impl From<kzsigner::kzcrypto::Error> for Fail {
+    fn from(e: kzsigner::kzcrypto::Error) -> Fail {
+        Error::from(e).into()
+    }
+}
+
 impl From<lexopt::Error> for Fail {
     fn from(e: lexopt::Error) -> Fail {
         Fail::Usage(e.to_string(), "")
@@ -421,7 +427,8 @@ fn engine(o: &Opts) -> R<Engine> {
     let mut certs = Vec::new();
     for t in &o.trust {
         certs.push(
-            Cert::parse_any(&read(t)?).map_err(|e| Fail::User(format!("{}: {e}", t.display())))?,
+            Cert::parse_any(&read(t)?)
+                .map_err(|e| Fail::User(format!("{}: {}", t.display(), Error::from(e))))?,
         );
     }
     Ok(Engine::new(certs))

@@ -1,0 +1,194 @@
+//! Trusted CA certificates (bundled NCA RK roots and intermediates, plus --trust) and
+//! certificate path checks against them.
+
+use crate::cert::{self, Cert};
+use crate::prelude::*;
+use crate::text::{Text, Time, tr, trf};
+use crate::Result;
+
+/// NCA RK's root and issuing CA certificates, bundled into the executable.
+pub const BUNDLED_CA: [(&str, &[u8]); 10] = [
+    (
+        "root_gost_2022",
+        include_bytes!("../certs/root_gost_2022.cer"),
+    ),
+    ("root_gost", include_bytes!("../certs/root_gost.cer")),
+    (
+        "root_rsa_2022",
+        include_bytes!("../certs/root_rsa_2022.cer"),
+    ),
+    ("root_rsa", include_bytes!("../certs/root_rsa.cer")),
+    (
+        "nca_gost_2022",
+        include_bytes!("../certs/nca_gost_2022.cer"),
+    ),
+    ("nca_gost", include_bytes!("../certs/nca_gost.cer")),
+    ("nca_rsa_2022", include_bytes!("../certs/nca_rsa_2022.cer")),
+    ("nca_rsa", include_bytes!("../certs/nca_rsa.cer")),
+    ("nca_gost_old", include_bytes!("../certs/nca_gost_old.cer")),
+    ("nca_rsa_old", include_bytes!("../certs/nca_rsa_old.cer")),
+];
+
+/// Outcome of a path check. `issuer` is the certificate's direct issuer, if found.
+pub struct Chain {
+    pub ok: bool,
+    pub status: Text,
+    pub path: Vec<String>,
+    pub issuer: Option<Cert>,
+    /// The issuers found, from the direct issuer up to the trusted CA.
+    pub issuers: Vec<Cert>,
+}
+
+pub struct TrustStore {
+    /// The bundled NCA RK certificates, then the extra ones.
+    trusted: Vec<Cert>,
+    bundled: usize,
+}
+
+impl TrustStore {
+    /// `extra`: CA certificates to trust on top of the bundled NCA RK ones.
+    pub fn new(extra: Vec<Cert>) -> TrustStore {
+        let mut trusted: Vec<Cert> = BUNDLED_CA
+            .iter()
+            .map(|(n, d)| {
+                Cert::parse_any(d).unwrap_or_else(|e| panic!("bundled certificate {n}: {e:?}"))
+            })
+            .collect();
+        let bundled = trusted.len();
+        trusted.extend(extra);
+        TrustStore { trusted, bundled }
+    }
+
+    /// Builds the path from `c` to a trusted CA using only trusted certificates, never ones
+    /// carried in a file. Checks every signature, validity at `at`, and that each issuer is a CA
+    /// allowed to sign certificates.
+    pub fn check(&self, c: &Cert, at: i64) -> Chain {
+        let mut path = Vec::new();
+        let mut issuers: Vec<Cert> = Vec::new();
+        let r = self.walk(c, at, &mut path, &mut issuers);
+        let issuer = issuers.first().cloned();
+        match r {
+            Ok((ok, status)) => Chain {
+                ok,
+                status,
+                path,
+                issuer,
+                issuers,
+            },
+            Err(e) => Chain {
+                ok: false,
+                status: trf("Certificate path not valid: {}", &[&e]),
+                path,
+                issuer,
+                issuers,
+            },
+        }
+    }
+
+    fn walk(
+        &self,
+        c: &Cert,
+        at: i64,
+        path: &mut Vec<String>,
+        seen: &mut Vec<Cert>,
+    ) -> core::result::Result<(bool, Text), Text> {
+        let mut cur = c.clone();
+        let mut is_start = true;
+        loop {
+            path.push(cur.cn());
+            if !cur.valid_on(at) {
+                return Err(trf(
+                    "certificate '{}' was not valid on {}",
+                    &[&cur.cn(), &Time(Some(at))],
+                ));
+            }
+            let self_signed = cur.self_issued();
+            if self.trusted.contains(&cur) && (!is_start || self_signed) {
+                if self_signed && !cur.signed_by(&cur) {
+                    return Err(tr("root certificate signature is invalid"));
+                }
+                return Ok((true, trf("Issued by a trusted CA: {}", &[&cur.cn()])));
+            }
+            let Some(issuer) = self.find_issuer(&cur, seen) else {
+                if self_signed {
+                    return Err(trf(
+                        "self-signed certificate '{}' is not a trusted root",
+                        &[&cur.cn()],
+                    ));
+                }
+                return Ok((
+                    false,
+                    trf(
+                        "Issuer not found among trusted NCA RK certificates: {}",
+                        &[&cert::cn(&cur.issuer)],
+                    ),
+                ));
+            };
+            require_ca(&issuer)?;
+            seen.push(issuer.clone());
+            cur = issuer;
+            is_start = false;
+            if seen.len() > 10 {
+                return Err(tr("certificate path too long"));
+            }
+        }
+    }
+
+    /// A store that trusts nothing, not even NCA RK (for tests, and for callers that bring
+    /// their own CAs with [`TrustStore::only`]).
+    pub fn empty() -> TrustStore {
+        TrustStore::only(vec![])
+    }
+
+    /// A store that trusts `cas` alone, without the bundled NCA RK certificates.
+    pub fn only(cas: Vec<Cert>) -> TrustStore {
+        TrustStore {
+            trusted: cas,
+            bundled: 0,
+        }
+    }
+
+    /// Whether `c` is one of the bundled NCA RK CA certificates.
+    pub fn is_nca(&self, c: &Cert) -> bool {
+        self.trusted[..self.bundled].contains(c)
+    }
+
+    fn find_issuer(&self, c: &Cert, seen: &[Cert]) -> Option<Cert> {
+        self.trusted
+            .iter()
+            .filter(|t| cert::names_equal(&t.subject, &c.issuer) && !seen.contains(t))
+            // a different key under the same name fails here; keep looking
+            .find(|t| c.signed_by(t))
+            .cloned()
+    }
+}
+
+fn require_ca(issuer: &Cert) -> core::result::Result<(), Text> {
+    if !issuer.is_ca() {
+        return Err(trf("issuer '{}' is not a CA", &[&issuer.cn()]));
+    }
+    if !issuer.may_sign_certs() {
+        return Err(trf(
+            "issuer '{}' may not sign certificates",
+            &[&issuer.cn()],
+        ));
+    }
+    Ok(())
+}
+
+/// Checks the bundled certificates against each other: how many have a signature that no
+/// bundled issuer verifies.
+pub fn check_bundled() -> Result<(usize, usize)> {
+    let all: Vec<Cert> = BUNDLED_CA
+        .iter()
+        .map(|(_, d)| Cert::parse_any(d))
+        .collect::<Result<_>>()?;
+    let bad = all
+        .iter()
+        .filter(|c| {
+            !all.iter()
+                .any(|i| cert::names_equal(&i.subject, &c.issuer) && c.signed_by(i))
+        })
+        .count();
+    Ok((all.len(), bad))
+}

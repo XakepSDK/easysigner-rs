@@ -188,7 +188,7 @@ impl Kept {
             let fresh = a.this_update.is_some_and(|u| u + 5 * MINUTE >= at);
             let (answer, status) = good_if_later(
                 a.cert_status,
-                a.status,
+                crate::i18n::text(&a.status),
                 a.revoked_at.zip(a.untrusted_from),
                 at,
             );
@@ -318,7 +318,7 @@ pub fn gather(targets: &[(Cert, bool)], ocsp_url: &str, trust: &TrustStore, now:
                 if warn {
                     g.warnings.push(trf(
                         "No validation data could be kept for '{}': {}",
-                        &[&c.cn(), &chain.status],
+                        &[&c.cn(), &crate::i18n::text(&chain.status)],
                     ));
                 }
                 continue;
@@ -358,8 +358,10 @@ fn revocation(
                 return;
             }
             // revoked, or unknown to its CA: negative either way (Order 500/НҚ p.19)
-            Ok(a) if !a.cert_status.is_empty() => return refuse(g, &a.status),
-            Ok(a) => why.push(a.status),
+            Ok(a) if !a.cert_status.is_empty() => {
+                return refuse(g, &crate::i18n::text(&a.status));
+            }
+            Ok(a) => why.push(crate::i18n::text(&a.status)),
             Err(e) => why.push(trf("ERROR: could not check OCSP ({})", &[&e])),
         }
     }
@@ -449,7 +451,7 @@ pub fn tsa_certs(si: &SignerInfo) -> Vec<Cert> {
 /// ATSHashIndexV3 (EN 319 122-1 5.5.2) for signer `si` of `sd`, with hash `alg`: a hash of
 /// each certificate, each `crls` item and each unsigned attribute value (with its type).
 fn hash_index(sd: &SignedData, si: &SignerInfo, alg: &str) -> Result<Vec<u8>> {
-    let h = |b: &[u8]| gost::hash(alg, b).map(|x| der::octets(&x));
+    let h = |b: &[u8]| -> Result<Vec<u8>> { Ok(der::octets(&gost::hash(alg, b)?)) };
     let certs = sd.certs.iter().map(|c| h(c)).collect::<Result<Vec<_>>>()?;
     let crls = sd
         .crl_items()
@@ -591,7 +593,7 @@ fn check_archive(
     }
     // every value the index lists must still be in the signature
     let hashes = |items: &mut dyn Iterator<Item = Vec<u8>>| -> Result<Vec<Vec<u8>>> {
-        items.map(|b| gost::hash(&alg, &b)).collect()
+        items.map(|b| Ok(gost::hash(&alg, &b)?)).collect()
     };
     let present = [
         hashes(&mut sd.certs.iter().cloned())?,
@@ -645,7 +647,7 @@ fn check_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ocsp::tests::{GOOD, Reply, key};
+    use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
     use crate::time::encode_generalized;
 
     const DAY: i64 = 86_400_000;
@@ -716,7 +718,7 @@ mod tests {
             }
             let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
             let tbs = der::seq(&refs);
-            let sig = self.ca.private_key.sign(&tbs).unwrap();
+            let sig = self.ca.private_key.sign(&tbs, &mut crate::OsRng).unwrap();
             der::seq(&[
                 &tbs,
                 &der::alg_null(self.ca.private_key.sig_oid()),
@@ -909,6 +911,8 @@ mod tests {
                 true,
                 &carol.private_key,
                 &carol.cert,
+                crate::time::now_ms(),
+                &mut crate::OsRng,
             )
             .unwrap()
         };
@@ -947,6 +951,8 @@ mod tests {
             true,
             &f.ca.private_key,
             &f.ca.cert,
+            crate::time::now_ms(),
+            &mut crate::OsRng,
         )
         .unwrap()
         .encode();

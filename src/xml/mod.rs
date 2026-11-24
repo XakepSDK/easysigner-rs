@@ -292,7 +292,7 @@ pub fn sign(
         let s = by_id(&d, &id).ok_or_else(|| Error::new("signature not found"))?;
         let si = child(s, DS, "SignedInfo").ok_or_else(|| Error::new("SignedInfo not found"))?;
         key.private_key
-            .sign(&c14n::canonicalize(&out, si, &inc, &[]))?
+            .sign(&c14n::canonicalize(&out, si, &inc, &[]), &mut crate::OsRng)?
     };
     out = out.replacen(&format!("@@{id}-sv@@"), &crate::base64_encode(&value), 1);
     r.signature = value;

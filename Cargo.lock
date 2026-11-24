@@ -2172,6 +2172,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "kzcrypto"
+version = "0.1.0-dev"
+dependencies = [
+ "aes",
+ "base64",
+ "cbc",
+ "cipher",
+ "des",
+ "digest",
+ "getrandom 0.4.3",
+ "gost94",
+ "hmac",
+ "num-bigint",
+ "num-traits",
+ "pbkdf2",
+ "pkcs12",
+ "rand_core",
+ "rc2",
+ "rsa",
+ "sha1",
+ "sha2",
+ "streebog",
+ "zeroize",
+]
+
+[[package]]
 name = "kzsigner"
 version = "0.1.0-dev"
 dependencies = [
@@ -2188,6 +2214,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gost94",
  "hmac",
+ "kzcrypto",
  "lopdf",
  "num-bigint",
  "num-traits",

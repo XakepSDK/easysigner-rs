@@ -101,6 +101,21 @@ pub fn trf_in(l: Lang, template: &'static str, args: &[&dyn Display]) -> String 
     out
 }
 
+/// A [`kzcrypto::Text`] (a message from the cryptography) in the current language.
+pub fn text(t: &kzcrypto::Text) -> String {
+    text_in(lang(), t)
+}
+
+/// [`text`] in language `l`. Times are shown in this computer's time zone.
+pub fn text_in(l: Lang, t: &kzcrypto::Text) -> String {
+    use kzcrypto::text::Arg;
+    t.fill(tr_in(l, t.template), &mut |a| match a {
+        Arg::Str(s) => s.clone(),
+        Arg::Time(ms) => crate::time::fmt(*ms),
+        Arg::Text(t) => text_in(l, t),
+    })
+}
+
 /// The language for the window: the one chosen in it before, else KZSIGNER_LANG, else the
 /// system's language (Kazakh or Russian; anything else gives English).
 pub fn detect() -> Lang {
@@ -438,13 +453,16 @@ mod tests {
         let mut missing = Vec::new();
         let mut found = 0;
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for dir in ["src", "src/pdf", "src/xml", "desktop/src"] {
+        for dir in ["src", "src/pdf", "src/xml", "desktop/src", "crypto/src"] {
             for e in std::fs::read_dir(dir).unwrap() {
                 files.push(e.unwrap().path());
             }
         }
         for p in files {
-            if p.extension().is_none_or(|x| x != "rs") || p.ends_with("i18n.rs") {
+            if p.extension().is_none_or(|x| x != "rs")
+                || p.ends_with("i18n.rs")
+                || p.ends_with("crypto/src/text.rs")
+            {
                 continue;
             }
             let src = std::fs::read_to_string(&p).unwrap();
