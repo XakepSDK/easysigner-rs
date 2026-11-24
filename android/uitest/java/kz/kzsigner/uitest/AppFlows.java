@@ -195,7 +195,20 @@ public class AppFlows {
 
     /** Signs on the Sign screen: the key's password where it asks (emulator), then `button`. */
     private void signWith(String button) {
-        if (phone.device.wait(Until.hasObject(By.clazz("android.widget.EditText")), 3000)) {
+        // the password field can be scrolled out of sight: look for it from the top down
+        Phone.sleep(1000);
+        UiObject2 list = phone.device.findObject(By.scrollable(true));
+        if (list != null) {
+            try {
+                list.fling(androidx.test.uiautomator.Direction.UP);
+                for (int i = 0; i < 6 && !phone.device.hasObject(By.clazz("android.widget.EditText")); i++) {
+                    list.scroll(androidx.test.uiautomator.Direction.DOWN, 0.5f);
+                }
+            } catch (RuntimeException e) {
+                // the screen changed meanwhile
+            }
+        }
+        if (phone.device.wait(Until.hasObject(By.clazz("android.widget.EditText")), 2000)) {
             type("Qwerty12");
         }
         scrollTo(button);
