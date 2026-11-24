@@ -44,9 +44,12 @@ Small app changes, collected to build and test in one go.
   with the password on a phone with no screen lock, NCA revoked, NCA not answering, check
   valid / changed / revoked / not signed / detached, About, the language switch. The released
   APK keeps NCA's real servers and trust; the test build is never released.
-- **Phone-only APK** (proposed, not decided): the release APK carries the x86_64 core for the
-  emulator too, about 3 MB of its 10 MB. Build the release for arm64 only and the emulator
-  tests' APK for x86_64.
+- **One arm64-only APK, tested as shipped** (agreed). Drop the x86_64 core from the APK
+  (about 3 MB of its 10 MB). GitHub's arm64 runners can't run the emulator (no KVM, as
+  reported; GitHub's docs don't say), so keep the x86_64 emulators: Android 11 and newer
+  x86_64 system images translate arm64 apps, so they run the arm64-only APK. Check that it
+  starts and signs on API 30, 35 and 36; if an image lacks the translation, say so and
+  decide then. The test build (build type "uitest") is arm64-only too.
 - **Revocation line in Signature details** (proposed): shows the core's raw text, e.g.
   "UNKNOWN (issuer certificate not available)"; give it plain words like the rest.
 
