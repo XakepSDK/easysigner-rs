@@ -41,13 +41,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import kz.kzsigner.core.AddKeyException
-import kz.kzsigner.core.ChipPrompt
-import kz.kzsigner.core.Unlock
 import kz.kzsigner.Added
 import kz.kzsigner.KeyFile
 import kz.kzsigner.KeysModel
 import kz.kzsigner.R
+import kz.kzsigner.core.AddKeyException
+import kz.kzsigner.core.ChipPrompt
+import kz.kzsigner.core.Unlock
 
 /** What went wrong with the last try. */
 private enum class Problem { WRONG_PASSWORD, NOT_A_KEY, FAILED }
@@ -57,12 +57,7 @@ private enum class Problem { WRONG_PASSWORD, NOT_A_KEY, FAILED }
  * the phone (one fingerprint/PIN prompt). A key that can't sign goes to [onCantSign].
  */
 @Composable
-fun AddKeyScreen(
-    model: KeysModel,
-    onBack: (() -> Unit)?,
-    onAdded: () -> Unit,
-    onCantSign: (AddKeyException.KeyCantSign) -> Unit,
-) {
+fun AddKeyScreen(model: KeysModel, onBack: (() -> Unit)?, onAdded: () -> Unit, onCantSign: (AddKeyException.KeyCantSign) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var file by remember { mutableStateOf<KeyFile?>(null) }
@@ -109,19 +104,26 @@ fun AddKeyScreen(
                     password = ""
                     onAdded()
                 }
+
                 Added.Cancelled -> {}
+
                 is Added.Refused -> when (val e = r.why) {
                     is AddKeyException.WrongPassword -> problem = Problem.WRONG_PASSWORD
+
                     is AddKeyException.NotAKey -> problem = Problem.NOT_A_KEY
+
                     is AddKeyException.KeyCantSign -> onCantSign(e)
+
                     is AddKeyException.AlreadyAdded -> {
                         Toast.makeText(context, alreadyAdded, Toast.LENGTH_LONG).show()
                         onAdded()
                     }
+
                     is AddKeyException.Failed -> {
                         problem = Problem.FAILED
                         detail = e.detail
                     }
+
                     is AddKeyException.Cancelled -> {}
                 }
             }
@@ -151,9 +153,9 @@ fun AddKeyScreen(
                 stringResource(if (wrong) R.string.try_again else R.string.continue_),
                 submit,
                 enabled = f.bytes != null && problem != Problem.NOT_A_KEY && password.isNotEmpty(),
-                busy = busy,
+                busy = busy
             )
-        },
+        }
     ) {
         Title(stringResource(R.string.add_key_title))
         Body(
@@ -162,8 +164,8 @@ fun AddKeyScreen(
                     model.newKeyUnlock != Unlock.PASSWORD -> R.string.add_key_once_device
                     model.screenLock -> R.string.add_key_once_nochip
                     else -> R.string.add_key_once_password
-                },
-            ),
+                }
+            )
         )
         FileCard(f.name, if (problem == Problem.NOT_A_KEY) stringResource(R.string.not_a_key) else null, choose)
         if (problem == Problem.NOT_A_KEY) return@Screen
@@ -184,12 +186,12 @@ fun AddKeyScreen(
                     IconButton(onClick = { shown = !shown }) {
                         Icon(
                             painterResource(if (shown) R.drawable.ic_eye_off else R.drawable.ic_eye),
-                            stringResource(if (shown) R.string.hide_password else R.string.show_password),
+                            stringResource(if (shown) R.string.hide_password else R.string.show_password)
                         )
                     }
                 },
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
             )
             when (problem) {
                 Problem.WRONG_PASSWORD -> Small(stringResource(R.string.wrong_password), MaterialTheme.colorScheme.error)
@@ -209,8 +211,8 @@ fun AddKeyScreen(
                         model.newKeyUnlock != Unlock.PASSWORD -> R.string.key_stays_device
                         model.screenLock -> R.string.key_stays_nochip
                         else -> R.string.key_stays_password
-                    },
-                ),
+                    }
+                )
             )
         }
     }
@@ -223,17 +225,26 @@ private fun FileCard(name: String, error: String?, onClick: () -> Unit) {
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline),
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
     ) {
         Row(
             Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(painterResource(R.drawable.ic_file), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                Small(error ?: stringResource(R.string.choose_another), if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                Small(
+                    error ?: stringResource(R.string.choose_another),
+                    if (error !=
+                        null
+                    ) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
             }
         }
     }

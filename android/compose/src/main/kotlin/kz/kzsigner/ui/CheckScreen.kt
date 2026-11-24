@@ -38,15 +38,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kz.kzsigner.Files
+import kz.kzsigner.KeysModel
+import kz.kzsigner.Opened
+import kz.kzsigner.R
 import kz.kzsigner.core.Checked
 import kz.kzsigner.core.Format
 import kz.kzsigner.core.Reason
 import kz.kzsigner.core.SignerCheck
 import kz.kzsigner.core.Verdict
-import kz.kzsigner.Files
-import kz.kzsigner.KeysModel
-import kz.kzsigner.Opened
-import kz.kzsigner.R
 
 /** The reason's title (screen 6c). */
 fun reasonTitle(r: Reason?): Int = when (r) {
@@ -75,13 +75,7 @@ private fun reasonNext(r: Reason?): Int = when (r) {
  * was valid; until it answers, a spinner.
  */
 @Composable
-fun CheckScreen(
-    model: KeysModel,
-    onBack: () -> Unit,
-    onDetails: () -> Unit,
-    onRead: (Reading) -> Unit,
-    onAnother: () -> Unit,
-) {
+fun CheckScreen(model: KeysModel, onBack: () -> Unit, onDetails: () -> Unit, onRead: (Reading) -> Unit, onAnother: () -> Unit) {
     val file = model.checking ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -93,7 +87,7 @@ fun CheckScreen(
             Column(
                 Modifier.fillMaxWidth().padding(top = 120.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 CircularProgressIndicator()
                 Body(stringResource(R.string.checking))
@@ -130,27 +124,39 @@ fun CheckScreen(
             buttons = {
                 if (canSign) MainButton(stringResource(R.string.sign_it_myself), signIt)
                 SecondButton(stringResource(R.string.check_another), onAnother)
-            },
+            }
         ) {
-            Outcome(R.drawable.ic_file, stringResource(R.string.not_signed_title), stringResource(R.string.not_signed_body, file.name), Tone.GREY)
+            Outcome(
+                R.drawable.ic_file,
+                stringResource(R.string.not_signed_title),
+                stringResource(R.string.not_signed_body, file.name),
+                Tone.GREY
+            )
             Small(stringResource(R.string.not_signed_hint))
         }
+
         Verdict.NEEDS_DOCUMENT -> Screen(
             onBack,
             buttons = {
                 MainButton(stringResource(R.string.choose_document), { pickOriginal.launch(arrayOf("*/*")) })
                 SecondButton(stringResource(R.string.check_another), onAnother)
-            },
+            }
         ) {
-            Outcome(R.drawable.ic_file, stringResource(R.string.needs_document_title), stringResource(R.string.needs_document_body, c.documentName), Tone.GREY)
+            Outcome(
+                R.drawable.ic_file,
+                stringResource(R.string.needs_document_title),
+                stringResource(R.string.needs_document_body, c.documentName),
+                Tone.GREY
+            )
             if (c.signers.isNotEmpty()) SignerList(c, showState = false)
         }
+
         Verdict.VALID -> Screen(
             onBack,
             buttons = {
                 if (c.document != null) MainButton(stringResource(R.string.open_document), open)
                 if (canSign) SecondButton(stringResource(R.string.add_my_signature), signIt)
-            },
+            }
         ) {
             val n = c.signers.size
             val confirmed = c.signers.all { it.ncaTime }
@@ -162,7 +168,7 @@ fun CheckScreen(
                     else -> stringResource(R.string.valid_all, n)
                 },
                 if (n == 1) stringResource(if (confirmed) R.string.valid_body else R.string.valid_body_today) else null,
-                Tone.GOOD,
+                Tone.GOOD
             )
             if (n == 1) OneSigner(c, c.signers[0]) else SignerList(c, showState = true)
             for (s in c.signers.filter { !it.ncaTime }) {
@@ -172,24 +178,26 @@ fun CheckScreen(
             }
             DetailsLink(onDetails)
         }
+
         Verdict.INVALID -> Screen(
             onBack,
-            buttons = { SecondButton(stringResource(R.string.check_another), onAnother) },
+            buttons = { SecondButton(stringResource(R.string.check_another), onAnother) }
         ) {
             val bad = c.signers.firstOrNull { !it.valid && it.reason != Reason.NOT_CONFIRMED } ?: c.signers.firstOrNull()
             Outcome(
                 R.drawable.ic_shield_alert,
                 stringResource(R.string.do_not_trust),
                 stringResource(reasonTitle(bad?.reason)),
-                Tone.BAD,
+                Tone.BAD
             )
             Grey(stringResource(reasonNext(bad?.reason)))
             if (c.signers.size > 1) SignerList(c, showState = true)
             DetailsLink(onDetails)
         }
+
         Verdict.UNKNOWN -> Screen(
             onBack,
-            buttons = { MainButton(stringResource(R.string.check_again), { scope.launch { model.check(lang) } }) },
+            buttons = { MainButton(stringResource(R.string.check_again), { scope.launch { model.check(lang) } }) }
         ) {
             Outcome(R.drawable.ic_clock, stringResource(R.string.unknown_title), stringResource(R.string.unknown_body), Tone.WARN)
             Grey(stringResource(R.string.unknown_next))
@@ -207,18 +215,34 @@ private fun Outcome(icon: Int, title: String, body: String?, tone: Tone) {
     val n = LocalNotices.current
     val (bg, fg, text) = when (tone) {
         Tone.GOOD -> Triple(n.goodBg, n.good, n.good)
+
         Tone.BAD -> Triple(n.badBg, MaterialTheme.colorScheme.error, MaterialTheme.colorScheme.error)
+
         Tone.WARN -> Triple(n.warnBg, n.warnTitle, n.warnText)
-        Tone.GREY -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurface, MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Tone.GREY -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurface,
+            MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
     Column(
         Modifier.fillMaxWidth().background(bg, RoundedCornerShape(16.dp))
             .then(if (tone == Tone.GREY) Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp)) else Modifier)
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Icon(painterResource(icon), null, tint = fg, modifier = Modifier.size(32.dp))
-        Text(title, color = fg, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, lineHeight = 29.sp, modifier = Modifier.semantics { heading() })
+        Text(
+            title,
+            color = fg,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 29.sp,
+            modifier = Modifier.semantics {
+                heading()
+            }
+        )
         body?.let { Text(it, color = text, style = MaterialTheme.typography.bodyLarge) }
     }
 }
@@ -229,7 +253,7 @@ private fun Grey(text: String) {
         text,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(14.dp),
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(14.dp)
     )
 }
 
@@ -247,10 +271,26 @@ private fun Field(label: String, value: String, vararg more: String) {
 @Composable
 private fun OneSigner(c: Checked, s: SignerCheck) {
     Column(Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))) {
-        Field(stringResource(R.string.signed_by), displayName(s.name), *listOfNotNull(s.iin?.let { stringResource(R.string.iin, it) }).toTypedArray())
+        Field(
+            stringResource(R.string.signed_by),
+            displayName(s.name),
+            *listOfNotNull(
+                s.iin?.let {
+                    stringResource(R.string.iin, it)
+                }
+            ).toTypedArray()
+        )
         s.company?.let {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Field(stringResource(R.string.on_behalf_of), it, *listOfNotNull(s.bin?.let { b -> stringResource(R.string.bin, b) }).toTypedArray())
+            Field(
+                stringResource(R.string.on_behalf_of),
+                it,
+                *listOfNotNull(
+                    s.bin?.let { b ->
+                        stringResource(R.string.bin, b)
+                    }
+                ).toTypedArray()
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         val t = s.signedMs
@@ -260,7 +300,7 @@ private fun OneSigner(c: Checked, s: SignerCheck) {
             Field(
                 stringResource(R.string.signed_on_label),
                 stringResource(R.string.not_confirmed_by_nca),
-                *listOfNotNull(t?.let { stringResource(R.string.own_clock, dateTime(it)) }).toTypedArray(),
+                *listOfNotNull(t?.let { stringResource(R.string.own_clock, dateTime(it)) }).toTypedArray()
             )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -285,11 +325,33 @@ private fun SignerList(c: Checked, showState: Boolean) {
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(displayName(s.name), fontWeight = FontWeight.SemiBold)
-                    val who = s.company?.let { co -> if (s.bin != null) stringResource(R.string.for_company_bin, co, s.bin!!) else stringResource(R.string.for_company, co) }
-                        ?: s.iin?.let { stringResource(R.string.iin, it) }
+                    val who =
+                        s.company?.let { co ->
+                            if (s.bin !=
+                                null
+                            ) {
+                                stringResource(R.string.for_company_bin, co, s.bin!!)
+                            } else {
+                                stringResource(R.string.for_company, co)
+                            }
+                        }
+                            ?: s.iin?.let { stringResource(R.string.iin, it) }
                     who?.let { Small(it) }
                     s.signedMs?.let { Small(dateTime(it)) }
-                    if (showState && !s.valid) Small(stringResource(reasonTitle(s.reason)), if (s.reason == Reason.NOT_CONFIRMED) LocalNotices.current.warnText else MaterialTheme.colorScheme.error)
+                    if (showState &&
+                        !s.valid
+                    ) {
+                        Small(
+                            stringResource(reasonTitle(s.reason)),
+                            if (s.reason ==
+                                Reason.NOT_CONFIRMED
+                            ) {
+                                LocalNotices.current.warnText
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -300,7 +362,7 @@ private fun SignerList(c: Checked, showState: Boolean) {
 private fun DetailsLink(onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Text(stringResource(R.string.details), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
         Icon(painterResource(R.drawable.ic_down), null, modifier = Modifier.size(20.dp))
@@ -322,7 +384,7 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
             Format.DETACHED_CMS -> R.string.f_detached
             Format.CARD -> R.string.f_card
             null -> R.string.f_none
-        },
+        }
     )
     for (s in c.signers) {
         if (c.signers.size > 1) rows += stringResource(R.string.signed_by) to displayName(s.name)
@@ -337,7 +399,7 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
                     "revoked" -> R.string.rev_revoked
                     "unknown" -> R.string.rev_unknown
                     else -> R.string.rev_none
-                },
+                }
             )
             rows += stringResource(R.string.d_revocation) to
                 if (s.revocationKept) words + "\n" + stringResource(R.string.rev_kept) else words
@@ -348,7 +410,12 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
         } else {
             ""
         }
-        if (cert.isNotEmpty() || dates.isNotEmpty()) rows += stringResource(R.string.d_certificate) to listOf(cert, dates).filter { it.isNotEmpty() }.joinToString("\n")
+        if (cert.isNotEmpty() ||
+            dates.isNotEmpty()
+        ) {
+            rows +=
+                stringResource(R.string.d_certificate) to listOf(cert, dates).filter { it.isNotEmpty() }.joinToString("\n")
+        }
         s.issuer?.let { rows += stringResource(R.string.d_issuer) to it }
         s.level?.let { rows += stringResource(R.string.d_level) to it }
         if (s.problems.isNotEmpty()) rows += stringResource(R.string.d_found) to s.problems.joinToString("\n")
@@ -362,7 +429,7 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
                 context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("kzsigner", all))
                 Toast.makeText(context, copied, Toast.LENGTH_SHORT).show()
             }
-        },
+        }
     ) {
         Title(stringResource(R.string.details_title))
         Body(stringResource(R.string.details_body))

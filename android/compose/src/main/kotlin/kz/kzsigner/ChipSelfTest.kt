@@ -78,6 +78,7 @@ object ChipSelfTest {
                         chip.create(name, ChipUnlock.BIOMETRIC_ONLY)
                         box.writeBytes(chip.seal(name, "reset".toByteArray(), aad, prompt))
                     }
+
                     "check" -> try {
                         chip.open(name, box.readBytes(), aad, prompt)
                         throw Exception("the key still opens after a new finger")
@@ -86,6 +87,7 @@ object ChipSelfTest {
                         chip.delete(name)
                         box.delete()
                     }
+
                     else -> throw Exception("unknown step $step")
                 }
                 Log.i(TAG, "RESET PASS $step")

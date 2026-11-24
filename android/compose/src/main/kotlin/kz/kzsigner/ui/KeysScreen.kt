@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -18,7 +19,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -41,12 +41,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.launch
+import kz.kzsigner.KeysModel
+import kz.kzsigner.R
 import kz.kzsigner.core.CantSign
 import kz.kzsigner.core.ChipPrompt
 import kz.kzsigner.core.KeyInfo
 import kz.kzsigner.core.Unlock
-import kz.kzsigner.KeysModel
-import kz.kzsigner.R
 import kz.kzsigner.hasFingerprint
 
 /** Keys that expire within this many days get a warning. */
@@ -83,7 +83,7 @@ fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbo
             onClick = onAdd,
             shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
         ) {
             Text(stringResource(R.string.add_another), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -91,7 +91,11 @@ fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbo
             Label(stringResource(R.string.language))
             LanguagePicker()
             // a small corner radius: the pill shape cuts off the text's ends when it wraps (large text)
-            TextButton(onClick = onAbout, shape = RoundedCornerShape(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+            TextButton(
+                onClick = onAbout,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+            ) {
                 Text(stringResource(R.string.about_link), style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -103,13 +107,13 @@ fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbo
         ModalBottomSheet(
             onDismissRequest = { removing = null },
             sheetState = sheet,
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
                     stringResource(R.string.remove_title, displayName(k.name)),
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.SemiBold
                 )
                 Body(stringResource(R.string.remove_body))
                 MainButton(stringResource(R.string.remove), {
@@ -143,10 +147,14 @@ private fun KeyCard(k: KeyInfo, onRemove: () -> Unit) {
         val days = daysUntil(k.expiresMs)
         when (k.cantSign) {
             CantSign.EXPIRED -> Bad(stringResource(R.string.expired_on, longDate(k.expiresMs)), stringResource(R.string.expired_detail))
+
             CantSign.GOST2004 -> Bad(stringResource(R.string.gost2004_short), stringResource(R.string.new_key_detail))
+
             CantSign.NOT_YET_VALID -> WarnNotice(stringResource(R.string.not_yet_valid), null)
+
             // known only when signing: the list never says these
             CantSign.REVOKED, CantSign.NOT_RECOGNIZED -> {}
+
             null -> if (days < WARN_DAYS) {
                 val title = if (days <= 0) {
                     stringResource(R.string.expires_today)
@@ -162,21 +170,32 @@ private fun KeyCard(k: KeyInfo, onRemove: () -> Unit) {
             val opens = when (k.unlock) {
                 Unlock.FINGERPRINT_OR_SCREEN_LOCK ->
                     if (hasFingerprint(context)) R.string.opens_fingerprint else R.string.opens_screen_lock
+
                 Unlock.FINGERPRINT -> R.string.opens_fingerprint
+
                 Unlock.PASSWORD -> R.string.opens_password
+
                 Unlock.FINGERPRINT_AND_PASSWORD -> R.string.opens_fingerprint_password
             }
             Row(
                 Modifier.padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(painterResource(R.drawable.ic_shield), null, tint = LocalNotices.current.good, modifier = Modifier.size(18.dp))
                 Text(stringResource(opens), color = LocalNotices.current.good, style = MaterialTheme.typography.bodyMedium)
             }
         }
-        TextButton(onClick = onRemove, shape = RoundedCornerShape(8.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-            Text(stringResource(R.string.remove_from_phone), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+        TextButton(
+            onClick = onRemove,
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+        ) {
+            Text(
+                stringResource(R.string.remove_from_phone),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyLarge
+            )
         }
     }
 }
@@ -198,11 +217,11 @@ private fun LanguagePicker() {
             onClick = { open = true },
             shape = RoundedCornerShape(12.dp),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 Modifier.heightIn(min = 52.dp).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(choices.firstOrNull { it.first == current }?.second ?: phone, Modifier.weight(1f), fontSize = 16.sp)
                 Icon(painterResource(R.drawable.ic_down), null)
@@ -215,7 +234,7 @@ private fun LanguagePicker() {
                     onClick = {
                         open = false
                         AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tag))
-                    },
+                    }
                 )
             }
         }

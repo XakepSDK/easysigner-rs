@@ -75,7 +75,7 @@ fun SignedScreen(model: KeysModel, onDone: () -> Unit) {
             Button(
                 onClick = { Files.send(context, s.name, s.bytes) },
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
             ) {
                 Icon(painterResource(R.drawable.ic_share), null, Modifier.size(22.dp))
                 Box(Modifier.width(10.dp))
@@ -85,12 +85,12 @@ fun SignedScreen(model: KeysModel, onDone: () -> Unit) {
             TextButton(onClick = onDone, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.done))
             }
-        },
+        }
     ) {
         Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(
                 Modifier.size(80.dp).background(LocalNotices.current.goodBg, CircleShape),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.Center
             ) {
                 Icon(painterResource(R.drawable.ic_check), null, tint = LocalNotices.current.good, modifier = Modifier.size(40.dp))
             }
@@ -99,7 +99,7 @@ fun SignedScreen(model: KeysModel, onDone: () -> Unit) {
                 stringResource(R.string.signed_title),
                 fontSize = 28.sp,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.semantics { heading() },
+                modifier = Modifier.semantics { heading() }
             )
             s.ncaTimeMs?.let {
                 Spacer(Modifier.size(10.dp))
@@ -107,37 +107,41 @@ fun SignedScreen(model: KeysModel, onDone: () -> Unit) {
                     stringResource(R.string.signed_time, dateTime(it)),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
+                    textAlign = TextAlign.Center
                 )
             }
         }
         Row(
             Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 Modifier.size(48.dp).background(
                     if (pdf) LocalNotices.current.badBg else LocalNotices.current.infoBg,
-                    RoundedCornerShape(10.dp),
+                    RoundedCornerShape(10.dp)
                 ),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     s.name.substringAfterLast('.', "").uppercase().take(4),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (pdf) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    color = if (pdf) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                 )
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(s.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
-                Text(stringResource(R.string.with_signature_inside), color = LocalNotices.current.good, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(R.string.with_signature_inside),
+                    color = LocalNotices.current.good,
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
         }
         WarnNotice(
             stringResource(R.string.send_file_title),
-            stringResource(if (pdf) R.string.send_file_pdf else R.string.send_file_other),
+            stringResource(if (pdf) R.string.send_file_pdf else R.string.send_file_other)
         )
     }
 }

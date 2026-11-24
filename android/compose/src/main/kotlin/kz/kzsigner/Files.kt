@@ -25,8 +25,7 @@ object Files {
     }
 
     /** A file name with nothing that could leave the folder. */
-    fun safe(name: String): String =
-        name.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_").trim('.', ' ').ifEmpty { "document" }
+    fun safe(name: String): String = name.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_").trim('.', ' ').ifEmpty { "document" }
 
     fun mime(name: String): String {
         val ext = name.substringAfterLast('.', "").lowercase()

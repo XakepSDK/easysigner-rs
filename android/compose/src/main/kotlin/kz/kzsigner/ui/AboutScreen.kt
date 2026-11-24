@@ -19,8 +19,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kz.kzsigner.core.version
 import kz.kzsigner.R
+import kz.kzsigner.core.version
 
 const val SOURCE = "https://github.com/XakepSDK/easysigner-rs"
 
@@ -32,9 +32,13 @@ fun AboutScreen(onBack: () -> Unit) {
         Title(stringResource(R.string.about_title))
         Column(
             Modifier.fillMaxWidth().background(LocalNotices.current.infoBg, RoundedCornerShape(14.dp)).padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(stringResource(R.string.about_private_title), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(R.string.about_private_title),
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleMedium
+            )
             Body(stringResource(R.string.about_private_body), MaterialTheme.colorScheme.onSurface)
         }
         Card {
@@ -45,7 +49,7 @@ fun AboutScreen(onBack: () -> Unit) {
             Column(
                 Modifier.fillMaxWidth().clickable(role = Role.Button) {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SOURCE)))
-                },
+                }
             ) {
                 Row(stringResource(R.string.license), stringResource(R.string.license_value), link = true)
             }
