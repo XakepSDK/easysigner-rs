@@ -178,7 +178,7 @@ jobs:
       - name: Rust (the version pinned in rust-toolchain.toml) with the Android targets
         run: |
           rustup toolchain install
-          rustup target add aarch64-linux-android x86_64-linux-android
+          rustup target add aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
           key: android

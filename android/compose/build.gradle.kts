@@ -28,8 +28,9 @@ android {
         targetSdk = 35
         versionCode = 2
         versionName = appVersion
-        // the architectures the core is built for; JNA's aar carries seven more
-        ndk.abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        // phones only (arm64): the core is built for nothing else, and JNA's aar carries
+        // seven more architectures. The x86_64 emulators run it through ARM translation.
+        ndk.abiFilters.addAll(listOf("arm64-v8a"))
     }
 
     sourceSets["main"].apply {
