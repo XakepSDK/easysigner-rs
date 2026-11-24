@@ -97,7 +97,6 @@
     <string name="sign_with_another">Подписать другим ключом</string>
     <string name="sign">Подписать</string>
     <string name="add_my_signature">Добавить мою подпись</string>
-    <string name="unlocks_after_read">Станет доступно, когда вы откроете документ</string>
     <string name="out_pdf">Ваша подпись будет внутри этого PDF, а в конце добавится страница «Кто подписал» с вашим именем и временем подписи, чтобы любой видел, что он подписан.</string>
     <string name="out_pdf_join_page">Ваше имя добавится рядом с именем %1$s на странице «Кто подписал». Отправьте этот PDF обратно.</string>
     <string name="out_pdf_join">Ваша подпись добавится внутрь этого PDF, рядом с подписью: %1$s. Отправьте этот PDF обратно.</string>
@@ -220,4 +219,10 @@
     <string name="home_sign_first">PDF, Word или любой файл</string>
     <string name="add_key_short">Добавить ключ</string>
     <string name="sign_needs_key">Чтобы подписать, сначала добавьте свой ключ. Это делается один раз, затем выберите документ.</string>
+    <string name="open_to_check">Нажмите «Прочитать», чтобы проверить, что вы подписываете.</string>
+    <string name="rev_good">Не отозван: НУЦ подтвердил ключ</string>
+    <string name="rev_revoked">Отозван: НУЦ аннулировал этот ключ</string>
+    <string name="rev_unknown">НУЦ не знает этот ключ</string>
+    <string name="rev_none">НУЦ не ответил</string>
+    <string name="rev_kept">Ответ НУЦ сохранён в подписи</string>
 </resources>

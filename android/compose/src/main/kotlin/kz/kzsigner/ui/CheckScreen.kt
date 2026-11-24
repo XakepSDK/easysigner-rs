@@ -330,7 +330,18 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
             rows += stringResource(R.string.d_time) to dateTime(it) + "\n" +
                 stringResource(if (s.ncaTime) R.string.d_time_nca else R.string.d_time_own)
         }
-        s.revocation?.let { rows += stringResource(R.string.d_revocation) to it }
+        s.revocationAnswer?.let { a ->
+            val words = stringResource(
+                when (a) {
+                    "good" -> R.string.rev_good
+                    "revoked" -> R.string.rev_revoked
+                    "unknown" -> R.string.rev_unknown
+                    else -> R.string.rev_none
+                },
+            )
+            rows += stringResource(R.string.d_revocation) to
+                if (s.revocationKept) words + "\n" + stringResource(R.string.rev_kept) else words
+        }
         val cert = listOfNotNull(s.algorithm, s.serial?.let { stringResource(R.string.d_serial, it) }).joinToString(" · ")
         val dates = if (s.validFromMs != null && s.expiresMs != null) {
             stringResource(R.string.d_valid, longDate(s.validFromMs!!), longDate(s.expiresMs!!))

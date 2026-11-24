@@ -121,3 +121,66 @@ fn an_expired_key_is_expired_or_expired_since() {
     s.timestamp_trusted = Some(true);
     assert_eq!(s.reason().map(Reason::from), Some(Reason::Expired));
 }
+
+/// Makes the signed files the app's emulator tests check (tests/fixtures/app), signed by
+/// carol against the fake NCA, and prints what checking each says. Run by hand:
+/// cargo test -p kzsigner-ffi make_app_fixtures -- --ignored --nocapture
+#[test]
+#[ignore]
+fn make_app_fixtures() {
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/app");
+    let pdf = signed_by_carol("fix-pdf", "contract.pdf", file("pdf/plain.pdf"));
+    std::fs::write(out.join(&pdf.name), &pdf.bytes).unwrap();
+    let act = signed_by_carol(
+        "fix-cms",
+        "act.txt",
+        b"Act No. 17: test services, November.".to_vec(),
+    );
+    std::fs::write(out.join(&act.name), &act.bytes).unwrap();
+    // the same with its text changed after signing
+    let mut changed = act.bytes.clone();
+    let at = changed.windows(6).position(|w| w == b"No. 17").unwrap();
+    changed[at + 4] = b'9';
+    std::fs::write(out.join("act-changed.txt.cms"), &changed).unwrap();
+
+    let mut cas = test_cas();
+    cas.push(Cert::parse_any(&file("kalkan/ca_gost2015.cer")).unwrap());
+    let good = Arc::new(Nca::with(
+        NOWHERE,
+        &super::sign::nca::fake_ocsp(false),
+        cas.clone(),
+    ));
+    let revoked = Arc::new(Nca::with(
+        NOWHERE,
+        &super::sign::nca::fake_ocsp(true),
+        cas.clone(),
+    ));
+    let down = Arc::new(Nca::with(NOWHERE, NOWHERE, cas));
+    let app = |f: &str| std::fs::read(out.join(f)).unwrap();
+    for (what, nca, name, orig) in [
+        ("pdf good", &good, &pdf.name[..], None),
+        ("pdf revoked", &revoked, &pdf.name[..], None),
+        ("pdf down", &down, &pdf.name[..], None),
+        ("cms good", &good, "act.txt.cms", None),
+        ("cms revoked", &revoked, "act.txt.cms", None),
+        ("cms down", &down, "act.txt.cms", None),
+        ("changed", &good, "act-changed.txt.cms", None),
+        ("detached", &good, "doc.txt.cms", None),
+        ("detached+doc", &good, "doc.txt.cms", Some(app("doc.txt"))),
+        (
+            "detached+other",
+            &good,
+            "doc.txt.cms",
+            Some(file("pdf/plain.pdf")),
+        ),
+    ] {
+        let c = run(nca, name, app(name), orig);
+        println!(
+            "{what}: {:?} {:?} rev={:?} kept={}",
+            c.verdict,
+            c.signers.first().map(|s| s.reason),
+            c.signers.first().map(|s| s.revocation_answer.clone()),
+            c.signers.first().is_some_and(|s| s.revocation_kept)
+        );
+    }
+}

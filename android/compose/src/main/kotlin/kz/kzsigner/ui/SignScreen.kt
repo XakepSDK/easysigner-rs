@@ -106,11 +106,10 @@ fun SignScreen(
     var problem by remember { mutableStateOf<String?>(null) }
     /** NCA didn't answer: true without internet, false when NCA is down. */
     var noAnswer by remember { mutableStateOf<Boolean?>(null) }
-    // a file the app can't show has to be opened before it is signed (3b)
-    var read by rememberSaveable(doc) { mutableStateOf(false) }
 
     val info = doc.info
-    val needsReading = info.kind == DocKind.OTHER || info.kind == DocKind.XML
+    // a file the app can't show itself: the person may open it in another app, not must
+    val shownElsewhere = info.kind == DocKind.OTHER || info.kind == DocKind.XML
     val needsPassword = key.unlock == Unlock.PASSWORD || key.unlock == Unlock.FINGERPRINT_AND_PASSWORD
     val joins = info.signers.isNotEmpty()
     val lang = LocalConfiguration.current.locales[0].language
@@ -173,9 +172,7 @@ fun SignScreen(
             inner != null -> if (!Files.view(context, info.innerName ?: doc.name, inner)) {
                 Toast.makeText(context, noApp, Toast.LENGTH_LONG).show()
             }
-            else -> if (Files.view(context, doc.name, doc.bytes)) {
-                read = true
-            } else {
+            else -> if (!Files.view(context, doc.name, doc.bytes)) {
                 Toast.makeText(context, noApp, Toast.LENGTH_LONG).show()
             }
         }
@@ -189,12 +186,12 @@ fun SignScreen(
                 SignButton(
                     stringResource(if (info.kind == DocKind.CMS) R.string.add_my_signature else R.string.sign),
                     fingerprint = !needsPassword && info.kind != DocKind.CMS,
-                    enabled = (!needsReading || read) && (!needsPassword || password.isNotEmpty()),
+                    enabled = !needsPassword || password.isNotEmpty(),
                     busy = busy,
                     onClick = sign,
                 )
-                if (needsReading && !read) {
-                    Small(stringResource(R.string.unlocks_after_read), modifier = Modifier.fillMaxWidth(), center = true)
+                if (shownElsewhere) {
+                    Small(stringResource(R.string.open_to_check), modifier = Modifier.fillMaxWidth(), center = true)
                 }
                 if (keys.size > 1) KeyPicker(keys, key) { keyId = it.id; password = ""; wrong = false }
             }
@@ -231,7 +228,7 @@ fun SignScreen(
                     isError = wrong,
                     visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (!needsReading || read) sign() }),
+                    keyboardActions = KeyboardActions(onDone = { sign() }),
                     trailingIcon = {
                         IconButton(onClick = { shown = !shown }) {
                             Icon(

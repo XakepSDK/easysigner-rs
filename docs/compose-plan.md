@@ -249,3 +249,24 @@ Most of the behaviour exists; these are new or different:
 - Adding a key refuses one not from NCA or another CA recognized in Kazakhstan, offline,
   before any prompt. The emulator tests run the "uitest" build type, which also trusts the
   test keys' CAs when adding a key; the released APK doesn't.
+
+## After phase 6: one batch
+
+- One APK, arm64 only (about 7 MB, was 10 MB): phones are arm64. The emulator tests run that
+  same build on x86_64 Android 11, 15 and 16 images, which translate arm64 apps.
+- Sign no longer waits until the document was opened. "Read it" stays beside the file card,
+  and for files the app can't show, a line under it says to open it to check what you sign.
+- The Revocation line in Signature details says it in words: not revoked (NCA confirmed the
+  key), revoked, NCA doesn't know the key, or NCA didn't answer; plus "NCA's answer kept in
+  the signature" when the answer came from the file.
+- The emulator tests walk every flow, signing for real: the "uitest" build talks to fake NCA
+  servers on the test machine (`examples/fake_nca.rs`, at 10.0.2.2) and trusts the test CAs
+  for everything. They sign a PDF, a text file (new .cms) and an XML file, join a signed .cms
+  and a signed PDF, refuse a detached .cms, refuse a revoked key, show "Can't reach NCA" when
+  its OCSP or time server is down and sign on Try again, and check not signed, valid (with
+  details), revoked, valid with the kept answer while NCA is down, changed, not recognized,
+  and a detached .cms alone, with its document and with another one; then About and the
+  language switch. The Check action also takes a detached .cms's document as the clip's
+  second item. Not reachable through the app on an emulator: the chip's own prompt at
+  signing, its cancel and its reset there (emulators keep keys in software and use the
+  password); the chip self-test covers those.

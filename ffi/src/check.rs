@@ -77,7 +77,13 @@ pub struct SignerCheck {
     pub algorithm: Option<String>,
     pub serial: Option<String>,
     pub issuer: Option<String>,
+    /// The core's own revocation text (for "Copy details").
     pub revocation: Option<String>,
+    /// NCA's revocation answer: "good", "revoked", "unknown", or "" for none; None when not
+    /// asked. For the details screen's plain words.
+    pub revocation_answer: Option<String>,
+    /// The answer was kept in the signature (B-LT), not asked now.
+    pub revocation_kept: bool,
     /// "B-B", "B-T", "B-LT", "B-LTA".
     pub level: Option<String>,
     /// What the core found, in that language: for "Copy details".
@@ -156,6 +162,8 @@ pub fn check_file(
                 serial: None,
                 issuer: None,
                 revocation: None,
+                revocation_answer: None,
+                revocation_kept: false,
                 level: None,
                 problems: vec![],
             })
@@ -228,6 +236,8 @@ fn broken(why: String) -> SignerCheck {
         serial: None,
         issuer: None,
         revocation: None,
+        revocation_answer: None,
+        revocation_kept: false,
         level: None,
         problems: vec![why],
     }
@@ -242,6 +252,12 @@ fn signer(s: &SignerReport) -> SignerCheck {
     let nca = s.trusted_time();
     let mut problems: Vec<String> = s.signature_error.iter().cloned().collect();
     problems.extend(s.warnings.iter().cloned());
+    // the core's revocation text, when it isn't a plain "good"
+    if let Some(r) = &s.ocsp_status
+        && s.ocsp_answer != Some("good")
+    {
+        problems.push(r.clone());
+    }
     SignerCheck {
         valid: s.valid,
         reason: s.reason().map(Reason::from),
@@ -257,6 +273,8 @@ fn signer(s: &SignerReport) -> SignerCheck {
         serial: s.serial_hex.clone(),
         issuer: s.issuer_cn.clone(),
         revocation: s.ocsp_status.clone(),
+        revocation_answer: s.ocsp_answer.map(str::to_string),
+        revocation_kept: s.revocation_source.is_some_and(|r| r.starts_with("kept")),
         level: s.level.map(str::to_string),
         problems,
     }

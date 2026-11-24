@@ -16,25 +16,34 @@ import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 
 /**
- * The app (android/compose) on an emulator, as a person uses it. First the phone gets a
- * screen PIN and one enrolled finger, as most phones have.
+ * The app (android/compose) on an emulator, as a person uses it, every flow. First the phone
+ * gets a screen PIN and one enrolled finger, as most phones have. The app is the test build
+ * (build type "uitest"): it talks to fake NCA servers on the test machine
+ * (examples/fake_nca.rs, started by scripts/android-selftest.sh) and trusts the test CAs, so
+ * the test key carol.p12 signs for real. {@link #nca} switches what those servers answer.
+ *
+ * Start: Home with no key; Sign then asks for the key first, and Add key says so.
  *
  * Keys: a key file opened with the app goes to Add key; a GOST 2004 key gets "too old to
  * sign"; a password typed with a Russian keyboard gets the keyboard hint; the right password
- * and a touch of the fingerprint sensor keep the key, which Your keys then lists.
+ * (and the fingerprint, on a phone that keeps keys in its chip) keeps the key, which Your keys
+ * then lists.
  *
- * Signing: a PDF shared to the app opens on Sign, with its first page and the in-app reader;
- * signing with the test key stops at "isn't recognized" before anything is signed (the test
- * CA is not NCA's; the core's tests sign against fake NCA servers). Removing the key leads
- * back to Add key; a PDF shared then waits there (2c) and comes back once a key is added.
+ * Signing: a shared PDF (read in the app, signed, sent), a text file (a new .cms), an XML file,
+ * a signed .cms and a signed PDF (the signature joins theirs), and a detached .cms (can't be
+ * signed here). NCA says the key is revoked: refused. NCA's OCSP or time server is down: "Can't
+ * reach NCA", and Try again signs once it is back.
  *
- * Checking: an unsigned PDF is "isn't signed"; a .cms signed with a test key is "do not
- * trust" (not recognized in Kazakhstan), with its details.
+ * Checking: not signed (then "Sign it myself"), valid (with its details), revoked, valid with
+ * NCA's kept answer while NCA is down, changed, a key not recognized in Kazakhstan, and a
+ * detached .cms: alone, with its document, and with another document.
  *
- * Then the chip itself: the app's emulator-only check makes keys that open with the
- * fingerprint or PIN, and with the fingerprint only, and uses them. Last, a fingerprint-only
- * key is gone for good once another finger is enrolled (someone who learns the PIN can't add
- * their finger and sign).
+ * Then removing the key, a PDF shared before any key, About and the language, and text at
+ * 200 %. Last the chip itself: the app's emulator-only check makes keys that open with the
+ * fingerprint or PIN, and with the fingerprint only, and uses them; a fingerprint-only key is
+ * gone for good once another finger is enrolled. The chip's own prompt at signing (and its
+ * cancel and reset there) can't be reached through the app on an emulator, which keeps keys
+ * in software and so uses the password; ChipSelfTest covers the chip.
  */
 @RunWith(AndroidJUnit4.class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING) // the steps build on each other
@@ -56,7 +65,7 @@ public class AppFlows {
     private void share(String file) {
         Context c = InstrumentationRegistry.getInstrumentation().getContext();
         Intent i = new Intent(Intent.ACTION_SEND)
-                .setType("application/pdf")
+                .setType(KeyFiles.mime(file))
                 .putExtra(Intent.EXTRA_STREAM, KeyFiles.uri(file))
                 .setPackage(Phone.APP)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -90,11 +99,21 @@ public class AppFlows {
 
     /** Opens a test file on the app's Check screens (its CHECK action). */
     private void checkFile(String file) {
+        checkFile(file, null);
+    }
+
+    /** The same, for a detached .cms with the document it signs. */
+    private void checkFile(String file, String document) {
         Context c = InstrumentationRegistry.getInstrumentation().getContext();
         Intent i = new Intent("kz.kzsigner.action.CHECK")
                 .setData(KeyFiles.uri(file))
                 .setClassName(Phone.APP, Phone.APP + ".MainActivity")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        if (document != null) {
+            android.content.ClipData clip = android.content.ClipData.newRawUri(file, KeyFiles.uri(file));
+            clip.addItem(new android.content.ClipData.Item(KeyFiles.uri(document)));
+            i.setClipData(clip);
+        }
         c.startActivity(i);
         phone.device.wait(Until.hasObject(By.pkg(Phone.APP)), 10000);
     }
@@ -136,6 +155,51 @@ public class AppFlows {
             phone.fail("nothing to tap matches \"" + regex + "\". The tree:\n" + phone.tree());
         }
     }
+
+    /**
+     * What the fake NCA servers answer: "good", "revoked" (OCSP says every key is revoked),
+     * "ocsp-down", "tsa-down" (HTTP 500) or "up" (all good again).
+     */
+    private void nca(String mode) {
+        try {
+            java.net.HttpURLConnection h = (java.net.HttpURLConnection)
+                    new java.net.URL("http://10.0.2.2:18082/").openConnection();
+            h.setDoOutput(true);
+            h.setConnectTimeout(10000);
+            h.setReadTimeout(10000);
+            h.getOutputStream().write(mode.getBytes("UTF-8"));
+            int code = h.getResponseCode();
+            h.disconnect();
+            if (code != 200) {
+                phone.fail("the fake NCA servers refused \"" + mode + "\": HTTP " + code);
+            }
+            Phone.say("fake NCA: " + mode);
+        } catch (java.io.IOException e) {
+            phone.fail("can't reach the fake NCA servers (scripts/android-selftest.sh starts them): " + e);
+        }
+    }
+
+    /** Signs on the Sign screen: the key's password where it asks (emulator), then `button`. */
+    private void signWith(String button) {
+        if (phone.device.wait(Until.hasObject(By.clazz("android.widget.EditText")), 3000)) {
+            type("Qwerty12");
+        }
+        scrollTo(button);
+        tap(button);
+    }
+
+    /** After signing: the Signed screen with NCA's time, then Done back to Home. */
+    private void signed(String shot) {
+        throughPrompt("Signing time confirmed by NCA");
+        see("^Signed$");
+        see("Send the file, not a printout");
+        screen(shot);
+        tap("Done");
+        see("Sign a document");
+    }
+
+    /** carol's name, as Your keys and the Sign screen show it. */
+    private static final String CAROL = "(?iu)данияр";
 
     @Test
     public void step1StartsOnHome() {
@@ -189,8 +253,9 @@ public class AppFlows {
 
     @Test
     public void step3WrongPasswordThenAdd() {
-        open("alice_rsa.p12");
-        see("alice_rsa.p12");
+        nca("up");
+        open("carol.p12");
+        see("carol.p12");
         // the password typed with the keyboard in Russian: the same keys, other letters
         type("Йцукен12");
         tap("Continue");
@@ -204,7 +269,7 @@ public class AppFlows {
         throughPrompt("Sign a document");
         screen("android-4-home");
         tap("Your keys");
-        see("Иванов Алибек");
+        see(CAROL);
         // emulators keep keys in software only, so the core uses the key's password there
         // (step6 checks the fingerprint prompt itself)
         see("Opens with");
@@ -218,7 +283,8 @@ public class AppFlows {
         share("plain.pdf");
         see("Sign this document");
         see("plain.pdf");
-        see("Иванов Алибек");
+        see(CAROL);
+        see("Who signed");
         screen("android-6-sign");
 
         tap("Read it");
@@ -227,43 +293,199 @@ public class AppFlows {
         phone.device.pressBack();
         see("Sign this document");
 
-        // a key kept under its password (emulator) asks for it on this screen
-        if (phone.device.wait(Until.hasObject(By.clazz("android.widget.EditText")), 3000)) {
-            type("Qwerty12");
-        }
-        tap("Sign");
-        throughPrompt("isn't recognized");
-        screen("android-8-not-recognized");
+        // not read again: Sign doesn't wait for it
+        signWith("Sign");
+        throughPrompt("Signing time confirmed by NCA");
+        see("^Signed$");
+        screen("android-8-signed");
+        // Send hands the file to the phone's share sheet
+        tap("Send");
+        Phone.sleep(2500);
+        screen("android-8b-send");
         phone.device.pressBack();
-        see("Sign this document");
-        phone.device.pressBack();
+        see("Done");
+        tap("Done");
         see("Sign a document");
-        Phone.say("the Compose app takes a shared PDF to Sign and asks NCA before signing");
+        Phone.say("the Compose app signs a shared PDF with NCA's time");
     }
 
     @Test
-    public void step4bCheck() {
-        // an unsigned PDF
+    public void step4aSignOtherFiles() {
+        // any other file: a new .cms with it inside
+        share("doc.txt");
+        see("Sign this document");
+        see("one .cms file");
+        see("Opens in another app");
+        signWith("Sign");
+        signed("android-sign-txt");
+
+        // XML: the signature goes inside it
+        share("act.xml");
+        see("Sign this document");
+        see("inside this XML file");
+        signWith("Sign");
+        signed("android-sign-xml");
+
+        // a signed .cms: the signature joins theirs
+        share("act.txt.cms");
+        see("Add your signature");
+        see("Already signed by");
+        see("joins");
+        screen("android-sign-join-cms");
+        signWith("Add my signature");
+        signed("android-sign-join-cms-done");
+
+        // a signed PDF: the name joins the "Who signed" page
+        share("contract-signed.pdf");
+        see("Add your signature");
+        see("Already signed by");
+        see("Who signed");
+        screen("android-sign-join-pdf");
+        signWith("Add my signature");
+        signed("android-sign-join-pdf-done");
+
+        // a detached .cms holds no document: nothing to sign here
+        share("doc.txt.cms");
+        see("holds only signatures");
+        screen("android-sign-detached");
+        phone.device.pressBack();
+        see("Sign a document");
+        Phone.say("the Compose app signs text, XML, and joins signed .cms and PDF files");
+    }
+
+    @Test
+    public void step4bNcaRefusesOrIsDown() {
+        try {
+            // NCA says the key is revoked: nothing is signed
+            nca("revoked");
+            share("plain.pdf");
+            see("Sign this document");
+            signWith("Sign");
+            throughPrompt("Your key was revoked");
+            see("NCA says this key no longer works");
+            screen("android-sign-revoked");
+            phone.device.pressBack();
+            see("Sign this document");
+
+            // NCA's OCSP server is down, then its time server: Try again once it's back
+            for (String down : new String[] {"ocsp-down", "tsa-down"}) {
+                nca("up");
+                nca(down);
+                signWith("Sign");
+                throughPrompt("reach NCA right now");
+                screen("android-sign-" + down);
+                nca("up");
+                tap("Try again");
+                throughPrompt("Signing time confirmed by NCA");
+                see("^Signed$");
+                tap("Done");
+                see("Sign a document");
+                if (down.equals("ocsp-down")) {
+                    share("plain.pdf");
+                    see("Sign this document");
+                }
+            }
+        } finally {
+            nca("up");
+        }
+        Phone.say("the Compose app refuses a revoked key and retries when NCA is back");
+    }
+
+    @Test
+    public void step4cCheck() {
+        // an unsigned PDF; then signing it from there
         checkFile("plain.pdf");
         see("This file isn't signed");
         screen("android-check-1-not-signed");
+        tap("Sign it myself");
+        see("Sign this document");
+        see("plain.pdf");
+        phone.device.pressBack();
+        see("Sign a document");
+
+        // signed by carol: valid, with NCA's answer in the details
+        checkFile("contract-signed.pdf");
+        see("The signature is valid");
+        see(CAROL);
+        screen("android-check-2-valid");
+        tap("Details");
+        see("Signature details");
+        see("PAdES");
+        see("Not revoked: NCA confirmed the key");
+        see("timestamp by NCA");
+        screen("android-check-3-details");
+        phone.device.pressBack();
+        see("The signature is valid");
+        phone.device.pressBack();
+        see("Sign a document");
+
+        try {
+            // NCA says carol's key is revoked
+            nca("revoked");
+            checkFile("contract-signed.pdf");
+            see("Do not trust this document");
+            see("The signer's key was revoked");
+            screen("android-check-4-revoked");
+            tap("Details");
+            see("Revoked: NCA cancelled this key");
+            phone.device.pressBack();
+            phone.device.pressBack();
+            see("Sign a document");
+
+            // NCA is down: the answer kept in the signature at signing still counts
+            nca("ocsp-down");
+            checkFile("contract-signed.pdf");
+            see("The signature is valid");
+            tap("Details");
+            see("answer kept in the signature");
+            screen("android-check-5-kept");
+            phone.device.pressBack();
+            phone.device.pressBack();
+            see("Sign a document");
+        } finally {
+            nca("up");
+        }
+
+        // changed after it was signed
+        checkFile("act-changed.txt.cms");
+        see("Do not trust this document");
+        see("Changed after it was signed");
+        screen("android-check-6-changed");
         tap("Check another file");
         see("Sign a document");
 
-        // a .cms signed with a test key: its CA is not NCA's
+        // a .cms signed with a test key whose CA is not NCA's
         checkFile("lta.cms");
         see("Do not trust this document");
         see("isn't recognized in Kazakhstan");
-        screen("android-check-2-not-recognized");
+        screen("android-check-7-not-recognized");
         tap("Details");
-        see("Signature details");
         see("CAdES");
-        screen("android-check-3-details");
         phone.device.pressBack();
-        see("Do not trust this document");
         phone.device.pressBack();
         see("Sign a document");
-        Phone.say("the Compose app checks an unsigned and a signed file");
+
+        // a detached .cms: asks for its document
+        checkFile("doc.txt.cms");
+        see("Choose the signed document");
+        see("Choose the document");
+        screen("android-check-8-needs-document");
+        phone.device.pressBack();
+        see("Sign a document");
+        // with it: NCA's answer for this key (a Kalkan test key) can't be confirmed
+        checkFile("doc.txt.cms", "doc.txt");
+        see("Couldn't confirm the signature");
+        screen("android-check-9-unknown");
+        tap("Check again");
+        see("Couldn't confirm the signature");
+        phone.device.pressBack();
+        see("Sign a document");
+        // with another document: changed
+        checkFile("doc.txt.cms", "plain.pdf");
+        see("Changed after it was signed");
+        phone.device.pressBack();
+        see("Sign a document");
+        Phone.say("the Compose app checks unsigned, valid, revoked, changed, unrecognized and detached files");
     }
 
     @Test
@@ -283,13 +505,52 @@ public class AppFlows {
         share("plain.pdf");
         see("To sign plain.pdf, first add your key");
         screen("android-10-shared-no-key");
-        open("alice_rsa.p12");
-        see("alice_rsa.p12");
+        open("carol.p12");
+        see("carol.p12");
         type("Qwerty12");
         tap("Continue");
         throughPrompt("Sign this document");
         see("plain.pdf");
+        phone.device.pressBack();
+        see("Sign a document");
         Phone.say("the Compose app brings a shared PDF back after adding the first key");
+    }
+
+    @Test
+    public void step5bAboutAndLanguage() {
+        tap("Your keys");
+        see("Opens with");
+        Phone.sleep(1000);
+        scrollTo("About kzsigner.*");
+        tap("About kzsigner.*");
+        see("Your documents stay on your phone");
+        screen("android-about");
+        phone.device.pressBack();
+        see("Opens with");
+
+        // the app in Russian, then back to the phone's language
+        scrollTo("Same as the phone");
+        tap("Same as the phone");
+        tap("Русский");
+        see("Ваши ключи");
+        screen("android-keys-ru");
+        // the app restarts its screen in the new language: back to Home if still on the keys
+        if (!phone.shows("Подписать документ")) {
+            phone.device.pressBack();
+        }
+        see("Подписать документ");
+        screen("android-home-ru");
+        tap("Ваши ключи");
+        Phone.sleep(1000);
+        scrollTo("Русский");
+        tap("Русский");
+        tap("Как на телефоне");
+        see("Your keys");
+        if (!phone.shows("Sign a document")) {
+            phone.device.pressBack();
+        }
+        see("Sign a document");
+        Phone.say("the Compose app shows About and switches language");
     }
 
     @Test
@@ -321,7 +582,7 @@ public class AppFlows {
             phone.device.pressBack();
             see("Sign a document");
             tap("Your keys");
-            see("Иванов Алибек");
+            see(CAROL);
             screen("android-big-4-keys");
             phone.device.pressBack();
         } finally {

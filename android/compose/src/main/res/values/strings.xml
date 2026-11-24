@@ -97,7 +97,6 @@
     <string name="sign_with_another">Sign with another key</string>
     <string name="sign">Sign</string>
     <string name="add_my_signature">Add my signature</string>
-    <string name="unlocks_after_read">Unlocks after you open the document</string>
     <string name="out_pdf">Your signature goes inside this PDF, and a “Who signed” page is added at the end with your name and the signing time, so anyone can see it\'s signed.</string>
     <string name="out_pdf_join_page">Your name is added next to %1$s\'s on the “Who signed” page. Send this PDF back.</string>
     <string name="out_pdf_join">Your signature is added inside this PDF, next to %1$s\'s. Send this PDF back.</string>
@@ -216,4 +215,10 @@
     <string name="home_sign_first">PDF, Word or any file</string>
     <string name="add_key_short">Add key</string>
     <string name="sign_needs_key">To sign, first add your key. You do this once, then choose the document.</string>
+    <string name="open_to_check">Tap “Read it” to check what you\'re signing.</string>
+    <string name="rev_good">Not revoked: NCA confirmed the key</string>
+    <string name="rev_revoked">Revoked: NCA cancelled this key</string>
+    <string name="rev_unknown">NCA doesn\'t know this key</string>
+    <string name="rev_none">NCA didn\'t answer</string>
+    <string name="rev_kept">NCA\'s answer kept in the signature</string>
 </resources>

@@ -95,7 +95,6 @@
     <string name="sign_with_another">Басқа кілтпен қол қою</string>
     <string name="sign">Қол қою</string>
     <string name="add_my_signature">Қолымды қосу</string>
-    <string name="unlocks_after_read">Құжатты ашқаннан кейін қолжетімді болады</string>
     <string name="out_pdf">Қолыңыз осы PDF-тің ішіне қойылады, ал соңына атыңыз бен қол қойылған уақыт жазылған «Кім қол қойды» беті қосылады, сонда кез келген адам оған қол қойылғанын көреді.</string>
     <string name="out_pdf_join_page">Атыңыз «Кім қол қойды» бетінде %1$s есімінің жанына қосылады. Осы PDF-ті кері жіберіңіз.</string>
     <string name="out_pdf_join">Қолыңыз осы PDF-тің ішіне, мына адамның қолының қасына қосылады: %1$s. Осы PDF-ті кері жіберіңіз.</string>
@@ -214,4 +213,10 @@
     <string name="home_sign_first">PDF, Word немесе кез келген файл</string>
     <string name="add_key_short">Кілт қосу</string>
     <string name="sign_needs_key">Қол қою үшін алдымен кілтіңізді қосыңыз. Мұны бір рет жасайсыз, содан кейін құжатты таңдайсыз.</string>
+    <string name="open_to_check">Неге қол қойып жатқаныңызды тексеру үшін «Оқу» түймесін басыңыз.</string>
+    <string name="rev_good">Кері қайтарылмаған: ҰКО кілтті растады</string>
+    <string name="rev_revoked">Кері қайтарылған: ҰКО бұл кілтті жойды</string>
+    <string name="rev_unknown">ҰКО бұл кілтті білмейді</string>
+    <string name="rev_none">ҰКО жауап бермеді</string>
+    <string name="rev_kept">ҰКО жауабы қолтаңбада сақталған</string>
 </resources>

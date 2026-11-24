@@ -55,8 +55,12 @@ class MainActivity : AppCompatActivity() {
     private fun take(intent: Intent?) {
         if (intent?.action == ACTION_CHECK) {
             val uri = intent.data ?: return
+            // a detached .cms can come with its document, as the clip's second item
+            val original = intent.clipData?.takeIf { it.itemCount > 1 }?.getItemAt(1)?.uri
             lifecycleScope.launch {
-                val why = when (model.openForCheck(uri)) {
+                var opened = model.openForCheck(uri)
+                if (opened == Opened.DOCUMENT && original != null) opened = model.addOriginal(original)
+                val why = when (opened) {
                     Opened.TOO_BIG -> R.string.too_big
                     Opened.UNREADABLE -> R.string.cant_read_file
                     else -> return@launch
@@ -88,7 +92,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        /** Opens the Check screens on the file in the intent's data (other apps, the tests). */
+        /**
+         * Opens the Check screens on the file in the intent's data (other apps, the tests); for
+         * a detached .cms, the document it signs can be the clip's second item.
+         */
         const val ACTION_CHECK = "kz.kzsigner.action.CHECK"
 
         private var current: WeakReference<Activity>? = null

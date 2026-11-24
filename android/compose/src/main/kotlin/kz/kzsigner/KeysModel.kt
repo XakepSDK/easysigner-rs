@@ -94,20 +94,23 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     var checking by mutableStateOf<CheckFile?>(null)
     var checked by mutableStateOf<Checked?>(null)
 
-    /** NCA's servers; made on first use (it reads the bundled NCA certificates). */
-    private val nca by lazy { Nca.kazakhstan() }
-
     /**
-     * Who may issue a key to add: NCA and the CAs recognized in Kazakhstan. The emulator
-     * tests' build (build type "uitest") also trusts its test CAs, from its assets, so its
-     * test keys can be added; signing and checking still use [nca] alone.
+     * NCA's servers and the CAs recognized in Kazakhstan; made on first use (it reads the
+     * bundled NCA certificates). The emulator tests' build (build type "uitest") uses fake
+     * servers on the test machine instead (10.0.2.2, scripts/android-selftest.sh starts them)
+     * and also trusts its test CAs, from its assets, so the whole app can be tested with test
+     * keys.
      */
-    private val issuers by lazy {
+    private val nca by lazy {
         if (BuildConfig.TEST_CAS) {
             val a = getApplication<Application>().assets
-            Nca.withTestCas(a.list("testca").orEmpty().map { a.open("testca/$it").use { s -> s.readBytes() } })
+            Nca.forTests(
+                "http://10.0.2.2:18080/",
+                "http://10.0.2.2:18081/",
+                a.list("testca").orEmpty().map { a.open("testca/$it").use { s -> s.readBytes() } },
+            )
         } else {
-            nca
+            Nca.kazakhstan()
         }
     }
 
@@ -156,7 +159,7 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     suspend fun add(file: ByteArray, password: String, prompt: ChipPrompt): Added {
         val v = vault ?: return Added.Refused(AddKeyException.Failed("no key vault"))
         return try {
-            withContext(Dispatchers.IO) { v.addKey(issuers, file, password, prompt) }
+            withContext(Dispatchers.IO) { v.addKey(nca, file, password, prompt) }
             keys = withContext(Dispatchers.IO) { v.keys() }
             Added.Done
         } catch (e: AddKeyException.Cancelled) {

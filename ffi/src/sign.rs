@@ -38,16 +38,13 @@ impl Nca {
         ))
     }
 
-    /// NCA's servers, with the CA certificates in `cas` trusted too: for the emulator tests'
-    /// keys only (the app's test build). Certificates that don't parse are left out.
+    /// Fake servers at `tsa` and `ocsp`, with the CA certificates in `cas` trusted too: for
+    /// the emulator tests only (the app's test build). Certificates that don't parse are left
+    /// out.
     #[uniffi::constructor]
-    pub fn with_test_cas(cas: Vec<Vec<u8>>) -> Arc<Nca> {
+    pub fn for_tests(tsa: String, ocsp: String, cas: Vec<Vec<u8>>) -> Arc<Nca> {
         let cas = cas.iter().filter_map(|c| Cert::parse_any(c).ok()).collect();
-        Arc::new(Nca::with(
-            kzsigner::DEFAULT_TSA_URL,
-            kzsigner::DEFAULT_OCSP_URL,
-            cas,
-        ))
+        Arc::new(Nca::with(&tsa, &ocsp, cas))
     }
 }
 

@@ -1,10 +1,13 @@
 #!/bin/sh
 # Runs on CI's Android emulators (see .github/workflows/build.yml):
 #
-#   sh scripts/android-selftest.sh APK UITEST_APK
+#   sh scripts/android-selftest.sh APK UITEST_APK FAKE_NCA
 #
-# APK is the app's test build (kzsigner-test-app.apk): the released app, except that it also
-# trusts the test keys' CAs when adding a key, so the tests can add one.
+# APK is the app's test build (kzsigner-test-app.apk): the released app, except that it talks
+# to fake NCA servers on this machine (the emulator's 10.0.2.2) and trusts the test keys' CAs,
+# so the tests can add a test key and sign with it. FAKE_NCA is those servers
+# (examples/fake_nca.rs, built for this machine); this script starts them, from the checkout's
+# root (they read tests/fixtures).
 # The tests are UI Automator tests in android/uitest (UITEST_APK, built by
 # KZSIGNER_UITEST=1 sh scripts/apk.sh); they run on the emulator in their own process. This
 # script only installs the APKs, runs the tests (AppFlows), and does the one thing a test on
@@ -13,6 +16,7 @@
 set -u
 APK=$1
 UITEST_APK=$2
+FAKE_NCA=$3
 RUNNER=kz.kzsigner.uitest/androidx.test.runner.AndroidJUnitRunner
 
 # a screenshot, also printed into the log (base64 between markers): CI's artifacts are not
@@ -49,6 +53,13 @@ run() {
     }
     echo "$1 PASS"
 }
+
+chmod +x "$FAKE_NCA"
+"$FAKE_NCA" > fake-nca.log 2>&1 &
+nca=$!
+trap 'kill $nca 2>/dev/null; echo "--- fake NCA log"; cat fake-nca.log' EXIT
+sleep 1
+kill -0 "$nca" || { cat fake-nca.log; exit 1; }
 
 adb install -r "$UITEST_APK" || exit 1
 adb install -r "$APK" || exit 1

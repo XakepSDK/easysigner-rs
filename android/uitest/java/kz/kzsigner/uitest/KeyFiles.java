@@ -16,8 +16,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * The test key files and PDFs (tests/fixtures/keys and pdf, in this APK's assets) as
- * content:// URIs, read-only: content://kz.kzsigner.uitest.keys/alice_rsa.p12. What a files app
+ * The test key files, PDFs and signed files (tests/fixtures/keys, ocsp, pdf, ltv and app, in
+ * this APK's assets) as content:// URIs, read-only: content://kz.kzsigner.uitest.keys/alice_rsa.p12. What a files app
  * or a messenger hands over with "Open with" or Share.
  */
 public class KeyFiles extends ContentProvider {
@@ -68,9 +68,15 @@ public class KeyFiles extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        String p = uri.getPath();
-        return p.endsWith(".pdf") ? "application/pdf"
-                : p.endsWith(".cms") ? "application/pkcs7-signature" : "application/x-pkcs12";
+        return mime(uri.getPath());
+    }
+
+    /** What a files app says a file is, by its name. */
+    static String mime(String name) {
+        return name.endsWith(".pdf") ? "application/pdf"
+                : name.endsWith(".cms") ? "application/pkcs7-signature"
+                : name.endsWith(".xml") ? "text/xml"
+                : name.endsWith(".txt") ? "text/plain" : "application/x-pkcs12";
     }
 
     @Override

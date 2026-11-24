@@ -29,6 +29,9 @@ android {
         assets.directories.add("../../tests/fixtures/pdf")
         // a signed .cms (lta.cms, by a test key) to check
         assets.directories.add("../../tests/fixtures/ltv")
+        // carol's key (her CA has the fake OCSP server), and the files she signed to check
+        assets.directories.add("../../tests/fixtures/ocsp")
+        assets.directories.add("../../tests/fixtures/app")
     }
 
     signingConfigs {

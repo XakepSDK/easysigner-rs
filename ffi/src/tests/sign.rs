@@ -4,7 +4,7 @@ use super::*;
 
 #[path = "../../../tests/common/nca.rs"]
 #[allow(dead_code)]
-mod nca;
+pub(super) mod nca;
 
 pub(super) fn file(path: &str) -> Vec<u8> {
     std::fs::read(

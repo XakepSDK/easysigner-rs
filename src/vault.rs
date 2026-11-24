@@ -1343,14 +1343,17 @@ mod tests {
         }
         // every guess needed a touch
         assert_eq!(chip.prompts(), 4);
-        assert!(matches!(
-            s.key(&id, Some("long secret"), &prompt()),
-            Err(VaultError::Wait(1))
-        ));
         // the count survives reopening
         let s2 = Store::open(&d.file(), &chip).unwrap();
-        assert!(s2.wait(&id).unwrap() > 0);
+        assert_eq!(s2.entry(&id).unwrap().failures, 3);
         assert_eq!(chip.prompts(), 4);
+        // the wait is in whole seconds: at a second's turn it can just have ended
+        let last = s.entry(&id).unwrap().last_failure;
+        match s.key(&id, Some("long secret"), &prompt()) {
+            Err(VaultError::Wait(1)) => assert_eq!(chip.prompts(), 4),
+            Ok(_) => assert!(now() > last),
+            other => panic!("{:?}", other.err()),
+        }
     }
 
     #[test]

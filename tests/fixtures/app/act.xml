@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<act number="17">
+  <date>2026-11-24</date>
+  <from>TOO "Test Supplier"</from>
+  <to>TOO "Test Buyer"</to>
+  <item>Test services, November</item>
+  <total currency="KZT">100000</total>
+</act>

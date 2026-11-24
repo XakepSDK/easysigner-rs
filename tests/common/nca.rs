@@ -12,65 +12,38 @@ use kzsigner::tsp::{Request, TST_INFO};
 
 const PASSWORD: &str = "Qwerty12";
 
-/// tests/fixtures, from this crate or from ffi/.
+/// tests/fixtures, from this crate or from ffi/; or from the current folder, for the fake
+/// servers built on one machine and run from a checkout on another (CI's emulators).
 fn fixtures() -> PathBuf {
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let f = here.join("tests/fixtures");
-    if f.exists() {
-        f
-    } else {
-        here.join("../tests/fixtures")
-    }
+    [
+        here.join("tests/fixtures"),
+        here.join("../tests/fixtures"),
+        PathBuf::from("tests/fixtures"),
+    ]
+    .into_iter()
+    .find(|f| f.exists())
+    .unwrap_or_else(|| PathBuf::from("tests/fixtures"))
 }
 
 /// Test only: a fake TSA on 127.0.0.1 (NOT NCA's), key from tsa.p12. Returns its URL.
 pub fn fake_tsa() -> String {
+    serve(tsa_answer(), "application/timestamp-reply")
+}
+
+/// The fake TSA's answer to a request body: a time stamp signed with tsa.p12.
+pub fn tsa_answer() -> impl Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static {
     let key = kzsigner::p12::open(
         &std::fs::read(fixtures().join("keys/tsa.p12")).unwrap(),
         PASSWORD,
         None,
     )
     .unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        let mut serial = 1u64;
-        for conn in listener.incoming() {
-            let Ok(mut s) = conn else { continue };
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 4096];
-            let body = loop {
-                let n = s.read(&mut chunk).unwrap_or(0);
-                if n == 0 {
-                    break None;
-                }
-                buf.extend(&chunk[..n]);
-                if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
-                    let len: usize = head
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length:"))
-                        .and_then(|v| v.trim().parse().ok())
-                        .unwrap_or(0);
-                    if buf.len() >= end + 4 + len {
-                        break Some(buf[end + 4..end + 4 + len].to_vec());
-                    }
-                }
-            };
-            let resp = body.and_then(|b| respond(&b, &key, serial));
-            serial += 1;
-            let _ = match resp {
-                Some(r) => s
-                    .write_all(
-                        format!("HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\nContent-Length: {}\r\n\r\n", r.len())
-                            .as_bytes(),
-                    )
-                    .and_then(|_| s.write_all(&r)),
-                None => s.write_all(b"HTTP/1.1 500 Error\r\nContent-Length: 0\r\n\r\n"),
-            };
-        }
-    });
-    url
+    let serial = std::sync::atomic::AtomicU64::new(1);
+    move |body| {
+        let n = serial.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        respond(body, &key, n)
+    }
 }
 
 /// A tiny HTTP server on 127.0.0.1: answers each POST body with `answer(body)`.
@@ -78,7 +51,16 @@ pub fn serve(
     answer: impl Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static,
     ctype: &'static str,
 ) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    serve_at("127.0.0.1:0", answer, ctype)
+}
+
+/// The same on `addr`; None from `answer` is an HTTP 500 (as a server that is down).
+pub fn serve_at(
+    addr: &str,
+    answer: impl Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static,
+    ctype: &'static str,
+) -> String {
+    let listener = TcpListener::bind(addr).unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         for conn in listener.incoming() {
@@ -120,13 +102,20 @@ pub fn serve(
 /// Test only: a fake OCSP responder for the test CA in fixtures/ocsp, signing with the CA's own
 /// key; every certificate is "good", or "revoked" when `revoked`. Returns its URL.
 pub fn fake_ocsp(revoked: bool) -> String {
+    serve(ocsp_answer(move || revoked), "application/ocsp-response")
+}
+
+/// The fake OCSP responder's answer to a request body; `revoked()` says how to answer.
+pub fn ocsp_answer(
+    revoked: impl Fn() -> bool + Send + 'static,
+) -> impl Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static {
     let ca = kzsigner::p12::open(
         &std::fs::read(fixtures().join("ocsp/ca.p12")).unwrap(),
         PASSWORD,
         None,
     )
     .unwrap();
-    serve(
+    {
         move |body| {
             let req = der::parse(body).ok()?.items(der::SEQUENCE).ok()?;
             let tbs = req.first()?.items(der::SEQUENCE).ok()?;
@@ -143,7 +132,7 @@ pub fn fake_ocsp(revoked: bool) -> String {
                 .raw
                 .to_vec();
             let now = kzsigner::time::now_ms();
-            let status = if revoked {
+            let status = if revoked() {
                 der::tlv(
                     der::ctx(1),
                     &kzsigner::time::encode_generalized(now - 86_400_000),
@@ -184,9 +173,8 @@ pub fn fake_ocsp(revoked: bool) -> String {
                     &der::seq(&[&der::oid("1.3.6.1.5.5.7.48.1.1"), &der::octets(&basic)]),
                 ),
             ]))
-        },
-        "application/ocsp-response",
-    )
+        }
+    }
 }
 
 fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>> {
