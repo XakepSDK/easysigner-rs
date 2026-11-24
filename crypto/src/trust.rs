@@ -1,10 +1,10 @@
 //! Trusted CA certificates (bundled NCA RK roots and intermediates, plus --trust) and
 //! certificate path checks against them.
 
+use crate::Result;
 use crate::cert::{self, Cert};
 use crate::prelude::*;
 use crate::text::{Text, Time, tr, trf};
-use crate::Result;
 
 /// NCA RK's root and issuing CA certificates, bundled into the executable.
 pub const BUNDLED_CA: [(&str, &[u8]); 10] = [

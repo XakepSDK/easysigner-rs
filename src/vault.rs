@@ -748,11 +748,7 @@ impl<G: Guard> Store<G> {
                 crate::Error::from(e).0
             ))
         })?;
-        let entries = read_index(
-            t.expect(der::SEQUENCE)
-                .map_err(VaultError::from)?
-                .content,
-        )
+        let entries = read_index(t.expect(der::SEQUENCE).map_err(VaultError::from)?.content)
             .map_err(|e| {
                 VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e.0))
             })?;

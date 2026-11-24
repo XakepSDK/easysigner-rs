@@ -2,7 +2,7 @@
 //! and checking a timestamp token over stamped bytes. The caller sends the request.
 
 use crate::cert::{self, Cert};
-use crate::cms::{SignedData, ATTR_SIGNING_CERT, ATTR_SIGNING_CERT_V2};
+use crate::cms::{ATTR_SIGNING_CERT, ATTR_SIGNING_CERT_V2, SignedData};
 use crate::der::{self, Tlv};
 use crate::gost::{self, Scheme};
 use crate::keys::alg_id;
@@ -156,10 +156,10 @@ pub fn token_cert(token: &[u8]) -> Option<Cert> {
 /// The token (a ContentInfo, as encoded) from a TimeStampResp.
 pub fn read_response(resp: &[u8]) -> Result<&[u8]> {
     let bad = |e: Error| {
-        Error::of(ErrorKind::Malformed, trf(
-            "The timestamp server's answer is unreadable ({})",
-            &[&e],
-        ))
+        Error::of(
+            ErrorKind::Malformed,
+            trf("The timestamp server's answer is unreadable ({})", &[&e]),
+        )
     };
     let k = der::parse(resp)
         .and_then(|t| t.items(der::SEQUENCE))
@@ -269,7 +269,8 @@ pub fn check_token(stamped: &[u8], token: &[u8], trust: &TrustStore) -> Result<T
         return Err(Error::new("ContentInfo object not for a time stamp."));
     }
     let tsi = &sd.signers[0];
-    if tsi.signed_attr(ATTR_SIGNING_CERT).is_none() && tsi.signed_attr(ATTR_SIGNING_CERT_V2).is_none()
+    if tsi.signed_attr(ATTR_SIGNING_CERT).is_none()
+        && tsi.signed_attr(ATTR_SIGNING_CERT_V2).is_none()
     {
         return Err(Error::new(
             "no signing certificate attribute found, time stamp invalid.",

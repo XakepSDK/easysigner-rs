@@ -97,4 +97,3 @@ pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
         ),
     }
 }
-

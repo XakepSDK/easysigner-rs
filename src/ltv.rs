@@ -647,8 +647,8 @@ fn check_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
     use crate::time::encode_generalized;
+    use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
 
     const DAY: i64 = 86_400_000;
 

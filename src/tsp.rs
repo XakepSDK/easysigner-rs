@@ -157,7 +157,10 @@ mod tests {
         }
         let rejected = std::fs::read(format!("{dir}/rejected-policy-6.1/tsr.der")).unwrap();
         let e = read_response(&rejected).unwrap_err();
-        assert!(e.to_string().contains("Missing certificate or key error"), "{e}");
+        assert!(
+            e.to_string().contains("Missing certificate or key error"),
+            "{e}"
+        );
     }
 
     fn live(case: &str, n: &str) -> Vec<u8> {

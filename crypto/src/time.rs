@@ -106,7 +106,10 @@ pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
         _ => return Err(bad_time()),
     }
     // a real date (no 31 February) and time; seconds 60 and over count as 59
-    if !(1..=12).contains(&mo) || d < 1 || d > days_in_month(y, mo) || !(0..24).contains(&h)
+    if !(1..=12).contains(&mo)
+        || d < 1
+        || d > days_in_month(y, mo)
+        || !(0..24).contains(&h)
         || !(0..60).contains(&mi)
         || sec < 0
     {

@@ -258,10 +258,7 @@ fn evaluate(
                 None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
             };
             if !fresh || this_update.is_some_and(|t| t > now + skew) {
-                return Ok(Answer::error(
-                    tr("ERROR: OCSP answer is out of date"),
-                    body,
-                ));
+                return Ok(Answer::error(tr("ERROR: OCSP answer is out of date"), body));
             }
         }
         let checked = match fresh {
@@ -352,7 +349,9 @@ fn check_responder(
             return Err(tr("OCSP responder was not issued by the certificate's CA"));
         }
         if !c.has_eku(cert::EKU_OCSP_SIGNING) {
-            return Err(tr("OCSP responder certificate is not issued for OCSP signing"));
+            return Err(tr(
+                "OCSP responder certificate is not issued for OCSP signing",
+            ));
         }
         let chain = trust.check(c, at);
         return if chain.ok {
@@ -515,8 +514,6 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn answers() {
         let ca = key("ocsp/ca.p12");
@@ -567,13 +564,20 @@ mod tests {
             ..reply()
         });
         assert!(
-            !a.good && a.status.to_string().contains("no answer for this certificate"),
+            !a.good
+                && a.status
+                    .to_string()
+                    .contains("no answer for this certificate"),
             "{}",
             a.status
         );
         let r = der::seq(&[&der::tlv(der::ENUMERATED, &[3])]);
         let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
-        assert!(!a.good && a.status.to_string().contains("status 3"), "{}", a.status);
+        assert!(
+            !a.good && a.status.to_string().contains("status 3"),
+            "{}",
+            a.status
+        );
     }
 
     #[test]
@@ -620,14 +624,20 @@ mod tests {
         // ... certified by someone else
         let a = check(&responder(issue(&carol_key, &other.cert, true)));
         assert!(
-            !a.good && a.status.to_string().contains("not issued by the certificate's CA"),
+            !a.good
+                && a.status
+                    .to_string()
+                    .contains("not issued by the certificate's CA"),
             "{}",
             a.status
         );
         // ... any key at all
         let a = check(&other);
         assert!(
-            !a.good && a.status.to_string().contains("not issued by the certificate's CA"),
+            !a.good
+                && a.status
+                    .to_string()
+                    .contains("not issued by the certificate's CA"),
             "{}",
             a.status
         );
@@ -727,11 +737,19 @@ mod tests {
         ] {
             assert_eq!(a.good, ok, "{name}: {}", a.status);
             if !ok && name != "other nonce" {
-                assert!(a.status.to_string().contains("out of date"), "{name}: {}", a.status);
+                assert!(
+                    a.status.to_string().contains("out of date"),
+                    "{name}: {}",
+                    a.status
+                );
             }
         }
         let a = fresh(now, None, Some(der::octets(&[8; 16])));
-        assert!(a.status.to_string().contains("nonce mismatch"), "{}", a.status);
+        assert!(
+            a.status.to_string().contains("nonce mismatch"),
+            "{}",
+            a.status
+        );
         // a fresh answer is dated when it was checked, not when it was made
         let a = fresh(now - 2 * 1440 * minute, None, Some(nested));
         assert_eq!(a.status.args, vec![crate::text::Arg::Time(Some(now))]);
@@ -739,9 +757,8 @@ mod tests {
 
     #[test]
     fn certificate_id_hashes() {
-        let ca = |a: &str| {
-            Cert::parse(&crate::testing::fixture(&format!("keys/ca_{a}.cer"))).unwrap()
-        };
+        let ca =
+            |a: &str| Cert::parse(&crate::testing::fixture(&format!("keys/ca_{a}.cer"))).unwrap();
         assert_eq!(cert_id_hash(&ca("gost2004")), gost::H_GOST34311);
         assert_eq!(cert_id_hash(&ca("gost2015")), gost::H_GOST2015_512);
         assert_eq!(cert_id_hash(&ca("rsa")), gost::H_SHA256);

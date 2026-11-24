@@ -51,7 +51,11 @@ fn trust_rests_on_the_ca_signature() {
         let bad_root = forged(&ca);
         let chain = TrustStore::new(vec![bad_root.clone()]).check(&bad_root, now);
         assert!(!chain.ok, "{a}");
-        assert!(chain.status.to_string().contains("signature"), "{a}: {}", chain.status);
+        assert!(
+            chain.status.to_string().contains("signature"),
+            "{a}: {}",
+            chain.status
+        );
 
         // a certificate is not its own CA
         assert!(!alice.signed_by(&alice), "{a}");
@@ -282,7 +286,11 @@ fn issuers_must_be_cas() {
     let store = TrustStore::new(vec![ca.clone(), alice.cert.clone()]);
     let chain = store.check(&by_alice, now);
     assert!(!chain.ok, "{}", chain.status);
-    assert!(chain.status.to_string().contains("is not a CA"), "{}", chain.status);
+    assert!(
+        chain.status.to_string().contains("is not a CA"),
+        "{}",
+        chain.status
+    );
 
     // a trusted certificate that is not a root still needs its own issuer
     let chain = TrustStore::new(vec![alice.cert.clone()]).check(&alice.cert, now);

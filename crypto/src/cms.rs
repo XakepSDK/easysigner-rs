@@ -402,7 +402,16 @@ pub fn sign_once(
     now: i64,
     rng: &mut dyn Rng,
 ) -> Result<SignedData> {
-    sign_once_with(content, content_type, attach, key, cert, Some(now), &[], rng)
+    sign_once_with(
+        content,
+        content_type,
+        attach,
+        key,
+        cert,
+        Some(now),
+        &[],
+        rng,
+    )
 }
 
 /// [`sign_once`]; `signing_time`: the signing-time attribute, or None to leave it out (PAdES
