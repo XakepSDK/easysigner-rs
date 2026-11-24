@@ -32,7 +32,7 @@ pub const fn ctx_prim(n: u8) -> u8 {
 }
 
 fn bad(what: &str) -> Error {
-    Error::new(format!("malformed ASN.1: {what}"))
+    Error::malformed(format!("malformed ASN.1: {what}"))
 }
 
 /// One element: its tag byte, its content, and its complete encoding.

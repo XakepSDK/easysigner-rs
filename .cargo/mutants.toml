@@ -10,3 +10,6 @@ exclude_globs = [
     "src/pdf/whosigned.rs",
 ]
 profile = "mutants"
+# The cryptography (crypto/) is tested by its own tests and by the core's, which use it
+# throughout; the C interface (capi/) by its own.
+test_package = ["kzcrypto", "kzsigner", "kzcrypto-capi"]

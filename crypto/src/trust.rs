@@ -148,6 +148,11 @@ impl TrustStore {
         }
     }
 
+    /// Trusts one more CA certificate.
+    pub fn add(&mut self, ca: Cert) {
+        self.trusted.push(ca);
+    }
+
     /// Whether `c` is one of the bundled NCA RK CA certificates.
     pub fn is_nca(&self, c: &Cert) -> bool {
         self.trusted[..self.bundled].contains(c)

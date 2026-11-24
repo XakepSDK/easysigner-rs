@@ -50,7 +50,7 @@ impl Cert {
     }
 
     pub fn from_tlv(t: &Tlv) -> Result<Cert> {
-        let f = || Error::new("Unreadable certificate: malformed ASN.1");
+        let f = || Error::malformed("Unreadable certificate: malformed ASN.1");
         let top = t.items(der::SEQUENCE)?;
         if top.len() < 3 {
             return Err(f());
@@ -112,7 +112,7 @@ impl Cert {
     pub fn public_key_bits(&self) -> Result<Vec<u8>> {
         let k = der::parse(&self.spki)?.items(der::SEQUENCE)?;
         Ok(k.get(1)
-            .ok_or_else(|| Error::new("malformed SubjectPublicKeyInfo"))?
+            .ok_or_else(|| Error::malformed("malformed SubjectPublicKeyInfo"))?
             .bits()?
             .to_vec())
     }

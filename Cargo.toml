@@ -44,8 +44,8 @@ zeroize = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["crypto", "ffi", "desktop"]
-default-members = [".", "crypto", "desktop"]
+members = ["crypto", "capi", "ffi", "desktop"]
+default-members = [".", "crypto", "capi", "desktop"]
 
 [profile.release]
 opt-level = "z"
