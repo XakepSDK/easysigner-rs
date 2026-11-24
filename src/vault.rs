@@ -385,6 +385,12 @@ impl From<crate::Error> for VaultError {
     }
 }
 
+impl From<kzcrypto::Error> for VaultError {
+    fn from(e: kzcrypto::Error) -> VaultError {
+        crate::Error::from(e).into()
+    }
+}
+
 pub type Result<T> = std::result::Result<T, VaultError>;
 
 /// Argon2id settings for a password layer.
@@ -492,7 +498,7 @@ impl Entry {
             .items(der::SEQUENCE)?
             .iter()
             .map(|c| Cert::parse(c.raw))
-            .collect::<crate::Result<Vec<Cert>>>()?;
+            .collect::<kzcrypto::Result<Vec<Cert>>>()?;
         if chain.is_empty() {
             return Err(bad());
         }
@@ -736,9 +742,17 @@ impl<G: Guard> Store<G> {
         let list = decrypt(&key, &self.encrypted_list, LIST_AAD)
             .ok_or_else(|| VaultError::Failed(tr("The key store is damaged").into()))?;
         let (t, _) = der::read(&list).map_err(|e| {
-            VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e.0))
+            VaultError::Failed(format!(
+                "{}: {}",
+                tr("The key store is damaged"),
+                crate::Error::from(e).0
+            ))
         })?;
-        let entries = read_index(t.expect(der::SEQUENCE).map_err(VaultError::from)?.content)
+        let entries = read_index(
+            t.expect(der::SEQUENCE)
+                .map_err(VaultError::from)?
+                .content,
+        )
             .map_err(|e| {
                 VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e.0))
             })?;
@@ -1240,7 +1254,7 @@ mod tests {
     }
 
     fn signs(k: &Key) {
-        let s = k.private_key.sign(b"data").unwrap();
+        let s = k.private_key.sign(b"data", &mut crate::OsRng).unwrap();
         let p = k.cert.public_key().unwrap();
         assert!(
             p.verify(

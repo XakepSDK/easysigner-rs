@@ -22,6 +22,9 @@ pub mod vault;
 pub mod verify;
 pub mod xml;
 
+/// The cryptography, for callers that use it directly.
+pub use kzcrypto;
+
 use cert::Cert;
 use p12::Key;
 use report::{SignResult, SignerReport, VerifyReport};
@@ -36,7 +39,7 @@ pub fn version() -> &'static str {
 }
 
 pub fn crypto_version() -> &'static str {
-    "built in (KZ GOST in Rust; hashes, ciphers and RSA from RustCrypto)"
+    "kzcrypto (KZ GOST in Rust; hashes, ciphers and RSA from RustCrypto)"
 }
 
 /// What the command line and the window use: open a key, sign, verify, extract.
@@ -53,7 +56,7 @@ impl Engine {
     }
 
     pub fn open_key(&self, p12: &[u8], password: &str, alias: Option<&str>) -> Result<Key> {
-        p12::open(p12, password, alias)
+        Ok(p12::open(p12, password, alias)?)
     }
 
     pub fn key_warnings(&self, c: &Cert) -> Vec<String> {
@@ -411,7 +414,7 @@ impl Engine {
         cert::describe(&mut sr, c);
         let chain = self.trust.check(c, time::now_ms());
         sr.chain_ok = chain.ok;
-        sr.chain_status = Some(chain.status);
+        sr.chain_status = Some(i18n::text(&chain.status));
         sr.chain = chain.path;
         sr.usage_error = cert::usage_problem(c, chain.issuer.as_ref());
         sr.algorithm = Some(cert::key_alg_name(c));
@@ -439,9 +442,30 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<kzcrypto::Error> for Error {
+    /// The message in the reader's language.
+    fn from(e: kzcrypto::Error) -> Error {
+        Error(i18n::text(&e.text))
+    }
+}
+
 /// Random bytes from the operating system.
 pub fn random(buf: &mut [u8]) -> Result<()> {
     getrandom::fill(buf).map_err(|e| Error::new(format!("no random numbers from the system: {e}")))
+}
+
+/// The operating system's random generator, for [`kzcrypto`].
+pub struct OsRng;
+
+impl kzcrypto::Rng for OsRng {
+    fn fill(&mut self, buf: &mut [u8]) -> kzcrypto::Result<()> {
+        getrandom::fill(buf).map_err(|e| {
+            kzcrypto::Error::of(
+                kzcrypto::ErrorKind::Random,
+                format!("no random numbers from the system: {e}"),
+            )
+        })
+    }
 }
 
 /// The name for a document signed inside it: document.pdf -> document-signed.pdf.
@@ -453,19 +477,4 @@ pub fn signed_name(file: &std::path::Path, ext: &str) -> std::path::PathBuf {
     file.with_file_name(format!("{stem}-signed.{ext}"))
 }
 
-pub fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-pub fn base64_encode(data: &[u8]) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
-
-/// Standard Base64 without whitespace; padding optional. None if it is not Base64.
-pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD_NO_PAD
-        .decode(s.trim_end_matches('='))
-        .ok()
-}
+pub use kzcrypto::{base64_decode, base64_encode, hex};

@@ -160,7 +160,7 @@ pub fn ocsp_answer(
             }
             let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
             let rd = der::seq(&refs);
-            let sig = ca.private_key.sign(&rd).ok()?;
+            let sig = ca.private_key.sign(&rd, &mut kzsigner::OsRng).ok()?;
             let basic = der::seq(&[
                 &rd,
                 &der::alg_null(ca.private_key.sig_oid()),
@@ -201,8 +201,16 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
         info.extend(der::uint(n));
     }
     let info = der::tlv(der::SEQUENCE, &info);
-    let token = cms::sign_once(&info, TST_INFO, true, &key.private_key, &key.cert)
-        .ok()?
+    let token = cms::sign_once(
+        &info,
+        TST_INFO,
+        true,
+        &key.private_key,
+        &key.cert,
+        kzsigner::time::now_ms(),
+        &mut kzsigner::OsRng,
+    )
+    .ok()?
         .encode();
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
 }

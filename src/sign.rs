@@ -34,7 +34,7 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result
     if !chain.ok {
         return refuse(trf(
             "{} (kzsigner trusts NCA RK; a test CA's certificate can be added with --trust)",
-            &[&chain.status],
+            &[&crate::i18n::text(&chain.status)],
         ));
     }
     if let Some(why) = cert::usage_problem(c, chain.issuer.as_ref()) {
@@ -97,8 +97,16 @@ pub fn sign(
     let content_type = existing
         .as_ref()
         .map_or(cms::ID_DATA, |e| e.content_type.as_str());
-    let mut out = cms::sign_once(content, content_type, attach, &key.private_key, &key.cert)
-        .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+    let mut out = cms::sign_once(
+        content,
+        content_type,
+        attach,
+        &key.private_key,
+        &key.cert,
+        crate::time::now_ms(),
+        &mut crate::OsRng,
+    )
+    .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
     if let Some(url) = tsa_url {
         timestamp(&mut out, url, key, trust, &mut r)?;
     }
@@ -140,8 +148,16 @@ pub fn sign_hash(
         signer_count: 1,
         ..Default::default()
     };
-    let mut out = cms::sign_digest(hash, cms::ID_DATA, &key.private_key, &key.cert, true, &[])
-        .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+    let mut out = cms::sign_digest(
+        hash,
+        cms::ID_DATA,
+        &key.private_key,
+        &key.cert,
+        Some(crate::time::now_ms()),
+        &[],
+        &mut crate::OsRng,
+    )
+    .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
     if let Some(url) = tsa_url {
         timestamp(&mut out, url, key, trust, &mut r)?;
     }

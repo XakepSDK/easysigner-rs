@@ -67,7 +67,7 @@ fn make_by(
     }
     let parts: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
     let tbs = der::seq(&parts);
-    let sig = signer.private_key.sign(&tbs).unwrap();
+    let sig = signer.private_key.sign(&tbs, &mut kzsigner::OsRng).unwrap();
     der::seq(&[
         &tbs,
         &der::alg_null(signer.private_key.sig_oid()),
@@ -387,7 +387,7 @@ fn list_forms() {
     let list = |parts: &[Vec<u8>]| {
         let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
         let tbs = der::seq(&refs);
-        let sig = ca.private_key.sign(&tbs).unwrap();
+        let sig = ca.private_key.sign(&tbs, &mut kzsigner::OsRng).unwrap();
         der::seq(&[
             &tbs,
             &der::alg_null(ca.private_key.sig_oid()),

@@ -199,10 +199,11 @@ pub fn sign_for_card(
         false,
         &key.private_key,
         &key.cert,
-        true,
+        Some(time::now_ms()),
         &[mime],
+        &mut crate::OsRng,
     )
-    .map_err(|e| Error::new(trf("Signing failed: {}", &[&e])))?;
+    .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
     sign::timestamp(&mut sd, tsa_url, key, trust, r)?;
     let chain = trust.check(&key.cert, time::now_ms());
     for c in &chain.issuers {
@@ -226,7 +227,7 @@ pub fn sign_for_card(
     let issuer = chain
         .issuer
         .as_ref()
-        .ok_or_else(|| Error::new(chain.status.clone()))?;
+        .ok_or_else(|| Error::new(crate::i18n::text(&chain.status)))?;
     let kept_ocsp = g
         .kept
         .status(&key.cert, issuer, trust, time::now_ms())
