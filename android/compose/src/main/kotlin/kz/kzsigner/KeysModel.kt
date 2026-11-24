@@ -257,10 +257,13 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The phone has a working internet connection (else "No internet", not "NCA is down"). */
-    fun online(): Boolean {
-        val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java) ?: return false
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    fun online(): Boolean = try {
+        val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+        caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+    } catch (e: SecurityException) {
+        // can't tell: say NCA didn't answer rather than close the app
+        true
     }
 
     private class ReadFile(val name: String, val bytes: ByteArray?, val tooBig: Boolean) {

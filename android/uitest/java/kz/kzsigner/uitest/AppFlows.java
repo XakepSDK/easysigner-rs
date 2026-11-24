@@ -118,13 +118,27 @@ public class AppFlows {
         phone.device.wait(Until.hasObject(By.pkg(Phone.APP)), 10000);
     }
 
-    /** Waits up to 20 seconds for text on screen. */
+    /**
+     * Waits up to 20 seconds for text on screen, scrolling the screen's list to find it (down
+     * to the end, then back to the top).
+     */
     private void see(String what) {
+        boolean down = true;
         for (int i = 0; i < 20; i++) {
             if (phone.shows(what)) {
                 return;
             }
             Phone.sleep(1000);
+            UiObject2 list = i >= 1 ? phone.device.findObject(By.scrollable(true)) : null;
+            if (list != null) {
+                try {
+                    if (!list.scroll(down ? androidx.test.uiautomator.Direction.DOWN : androidx.test.uiautomator.Direction.UP, 0.6f)) {
+                        down = !down;
+                    }
+                } catch (RuntimeException e) {
+                    // the screen changed meanwhile
+                }
+            }
         }
         phone.fail("the Compose app does not show \"" + what + "\". The tree:\n" + phone.tree());
     }
@@ -372,7 +386,8 @@ public class AppFlows {
                 nca("up");
                 nca(down);
                 signWith("Sign");
-                throughPrompt("reach NCA right now");
+                // NCA down; "No internet" if the emulator's network isn't validated
+                throughPrompt("reach NCA right now|^No internet$");
                 screen("android-sign-" + down);
                 nca("up");
                 tap("Try again");
@@ -408,6 +423,7 @@ public class AppFlows {
         see("The signature is valid");
         see(CAROL);
         screen("android-check-2-valid");
+        scrollTo("Details");
         tap("Details");
         see("Signature details");
         see("PAdES");
@@ -426,6 +442,7 @@ public class AppFlows {
             see("Do not trust this document");
             see("The signer's key was revoked");
             screen("android-check-4-revoked");
+            scrollTo("Details");
             tap("Details");
             see("Revoked: NCA cancelled this key");
             phone.device.pressBack();
@@ -436,6 +453,7 @@ public class AppFlows {
             nca("ocsp-down");
             checkFile("contract-signed.pdf");
             see("The signature is valid");
+            scrollTo("Details");
             tap("Details");
             see("answer kept in the signature");
             screen("android-check-5-kept");
@@ -459,6 +477,7 @@ public class AppFlows {
         see("Do not trust this document");
         see("isn't recognized in Kazakhstan");
         screen("android-check-7-not-recognized");
+        scrollTo("Details");
         tap("Details");
         see("CAdES");
         phone.device.pressBack();
