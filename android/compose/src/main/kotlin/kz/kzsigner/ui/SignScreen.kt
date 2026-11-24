@@ -201,6 +201,8 @@ fun SignScreen(
         if (info.kind == DocKind.CMS) CmsCard(doc, read_) else DocCard(doc, read_)
         // who signed already, and once NCA has answered, whether their signatures hold
         val checked by produceState<Checked?>(null, doc) {
+            // another document: forget the last one's check first
+            value = null
             if (info.signers.isNotEmpty()) value = model.checkQuietly(doc.name, doc.bytes, lang)
         }
         val rows = checked?.signers?.takeIf { it.isNotEmpty() }

@@ -16,7 +16,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * The test key files, PDFs and signed files (tests/fixtures/keys, ocsp, pdf, ltv and app, in
+ * The test key files, PDFs and signed files (tests/fixtures/keys, ocsp, pdf and app, in
  * this APK's assets) as content:// URIs, read-only: content://kz.kzsigner.uitest.keys/alice_rsa.p12. What a files app
  * or a messenger hands over with "Open with" or Share.
  */

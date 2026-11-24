@@ -355,7 +355,7 @@ public class AppFlows {
         see("Already signed by");
         see("Who signed");
         screen("android-sign-join-pdf");
-        signWith("Add my signature");
+        signWith("Sign");
         signed("android-sign-join-pdf-done");
 
         // a detached .cms holds no document: nothing to sign here
@@ -472,8 +472,8 @@ public class AppFlows {
         tap("Check another file");
         see("Sign a document");
 
-        // a .cms signed with a test key whose CA is not NCA's
-        checkFile("lta.cms");
+        // a .cms signed with a (Kalkan) test key whose CA isn't trusted here
+        checkFile("rsa.txt.cms");
         see("Do not trust this document");
         see("isn't recognized in Kazakhstan");
         screen("android-check-7-not-recognized");
