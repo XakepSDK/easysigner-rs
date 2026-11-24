@@ -32,6 +32,18 @@ Small app changes, collected to build and test in one go.
   what they sign (Digital Code Art. 50), not that they must. Sign is always enabled; "Read
   it" stays beside the file card, and for files the app can't show, the line under the card
   says "Open it to check what you're signing". Update AppFlows if it relies on the gate.
+- **Emulator tests cover every flow** (agreed). Today the emulator stops at "isn't
+  recognized" when signing, because NCA doesn't know the test keys, so these are tested only
+  in the core: a finished signature (Signed screen, Send, Save, the Who signed page, adding
+  to someone's PDF or .cms), a valid, revoked, expired or unconfirmed check, a detached .cms
+  with its document, no internet. Plan: CI starts the fake NCA servers (tests/common/nca.rs,
+  as a small binary) on the host, and the app's test build (build type "uitest") points at
+  them through the emulator's host address (10.0.2.2) with the test CAs trusted for
+  everything, not only adding. Then AppFlows walks each flow on screen: sign PDF, XML, Word
+  (new .cms), co-sign a .cms and a signed PDF, the prompt cancelled, the key reset, signing
+  with the password on a phone with no screen lock, NCA revoked, NCA not answering, check
+  valid / changed / revoked / not signed / detached, About, the language switch. The released
+  APK keeps NCA's real servers and trust; the test build is never released.
 - **Phone-only APK** (proposed, not decided): the release APK carries the x86_64 core for the
   emulator too, about 3 MB of its 10 MB. Build the release for arm64 only and the emulator
   tests' APK for x86_64.
