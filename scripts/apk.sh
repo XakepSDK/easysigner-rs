@@ -41,7 +41,7 @@ if [ -n "${KZSIGNER_UITEST:-}" ]; then
 fi
 # KZSIGNER_CHECKS=1: also the JVM unit tests (android/compose/src/test) and Android Lint, all checks
 if [ -n "${KZSIGNER_CHECKS:-}" ]; then
-    TASKS="$TASKS :compose:testReleaseUnitTest :compose:lintRelease"
+    TASKS="$TASKS :compose:testDebugUnitTest :compose:lintRelease"
 fi
 FFI=target/android-ffi
 OUT=dist/kzsigner-$V-android.apk
