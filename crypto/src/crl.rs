@@ -275,7 +275,10 @@ pub fn evaluate(
     let at = delta.map_or(base.this_update, |d| d.this_update);
     (
         true,
-        trf("GOOD (not in the revocation list of {})", &[&Time(Some(at))]),
+        trf(
+            "GOOD (not in the revocation list of {})",
+            &[&Time(Some(at))],
+        ),
         "good",
     )
 }

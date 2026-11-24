@@ -114,11 +114,7 @@ impl From<String> for Text {
 impl Text {
     /// The text with `render` applied to each argument; the application passes its own
     /// translation and time formatting.
-    pub fn fill(
-        &self,
-        template: &str,
-        render: &mut dyn FnMut(&Arg) -> String,
-    ) -> String {
+    pub fn fill(&self, template: &str, render: &mut dyn FnMut(&Arg) -> String) -> String {
         let mut out = String::new();
         let mut args = self.args.iter();
         let mut parts = template.split("{}");
@@ -158,7 +154,10 @@ mod tests {
     #[test]
     fn english() {
         let inner = trf("bad {}", &[&"thing"]);
-        let t = trf("A {} at {} ({}) {}", &[&7u8, &Time(Some(0)), &inner, &Time(None)]);
+        let t = trf(
+            "A {} at {} ({}) {}",
+            &[&7u8, &Time(Some(0)), &inner, &Time(None)],
+        );
         assert_eq!(t.to_string(), "A 7 at 1970-01-01T00:00:00Z (bad thing) -");
         assert_eq!(tr("plain").to_string(), "plain");
         assert_eq!(Text::from(String::from("x {}")).to_string(), "x {}");

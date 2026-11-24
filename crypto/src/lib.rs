@@ -184,8 +184,11 @@ pub(crate) mod testing {
     }
 
     pub fn fixture(path: &str) -> Vec<u8> {
-        std::fs::read(format!("{}/../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR")))
-            .unwrap()
+        std::fs::read(format!(
+            "{}/../tests/fixtures/{path}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
     }
 
     pub fn key(name: &str) -> crate::p12::Key {

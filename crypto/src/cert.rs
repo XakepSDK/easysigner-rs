@@ -344,22 +344,23 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
 /// policies extension, or with anyPolicy, sets no rule on policies. None when it may.
 pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<Text> {
     if c.is_ca() {
-        return Some(tr("The certificate belongs to a certification authority, not to a person or organization.").into());
+        return Some(tr(
+            "The certificate belongs to a certification authority, not to a person or organization.",
+        ));
     }
     if c.key_usage()
         .is_some_and(|k| !k[KU_DIGITAL_SIGNATURE] && !k[KU_NON_REPUDIATION])
     {
-        return Some(tr("The certificate's key usage does not allow signing.").into());
+        return Some(tr("The certificate's key usage does not allow signing."));
     }
     if c.has_eku(EKU_TIME_STAMPING) || c.has_eku(EKU_OCSP_SIGNING) {
-        return Some(
-            tr("The certificate belongs to a timestamp or OCSP service, not to a person or organization.")
-                .into(),
-        );
+        return Some(tr(
+            "The certificate belongs to a timestamp or OCSP service, not to a person or organization.",
+        ));
     }
     let allowed = match issuer?.policies()? {
         Ok(a) => a,
-        Err(_) => return Some(tr("The CA certificate's policies can't be read.").into()),
+        Err(_) => return Some(tr("The CA certificate's policies can't be read.")),
     };
     if allowed.iter().any(|p| p == ANY_POLICY) {
         return None;
@@ -378,11 +379,10 @@ pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<Text> {
             "The certificate's policy ({}) is not one of its CA's policies ({}).",
             &[&own.join(", "), &allowed.join(", ")],
         )),
-        Some(Err(_)) => Some(tr("The certificate's policies can't be read.").into()),
+        Some(Err(_)) => Some(tr("The certificate's policies can't be read.")),
         _ => Some(trf(
             "The certificate names no certificate policy, but its CA issues under {}.",
             &[&allowed.join(", ")],
         )),
     }
 }
-

@@ -211,6 +211,6 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
         &mut kzsigner::OsRng,
     )
     .ok()?
-        .encode();
+    .encode();
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
 }

@@ -97,7 +97,10 @@ fn other_pkcs12_forms() {
         let e = p12::open(&read(&format!("p12/{f}.p12")), "Qwerty13", None)
             .err()
             .unwrap();
-        assert!(e.to_string().contains("password is probably wrong"), "{f}: {e}");
+        assert!(
+            e.to_string().contains("password is probably wrong"),
+            "{f}: {e}"
+        );
     }
 }
 
@@ -118,7 +121,8 @@ fn bad_mac() {
         d[at] ^= 1;
         let e = p12::open(&d, "Qwerty12", None).err().unwrap();
         assert_eq!(
-            e.to_string(), "Could not open the key file. The password is probably wrong.",
+            e.to_string(),
+            "Could not open the key file. The password is probably wrong.",
             "{f}"
         );
     }
@@ -142,7 +146,10 @@ fn not_pkcs12() {
         ),
     ] {
         let e = p12::open(&d, "Qwerty12", None).err().unwrap();
-        assert!(e.to_string().contains("not a PKCS#12") && e.to_string().contains(why), "{e}");
+        assert!(
+            e.to_string().contains("not a PKCS#12") && e.to_string().contains(why),
+            "{e}"
+        );
     }
     // the right shape with nothing inside
     let e = p12::open(
