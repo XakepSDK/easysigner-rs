@@ -259,7 +259,7 @@ pub(super) fn level_text(l: &str) -> &'static str {
     }
 }
 
-pub(super) fn archive_text(a: &crate::report::ArchiveStamp) -> String {
+pub(super) fn archive_text(a: &kzsigner::report::ArchiveStamp) -> String {
     let state = if !a.checked || !a.valid {
         format!(" ({})", a.error.clone().unwrap_or_default())
     } else if a.trusted {

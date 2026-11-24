@@ -618,13 +618,20 @@ pub fn latin_keyboard(s: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Every tr("...") / trf("...") text in src/ has a translation with the same placeholders.
+    /// Every tr("...") / trf("...") text in src/ (and the window's, in desktop/src) has a
+    /// translation with the same placeholders.
     #[test]
     fn every_text_is_translated() {
         let mut missing = Vec::new();
         let mut found = 0;
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for dir in ["src", "src/pdf", "src/xml", "src/gui"] {
+        for dir in [
+            "src",
+            "src/pdf",
+            "src/xml",
+            "desktop/src",
+            "desktop/src/gui",
+        ] {
             for e in std::fs::read_dir(dir).unwrap() {
                 files.push(e.unwrap().path());
             }

@@ -4,12 +4,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../../tests/common/mod.rs"]
 mod common;
 use common::offline_unless_asked;
 
 fn fixture(p: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
+        .join("../tests/fixtures")
         .join(p)
         .display()
         .to_string()

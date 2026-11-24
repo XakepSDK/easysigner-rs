@@ -2,8 +2,8 @@
 # window's layout code, and the stamp, Who signed page and document card drawing
 # (coordinates, sizes and text placement), which tests can only look at, not check.
 exclude_globs = [
-    "src/icons.rs",
-    "src/gui/**",
+    "desktop/src/icons.rs",
+    "desktop/src/gui/**",
     "src/pdf/card.rs",
     "src/pdf/stamp.rs",
     "src/pdf/layout.rs",

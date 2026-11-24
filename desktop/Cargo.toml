@@ -1,0 +1,45 @@
+[package]
+name = "kzsigner-desktop"
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.100"
+description = "kzsigner for Windows, Linux and macOS: the window (egui) and the command line"
+repository = "https://github.com/XakepSDK/easysigner-rs"
+publish = false
+default-run = "kzsigner"
+
+[lib]
+name = "kzsigner_desktop"
+
+[[bin]]
+name = "kzsigner"
+path = "src/main.rs"
+
+[dependencies]
+kzsigner = { path = "..", default-features = false }
+lexopt = "0.3"
+rpassword = "7"
+# file dialogs in the window
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal", "wayland"] }
+# what a document taken out of a signed file really is, before the window opens it
+infer = { version = "0.22.0", default-features = false }
+# reading Word and Excel files to tell them apart
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }
+
+[target.'cfg(windows)'.dependencies]
+# Direct3D 12, with Windows' own software renderer (WARP) when there is no graphics driver
+eframe = { version = "0.37", default-features = false, features = ["wgpu_no_default_features", "accesskit"] }
+wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl", "std"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
+
+[dev-dependencies]
+egui_kittest = "0.37"
+# the end-to-end tests look inside signed PDFs
+lopdf = { version = "0.47", default-features = false }
+zeroize = "1"
+
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }

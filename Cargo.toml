@@ -3,13 +3,8 @@ name = "kzsigner"
 version = "0.1.0-dev"
 edition = "2024"
 rust-version = "1.100"
-default-run = "kzsigner"
 description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer"
 repository = "https://github.com/XakepSDK/easysigner-rs"
-
-[features]
-default = ["gui"]
-gui = ["dep:eframe", "dep:rfd", "dep:wgpu", "dep:infer"]
 
 [dependencies]
 gost94 = "0.11"
@@ -27,11 +22,6 @@ num-bigint = "0.5"
 num-traits = "0.2"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-lexopt = "0.3"
-rpassword = "7"
-eframe = { version = "0.37", optional = true, default-features = false }
-# file dialogs in the window (the window is desktop only: the Android app is android/compose)
-rfd = { version = "0.18", optional = true, default-features = false, features = ["xdg-portal", "wayland"] }
 ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
 cbc = "0.2.1"
@@ -44,24 +34,16 @@ flate2 = "1"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde_json = "1"
 roxmltree = "0.21"
-# what a document taken out of a signed file really is, before the window opens it
-infer = { version = "0.22.0", default-features = false, optional = true }
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
 zeroize = "1"
 
-[target.'cfg(not(windows))'.dependencies]
-eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "x11", "wayland", "accesskit"] }
-
 [target.'cfg(windows)'.dependencies]
-# Direct3D 12, with Windows' own software renderer (WARP) when there is no graphics driver
-eframe = { version = "0.37", optional = true, default-features = false, features = ["wgpu_no_default_features", "accesskit"] }
-wgpu = { version = "30", optional = true, default-features = false, features = ["dx12", "wgsl", "std"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["ffi"]
-default-members = ["."]
+members = ["ffi", "desktop"]
+default-members = [".", "desktop"]
 
 [profile.release]
 opt-level = "z"
@@ -70,11 +52,6 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-[dev-dependencies]
-egui_kittest = "0.37"
-
-[build-dependencies]
-winresource = { version = "0.1", default-features = false }
 
 # For mutation testing (cargo mutants, .cargo/mutants.toml): quick to rebuild after a small
 # change, with the dependencies (the crypto) optimized, so each run of the tests is short.

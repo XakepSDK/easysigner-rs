@@ -857,26 +857,17 @@ fn info(o: Opts) -> R<u8> {
     Ok(0)
 }
 
-#[cfg(feature = "gui")]
 fn gui(o: Opts) -> R<u8> {
     let e = engine(&o)?;
-    kzsigner::gui::run(e, o.file).map_err(Fail::User)?;
+    kzsigner_desktop::gui::run(e, o.file).map_err(Fail::User)?;
     Ok(0)
-}
-
-#[cfg(not(feature = "gui"))]
-fn gui(_: Opts) -> R<u8> {
-    Err(Fail::User(
-        "This build of kzsigner has no window; use the commands (see --help).".into(),
-    ))
 }
 
 /// Whether a window can be shown.
 fn display_available() -> bool {
-    cfg!(feature = "gui")
-        && (cfg!(any(windows, target_os = "macos"))
-            || std::env::var_os("DISPLAY").is_some()
-            || std::env::var_os("WAYLAND_DISPLAY").is_some())
+    cfg!(any(windows, target_os = "macos"))
+        || std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 fn run() -> R<u8> {

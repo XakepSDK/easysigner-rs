@@ -1,7 +1,6 @@
 //! Drives the window like a person: from the start screen, choose a document and key, type the
 //! password, sign, then check the result and save the original back out. File dialogs are
 //! scripted, and the network is not used (no NCA time, no revocation check).
-#![cfg(feature = "gui")]
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -11,7 +10,7 @@ use eframe::egui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use kzsigner::cert::Cert;
-use kzsigner::gui::{App, Dialogs, Screen};
+use kzsigner_desktop::gui::{App, Dialogs, Screen};
 
 /// File dialogs that answer from a queue.
 #[derive(Clone, Default)]
@@ -90,7 +89,7 @@ fn settle(h: &mut Harness<'_, App>) {
 #[test]
 fn sign_then_verify_in_the_window() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kalkan");
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/kalkan");
     let dir = std::env::temp_dir().join(format!("kzsigner-gui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -240,7 +239,7 @@ fn sign_then_verify_in_the_window() {
 fn pdf_signing_and_cards_in_the_window() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     kzsigner::i18n::set(kzsigner::i18n::Lang::En);
-    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures");
     let dir = std::env::temp_dir().join(format!("kzsigner-gui-pdf-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -303,7 +302,7 @@ fn pdf_signing_and_cards_in_the_window() {
     h.get_by_label("Still opens as a normal PDF. Only for PDF files.")
         .click();
     h.run();
-    assert_eq!(h.state().sign.sign_as, kzsigner::gui::SignAs::Pdf);
+    assert_eq!(h.state().sign.sign_as, kzsigner_desktop::gui::SignAs::Pdf);
     // with a Who signed page (More options)
     h.get_by_label("More options").click();
     h.run();
@@ -389,7 +388,7 @@ fn pdf_signing_and_cards_in_the_window() {
     h.run();
     h.key_press(egui::Key::Enter);
     settle(&mut h);
-    assert_eq!(h.state().sign.sign_as, kzsigner::gui::SignAs::Xml);
+    assert_eq!(h.state().sign.sign_as, kzsigner_desktop::gui::SignAs::Xml);
     let xml_out = dir.join("request-signed.xml");
     dialogs.next(xml_out.clone());
     h.get_by_label("Sign").click();
@@ -492,7 +491,7 @@ fn store_app(
 fn kept_key_signs_with_one_touch() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     kzsigner::i18n::set(kzsigner::i18n::Lang::En);
-    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kalkan");
+    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/kalkan");
     let dir = std::env::temp_dir().join(format!("kzsigner-gui-kept-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

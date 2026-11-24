@@ -2,7 +2,8 @@
 
 Sign and verify `.cms` files, signed PDFs, signed XML and document cards with Kazakhstan NCA RK keys, locally, without NCALayer.
 One small executable with no runtime: 5.5 MB on Linux (1.7 MB tar.xz), 6.4 MB on Windows
-(2.7 MB zip), 0.8 MB without the window (`--no-default-features`).
+(2.7 MB zip). The window and command line are the `desktop` crate; the signing core is the
+`kzsigner` library at the root.
 
 It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256),
 GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also sign without the
@@ -152,7 +153,6 @@ The password comes from `-p`, the `KZSIGNER_PASSWORD` environment variable, or a
 ```
 cargo build --release              # target/release/kzsigner
 cargo test --release               # unit tests, end-to-end checks, scripted window test
-cargo build --release --no-default-features   # command line only
 sh scripts/cargo.sh                # reproducible release build (what the downloads are)
 ```
 
@@ -244,13 +244,14 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   codes (ZIP, Base64, JSON parts; [qrcodegen](https://github.com/nayuki/QR-Code-generator)) and
   back. `pdf/import.rs` shows the document's own pages in the card; `pdf/layout.rs`,
   `pdf/font.rs` draw the pages in an embedded subset of the bundled Noto Sans (`ttf-parser`).
-* `main.rs`, `output.rs`: the command line, text and JSON reports.
+* `desktop/`: the executable: `src/main.rs` the command line, `src/gui/` the window (egui),
+  `src/icons.rs` its drawn icons. `output.rs` (core): the text and JSON reports.
 * `ffi/`: the core's calls for the Android app (UniFFI): the key vault over the phone's chip,
   signing with the output picked by the input, and checking with one verdict and reason.
 * `android/compose`: the Android app; `android/uitest`: its emulator tests.
-* `i18n.rs`: the window's Kazakh and Russian texts, one table. The Kazakh was not written by a
+* `i18n.rs`: the Kazakh and Russian texts of the window and of the core's messages, one table. The Kazakh was not written by a
   native speaker; corrections are welcome.
-* `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `build.rs` puts it
+* `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `desktop/build.rs` puts it
   and the version into the Windows `.exe`. `packaging/linux/`: the menu entry and installer.
 
 ## Notes and limitations
@@ -279,14 +280,14 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 
 `cargo test` runs:
 
-* `tests/e2e.rs`: end-to-end checks against the built executable. It uses throwaway test keys
+* `desktop/tests/e2e.rs`: end-to-end checks against the built executable. It uses throwaway test keys
   (`tests/fixtures/keys`), a fake local timestamp server, and files and keys made by NCA's own
   Kalkan library (`tests/fixtures/kalkan`).
-* `tests/e2e.rs` also signs PDFs (RSA, GOST 2015, GOST 2004; co-signing; changed files) and makes,
+* `desktop/tests/e2e.rs` also signs PDFs (RSA, GOST 2015, GOST 2004; co-signing; changed files) and makes,
   co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
   refused. Test PDFs are in `tests/fixtures/pdf`.
-* `tests/gui.rs`: drives the window without a display (egui_kittest): from the start screen picks
+* `desktop/tests/gui.rs`: drives the window without a display (egui_kittest): from the start screen picks
   a document and key, types the password, opens the document, signs, checks the result, saves the document back out
   and switches languages; signs a PDF inside, checks it and a card, saves the card's document;
   and opens a signed PDF from the start, which goes to checking.
@@ -294,24 +295,24 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
 * `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later
   signatures alone keep earlier ones valid, and a no-changes certified PDF is not signed.
-* `tests/e2e.rs` `long_term`: B-LTA .cms and PDFs signed, renewed, co-signed and checked
+* `desktop/tests/e2e.rs` `long_term`: B-LTA .cms and PDFs signed, renewed, co-signed and checked
   offline from the kept answers; removed validation data and changed files are caught; a
   detached signature's archive timestamp needs its document; XAdES B-LTA in windows-1251,
   renewed, cut and co-signed; a hash signed as B-LT.
-* `tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
+* `desktop/tests/e2e.rs` `xml`: XAdES with every key type, B-T, changed documents and signature values,
   a duplicated signed part, broken XML, encodings, several signatures in one document.
 * `tests/xml_room.rs`: when another XML signature can go inside a signed document.
 * `tests/xml_signatures.rs`: which certificate an XML signature names, transforms that leave
   other signatures out, and the document shapes signing accepts.
 * `tests/signatures.rs`: the signed reference to the signer's certificate, checking a signature
   without its document, what a report says about each signer, and signing warnings.
-* `tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
+* `desktop/tests/e2e.rs` `by_hash`: hashes signed with every key type, wrong lengths refused.
 * `tests/long_term_file.rs`: a B-LTA .cms made by an earlier build (`tests/fixtures/ltv`) still
   verifies, and without its kept data the archive timestamps catch it.
 * `tests/certs.rs`: certificates with a forged CA signature or a broken root are not trusted;
   validity dates, CA rights, names, key algorithms, which key goes with which certificate, and
   key warnings.
-* `tests/cli.rs`: each command-line option only where it means something, `sign --hash` without
+* `desktop/tests/cli.rs`: each command-line option only where it means something, `sign --hash` without
   file options, `info`, and the names `extract` gives.
 * `tests/crl.rs`, `tests/policy.rs`: CRL and delta CRL answers, and which certificates may sign
   documents (key usage, service keys, policies against the real NCA CAs).

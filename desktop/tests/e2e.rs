@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../../tests/common/mod.rs"]
 mod common;
 use common::offline_unless_asked;
 
@@ -12,10 +13,10 @@ use kzsigner::cms;
 const PASSWORD: &str = "Qwerty12";
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures")
 }
 
-#[path = "common/nca.rs"]
+#[path = "../../tests/common/nca.rs"]
 mod nca;
 use nca::{fake_ocsp, fake_tsa};
 

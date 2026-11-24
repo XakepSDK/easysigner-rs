@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use super::*;
-use crate::vault::{Guard, Level, Prompt, Security, Store, VaultError};
+use kzsigner::vault::{Guard, Level, Prompt, Security, Store, VaultError};
 
 /// The key store the window uses.
 pub type KeyStore = Arc<Mutex<Store<Box<dyn Guard>>>>;
@@ -65,7 +65,7 @@ pub(super) fn snapshot(engine: &Engine, store: &Store<Box<dyn Guard>>) -> Vec<St
                 level: e.level,
                 security: e.security,
                 key_alg: e.cert().key_alg(),
-                cert_hash: crate::gost::sha256(&e.cert().der),
+                cert_hash: kzsigner::gost::sha256(&e.cert().der),
             }
         })
         .collect()
@@ -249,13 +249,13 @@ impl App {
         // the password was just typed: this signing goes on with the file, with no prompt
         // on top; the kept key is offered from the next start
         self.key.use_file = true;
-        let hash = crate::gost::sha256(&k.cert.der);
+        let hash = kzsigner::gost::sha256(&k.cert.der);
         if let Some(s) = self.stored.iter().find(|s| s.cert_hash == hash) {
             self.key.saving = Saving::Saved(s.level);
             return;
         }
         let d = self.engine.describe(&k.cert);
-        if d.usage_error.is_some() || !k.cert.valid_on(crate::time::now_ms()) {
+        if d.usage_error.is_some() || !k.cert.valid_on(kzsigner::time::now_ms()) {
             return;
         }
         self.key.saving = Saving::Running;
@@ -398,7 +398,7 @@ pub(super) struct StoredSigning {
 impl StoredSigning {
     /// The key, after the prompt; Err("") when the prompt was closed.
     pub(super) fn unlock(mut self, document: &[u8]) -> Result<Key, String> {
-        let h = crate::hex(&crate::gost::sha256(document)).to_uppercase();
+        let h = kzsigner::hex(&kzsigner::gost::sha256(document)).to_uppercase();
         self.prompt.detail = trf("Document code {} {}", &[&&h[..4], &&h[4..8]]);
         let mut s = self.store.lock().unwrap_or_else(|p| p.into_inner());
         let mut r = s.key(&self.id, self.password.as_deref(), &self.prompt);
@@ -459,7 +459,7 @@ fn stored_row(ui: &mut egui::Ui, k: &StoredKey, selected: bool) -> egui::Respons
                             .wrap()
                             .selectable(false),
                     );
-                    let expired = k.not_after.is_some_and(|t| t < crate::time::now_ms());
+                    let expired = k.not_after.is_some_and(|t| t < kzsigner::time::now_ms());
                     if expired {
                         ui.label(Tone::Bad.text(ui, tr("Expired: get a new key on egov.kz.")));
                     }

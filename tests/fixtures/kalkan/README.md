@@ -1,7 +1,7 @@
 # Kalkan compatibility fixtures
 
 Throwaway test keys (password `Qwerty12`) and `.cms` files made with NCA RK's own Kalkan library
-(kalkancrypt 0.7.8 / knca_provider_util 0.8.8, the crypto NCALayer uses). `tests/e2e.rs` checks
+(kalkancrypt 0.7.8 / knca_provider_util 0.8.8, the crypto NCALayer uses). `desktop/tests/e2e.rs` checks
 that kzsigner opens these keys and verifies and co-signs these files. None of this is a real NCA certificate; `ca_*.cer` are test CAs, and the timestamps come from
 a fake local test TSA.
 

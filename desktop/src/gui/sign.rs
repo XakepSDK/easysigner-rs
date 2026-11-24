@@ -482,7 +482,7 @@ impl App {
             return;
         };
         let wanted = self.key.alias.clone();
-        let pw_hash = crate::hex(&crate::gost::sha256(self.key.password.as_bytes()));
+        let pw_hash = kzsigner::hex(&kzsigner::gost::sha256(self.key.password.as_bytes()));
         let request = key_request(&f, wanted.as_deref(), &pw_hash);
         if self.key.opened_for.as_deref() == Some(request.as_str()) && self.key.opened.is_some() {
             return; // nothing changed (e.g. focus lost)
@@ -575,18 +575,21 @@ impl App {
         };
         let det = self.sign.detached && !self.sign.doc_is_cms;
         // NCA's timestamp server no longer serves GOST 34.310-2004 keys
-        let gost2004 = key_alg == crate::gost::KEY_GOST2004;
+        let gost2004 = key_alg == kzsigner::gost::KEY_GOST2004;
         let skip_tsa = self.sign.timestamp && gost2004 && self.sign.sign_as != SignAs::Card;
         let tsa = (self.sign.timestamp && !skip_tsa).then(|| DEFAULT_TSA_URL.to_string());
         // the long-term data comes from NCA's OCSP server: not when online checks are off
         let long_term =
             tsa.is_some() && self.ocsp && self.sign.long_term && self.sign.sign_as != SignAs::Card;
-        let page = self.sign.stamp.then(|| crate::pdf::whosigned::WhoSigned {
-            document: doc
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        });
+        let page = self
+            .sign
+            .stamp
+            .then(|| kzsigner::pdf::whosigned::WhoSigned {
+                document: doc
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            });
         // check that the key is not revoked (Order 500/НҚ p.4.3), unless online checks are off
         let ocsp = self.ocsp.then(|| DEFAULT_OCSP_URL.to_string());
         let sign_as = self.sign.sign_as;
@@ -662,7 +665,7 @@ impl App {
                 Ok(e.extend_new(
                     r,
                     doc.map(Vec::as_slice),
-                    crate::ltv::Level::Lta,
+                    kzsigner::ltv::Level::Lta,
                     DEFAULT_TSA_URL,
                     DEFAULT_OCSP_URL,
                 ))
@@ -677,8 +680,8 @@ impl App {
         } else {
             match sign_as {
                 SignAs::Cms => PathBuf::from(format!("{}.cms", doc.display())),
-                SignAs::Pdf => crate::signed_name(doc, "pdf"),
-                SignAs::Xml => crate::signed_name(doc, "xml"),
+                SignAs::Pdf => kzsigner::signed_name(doc, "pdf"),
+                SignAs::Xml => kzsigner::signed_name(doc, "xml"),
                 SignAs::Card => PathBuf::from(format!("{}.card.pdf", doc.display())),
             }
         };
@@ -818,7 +821,7 @@ impl App {
             Ok((k, latin)) => {
                 let mut pw_hash = pw_hash.to_string();
                 if let Some(p) = latin {
-                    pw_hash = crate::hex(&crate::gost::sha256(p.as_bytes()));
+                    pw_hash = kzsigner::hex(&kzsigner::gost::sha256(p.as_bytes()));
                     self.key.password = p;
                 }
                 let pw_hash = pw_hash.as_str();

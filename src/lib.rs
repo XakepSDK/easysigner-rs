@@ -5,12 +5,8 @@ pub mod cms;
 pub mod crl;
 pub mod der;
 pub mod gost;
-#[cfg(feature = "gui")]
-pub mod gui;
 pub mod http;
 pub mod i18n;
-#[cfg(feature = "gui")]
-pub mod icons;
 pub mod keys;
 pub mod ltv;
 pub mod ocsp;

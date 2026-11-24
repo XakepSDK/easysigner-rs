@@ -2110,14 +2110,10 @@ dependencies = [
  "cipher",
  "des",
  "digest",
- "eframe",
- "egui_kittest",
  "flate2",
  "getrandom 0.4.3",
  "gost94",
  "hmac",
- "infer",
- "lexopt",
  "lopdf",
  "num-bigint",
  "num-traits",
@@ -2125,9 +2121,7 @@ dependencies = [
  "pkcs12",
  "qrcodegen",
  "rc2",
- "rfd",
  "roxmltree",
- "rpassword",
  "rsa",
  "serde_json",
  "sha1",
@@ -2135,6 +2129,23 @@ dependencies = [
  "streebog",
  "ttf-parser",
  "ureq",
+ "windows-sys 0.61.2",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
+name = "kzsigner-desktop"
+version = "0.1.0-dev"
+dependencies = [
+ "eframe",
+ "egui_kittest",
+ "infer",
+ "kzsigner",
+ "lexopt",
+ "lopdf",
+ "rfd",
+ "rpassword",
  "wgpu",
  "windows-sys 0.61.2",
  "winresource",

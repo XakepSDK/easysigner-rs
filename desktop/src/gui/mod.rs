@@ -7,12 +7,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use eframe::egui::{self, Color32, RichText};
 
-use crate::i18n::{self, Lang, tr, trf};
 use crate::icons::{self, Icon};
-use crate::p12::Key;
-use crate::pdf::card::CardLang;
-use crate::report::{SignResult, SignerReport, VerifyReport};
-use crate::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
+use kzsigner::i18n::{self, Lang, tr, trf};
+use kzsigner::p12::Key;
+use kzsigner::pdf::card::CardLang;
+use kzsigner::report::{SignResult, SignerReport, VerifyReport};
+use kzsigner::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
 
 mod check;
 mod files;
@@ -97,7 +97,7 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
             .with_title("kzsigner")
             .with_app_id("kzsigner")
             .with_icon(egui::IconData {
-                rgba: include_bytes!("../../assets/kzsigner-64.rgba").to_vec(),
+                rgba: include_bytes!("../../../assets/kzsigner-64.rgba").to_vec(),
                 width: 64,
                 height: 64,
             })
@@ -157,7 +157,7 @@ enum Msg {
         Result<(Box<Key>, Option<String>), String>,
     ),
     /// (the key's id, the kept keys, why the security chip could not be used)
-    KeySaved(Result<(String, Vec<StoredKey>, Option<String>), crate::vault::VaultError>),
+    KeySaved(Result<(String, Vec<StoredKey>, Option<String>), kzsigner::vault::VaultError>),
     KeysChanged(Result<Vec<StoredKey>, String>),
     Signed(PathBuf, SignAs, Result<SignResult, String>),
     Verified(u64, Result<VerifyReport, String>),
@@ -763,9 +763,12 @@ fn install_fonts(ctx: &egui::Context) {
     for (name, data) in [
         (
             "text",
-            &include_bytes!("../../assets/NotoSans-subset.ttf")[..],
+            &include_bytes!("../../../assets/NotoSans-subset.ttf")[..],
         ),
-        ("symbols", &include_bytes!("../../assets/symbols.ttf")[..]),
+        (
+            "symbols",
+            &include_bytes!("../../../assets/symbols.ttf")[..],
+        ),
     ] {
         fonts
             .font_data

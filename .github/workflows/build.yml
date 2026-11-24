@@ -1,5 +1,5 @@
-# Builds and tests on Linux and Windows: unit tests, the end-to-end checks (tests/e2e.rs), the
-# scripted window test (tests/gui.rs), and a real window start. Release builds are reproducible
+# Builds and tests on Linux and Windows: unit tests, the end-to-end checks (desktop/tests/e2e.rs), the
+# scripted window test (desktop/tests/gui.rs), and a real window start. Release builds are reproducible
 # (scripts/cargo.sh): each commit is built a second time in another folder and the executables
 # must be byte-identical. A push to main whose Cargo.toml
 # version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,

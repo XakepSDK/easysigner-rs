@@ -4,7 +4,8 @@ The phone app's simple flow (compose-plan.md, the design's 24 screens and rules 
 to the desktop window. Still egui, on Windows, Linux and macOS, over the same core. The
 command line (`kzsigner sign`, `verify`, ...) keeps all its options; only the window changes.
 
-Status: proposed, waiting for review. Nothing here is built yet.
+Status: reviewed 2026-11-24 (decisions below). Phase 1 done; the desktop screens are
+proposed for review before phase 2.
 
 ## What the desktop window is today
 
@@ -17,11 +18,14 @@ Status: proposed, waiting for review. Nothing here is built yet.
   test uses it now.
 - Text: `tr("English")` with Kazakh and Russian in `src/i18n.rs`, separate from the phone's
   strings, so the two apps word things differently.
-- Tests: `tests/gui.rs` drives the window with egui_kittest (sign, check, cards, a kept key).
+- Tests: `desktop/tests/gui.rs` drives the window with egui_kittest (sign, check, cards, a kept key).
 
 ## Goal
 
-The same app as on the phone, laid out for a window:
+The phone's rules (one Sign action, output by input, no options, the same refusals,
+verdicts and reasons), with screens made for a window: they may differ from the phone's
+wherever that makes the desktop easier to use (the person's call, 2026-11-24). The screens
+below are the starting point; the desktop design is reviewed before phase 2.
 
 - **Home**: "Sign a document" and "Check a signature", the key chip ("Add key" / "Your
   keys"), and the share hint replaced by "or drop a file here". A file dropped or opened
@@ -41,11 +45,12 @@ The same app as on the phone, laid out for a window:
 
 ## Shape
 
-- **One app layer for both apps.** The phone's behaviour lives in the `ffi` crate today
+- **One app layer for both apps.** The phone's behaviour lives in the `ffi` crate
   (`inspect`, `check_file`, `Vault::add_key` / `sign` with `Nca`, `Checked` with reason
-  codes). Move it into the core as `kzsigner::app`; `ffi` becomes the UniFFI wrapper over it,
-  and the window calls it directly. One place decides what a file is, what signing makes,
-  and what a check says, so the two apps can't drift. ffi's tests move with it.
+  codes). It is also a plain Rust library, so the window calls it directly (the UniFFI
+  attributes cost nothing there). One place decides what a file is, what signing makes and
+  what a check says. For that the window and command line moved out of the core into their
+  own crate, `desktop/` (the core can't depend on `ffi`, which depends on the core).
 - **Its own words.** The window keeps its own text table (`src/i18n.rs`, Kazakh and
   Russian next to the English), rewritten to say what the phone says, in the window's terms
   ("this computer", "Show in folder"). No build link to the Android string files; the
@@ -80,7 +85,7 @@ Hello and Touch ID come in their own phase.
 
 ## Tests
 
-- Core: existing tests; ffi's tests move to `kzsigner::app`.
+- Core and app layer: existing tests (`cargo test`, `-p kzsigner-ffi`).
 - Window: egui_kittest walks every flow against the fake NCA servers in-process (as the ffi
   tests do), the same list as the emulator's AppFlows: Home without a key, add (wrong
   password, Russian keyboard hint, GOST 2004, not recognized), sign PDF / text / XML, join a
@@ -93,8 +98,9 @@ Hello and Touch ID come in their own phase.
 
 ## Phases
 
-1. **App layer**: `kzsigner::app` from ffi; ffi wraps it; all tests green, no visible change.
-2. **Words and layout**: the window's texts rewritten, the centred column, Home, Add key,
+1. **Desktop crate** (done): the window and command line in `desktop/`, the core a library;
+   all tests green, no visible change.
+2. **Words and layout**: the window on the app layer (`kzsigner-ffi`), its texts rewritten, the centred column, Home, Add key,
    Your keys (language, About), the vault in the app data folder with the password unlock.
 3. **Sign**: Sign, Signed, the NCA screens, save next to the original; the old Sign form and
    its options removed from the window.
@@ -103,19 +109,20 @@ Hello and Touch ID come in their own phase.
 6. **Finish**: accessibility pass (NVDA, Narrator, Orca, VoiceOver where possible, 200 %),
    every flow in kittest with screenshots, docs, a check on a real Windows PC and Linux.
 
-## Decisions for the person
+## Decisions (2026-11-24)
 
-1. **Keep keys on the computer** (recommended, as on the phone) or keep choosing the .p12
-   and typing its password for each signature (as NCALayer does)?
-2. **Where the signed file goes**: next to the original automatically (recommended, one
-   action) or a save dialog each time?
-3. **macOS**: build it now (unsigned: macOS warns on first open, and Touch ID waits for an
-   Apple Developer ID, $99 a year) or later? Today CI builds Windows and Linux only.
+1. **Keys are kept on the computer**, as on the phone.
+2. **The signed file is saved next to the original** automatically.
+3. **macOS later.** CI builds Windows and Linux; Touch ID waits for a Mac build with an
+   Apple Developer ID.
+4. Texts stay separate from the phone's (no shared string files). No users yet: breaking
+   changes and removing features are fine.
+5. Desktop screens may differ from the phone's where that's easier to use.
 
 ## Self-review
 
-- Risk: moving ffi's logic into the core touches the phone app; phase 1 changes no
-  behaviour and the emulator tests guard it.
+- The window depends on `kzsigner-ffi` and so builds UniFFI's runtime in; a little size,
+  no behaviour. If that grows, the app layer can move to its own crate under `ffi`.
 - Two text tables (phone, window) can drift; each new screen updates both, and the
   native-speaker check covers both.
 - No users yet, so the window's options (cards, detached .cms, levels, stamp) go without a
