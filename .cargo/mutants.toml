@@ -3,6 +3,7 @@
 # (coordinates, sizes and text placement), which tests can only look at, not check.
 exclude_globs = [
     "desktop/src/icons.rs",
+    "ffi/src/bin/**",
     "desktop/src/gui/**",
     "src/pdf/card.rs",
     "src/pdf/stamp.rs",

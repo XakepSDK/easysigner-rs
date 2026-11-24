@@ -68,3 +68,8 @@ opt-level = 3
 [dev-dependencies]
 # test keys and OCSP answers made to order (ltv tests)
 kzcrypto = { path = "crypto", features = ["testkit"] }
+
+# Local test runs (cargo test without --release): the crypto in the dependencies optimized,
+# as for mutants, so the GOST and RSA tests don't take minutes.
+[profile.dev.package."*"]
+opt-level = 3

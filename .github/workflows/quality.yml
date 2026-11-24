@@ -9,7 +9,13 @@
 # test really checks. A full run is long (about 2500 mutants), so it runs weekly and by hand,
 # split over 16 shards (up to 1.5 hours each); a pull request runs it only on the lines it changes. Survivors are
 # reported, not failed on, while the existing ones are worked down: see mutants.out in the
-# artifact (missed.txt).
+# artifact (missed.txt). It covers the whole workspace: the core, the app layer (ffi) and the
+# desktop command line.
+#
+# lint: rustfmt and clippy (no warnings allowed) on every push and pull request.
+#
+# deps: cargo deny (deny.toml): known vulnerabilities, unmaintained crates, duplicate versions,
+# where crates come from. Also weekly, since new advisories appear without any change here.
 name: quality
 on:
   push:
@@ -39,6 +45,31 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
 jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (pinned) with rustfmt and clippy
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
   coverage:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -111,33 +142,42 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/scripts/memory-limit.sh
         run: |
           set +e
-          args="--no-shuffle -j 2 --timeout 180 --output ."
+          args="--no-shuffle -j 2 --timeout 180"
           if [ "${{ github.event_name }}" = pull_request ]; then
-            git diff "$BASE...HEAD" -- src crypto/src capi/src > pr.diff
+            git diff "$BASE...HEAD" -- src crypto/src capi/src ffi/src desktop/src > pr.diff
             args="$args --in-diff pr.diff"
           else
             args="$args --shard ${{ matrix.shard }}/$TOTAL"
             for f in $FILES; do args="$args -f $f"; done
           fi
-          cargo mutants $args
-          r=$?
-          # 0: all caught; 2: some missed; 3: some timed out; 4: the tests fail without mutations
+          # two passes: the core, crypto and C interface with their tests (.cargo/mutants.toml);
+          # then the app layer (ffi) and the desktop command line with theirs
+          cargo mutants $args -p kzsigner -p kzcrypto -p kzcrypto-capi --output core
+          r1=$?
+          cargo mutants $args -p kzsigner-ffi -p kzsigner-desktop \
+            --test-package kzsigner-ffi --test-package kzsigner-desktop --output app
+          r2=$?
+          # 0: all caught; 2: some missed; 3: some timed out;
+          # 4: the tests fail without mutations
           {
-            echo "## Mutants (shard ${{ matrix.shard }})"; echo
-            for k in caught missed timeout unviable; do
-              echo "- $k: $(wc -l < mutants.out/$k.txt 2>/dev/null || echo 0)"
+            echo "## Mutants (shard ${{ matrix.shard }})"
+            for o in core app; do
+              echo; echo "### $o"; echo
+              for k in caught missed timeout unviable; do
+                echo "- $k: $(wc -l < $o/mutants.out/$k.txt 2>/dev/null || echo 0)"
+              done
+              echo; echo 'Missed (no test noticed the change):'; echo; echo '```'
+              head -100 $o/mutants.out/missed.txt 2>/dev/null
+              echo '```'
             done
-            echo; echo 'Missed (no test noticed the change):'; echo; echo '```'
-            head -100 mutants.out/missed.txt 2>/dev/null
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          case $r in 0|2|3) exit 0;; *) exit $r;; esac
+          for r in $r1 $r2; do case $r in 0|2|3) ;; *) exit $r;; esac; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           retention-days: 1
           name: mutants-${{ matrix.shard }}
           path: |
-            mutants.out/*.txt
-            mutants.out/outcomes.json
+            */mutants.out/*.txt
+            */mutants.out/outcomes.json
           if-no-files-found: ignore

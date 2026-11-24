@@ -1,0 +1,26 @@
+# cargo deny (see .github/workflows/quality.yml, job "deps"): known vulnerabilities, unmaintained
+# crates, duplicate versions and where crates come from. Licenses are not checked yet: the
+# repository has no license of its own to check against.
+
+[graph]
+all-features = false
+
+[advisories]
+# Unmaintained crates we depend on directly fail the check; the ones below are known and have a
+# plan (docs: code health audit, phase B).
+unmaintained = "workspace"
+ignore = [
+    # chrono: replaced by the core's own time code (desktop uses it only for local dates)
+    { id = "RUSTSEC-2026-0543", reason = "to be removed, see the code health plan" },
+    # ttf-parser: the stamp's font metrics; to move to skrifa
+    { id = "RUSTSEC-2026-0192", reason = "to be replaced, see the code health plan" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
