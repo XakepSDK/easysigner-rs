@@ -46,10 +46,10 @@ The same app as on the phone, laid out for a window:
   codes). Move it into the core as `kzsigner::app`; `ffi` becomes the UniFFI wrapper over it,
   and the window calls it directly. One place decides what a file is, what signing makes,
   and what a check says, so the two apps can't drift. ffi's tests move with it.
-- **One set of words.** The window reads its texts from the phone's string files
-  (`android/compose/src/main/res/values*/strings.xml`, turned into a Rust table at build
-  time), so the native-speaker check covers both apps once. `src/i18n.rs` and its table go
-  away for the window; the command line stays English.
+- **Its own words.** The window keeps its own text table (`src/i18n.rs`, Kazakh and
+  Russian next to the English), rewritten to say what the phone says, in the window's terms
+  ("this computer", "Show in folder"). No build link to the Android string files; the
+  native-speaker check reads both.
 - **Layout**: one centred column (about 560 px wide) in a resizable window, the phone's
   hierarchy and spacing; keyboard first (Tab order, Enter on the main button, Esc for Back).
 
@@ -94,7 +94,7 @@ Hello and Touch ID come in their own phase.
 ## Phases
 
 1. **App layer**: `kzsigner::app` from ffi; ffi wraps it; all tests green, no visible change.
-2. **Words and layout**: strings from the phone's files, the centred column, Home, Add key,
+2. **Words and layout**: the window's texts rewritten, the centred column, Home, Add key,
    Your keys (language, About), the vault in the app data folder with the password unlock.
 3. **Sign**: Sign, Signed, the NCA screens, save next to the original; the old Sign form and
    its options removed from the window.
@@ -116,11 +116,9 @@ Hello and Touch ID come in their own phase.
 
 - Risk: moving ffi's logic into the core touches the phone app; phase 1 changes no
   behaviour and the emulator tests guard it.
-- Generating the window's strings from Android XML ties the desktop build to the Android
-  folder; it's a plain file read, and the phone's strings already need the kk/ru review.
-- Some phone strings mention the phone ("this phone", "fingerprint or screen lock"); the
-  window needs its own variants for those (about 20), kept beside the shared ones.
-- Dropping the window's options removes features some people use (cards, detached .cms);
-  the command line keeps them, and checking them stays in the window.
+- Two text tables (phone, window) can drift; each new screen updates both, and the
+  native-speaker check covers both.
+- No users yet, so the window's options (cards, detached .cms, levels, stamp) go without a
+  migration; the command line keeps them, and checking such files stays in the window.
 - Not covered: hardware tokens (Kaztoken, eToken) that NCALayer supports; kzsigner doesn't
   read them today. Worth a separate look if people ask.
