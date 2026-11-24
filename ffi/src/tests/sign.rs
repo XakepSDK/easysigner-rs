@@ -114,6 +114,43 @@ fn inspect_says_what_signing_makes() {
 
     let d = inspect("key.p12".into(), file("keys/alice_rsa.p12"));
     assert_eq!(d.kind, DocKind::Key);
+
+    let d = inspect("act.xml".into(), file("app/act.xml"));
+    assert_eq!((d.kind, d.output), (DocKind::Xml, Output::InsideXml));
+    assert_eq!(d.output_name, "act-signed.xml");
+
+    // a .cms of a PDF says so, to show the PDF inside
+    let key = kzsigner::p12::open(&file("keys/alice_rsa.p12"), "Qwerty12", None).unwrap();
+    let e = kzsigner::Engine::new(test_cas());
+    let cms = e
+        .sign(&file("pdf/plain.pdf"), &key, false, None, None, false, None)
+        .unwrap()
+        .cms;
+    let d = inspect("Dogovor.pdf.cms".into(), cms);
+    assert_eq!(d.inner_kind, Some(DocKind::Pdf));
+    assert_eq!(d.output, Output::JoinCms);
+    // names: the extension comes off only when there is a name before it
+    assert_eq!(crate::sign::inner_name("Dogovor.PDF.CMS"), "Dogovor.PDF");
+    assert_eq!(crate::sign::inner_name("a.p7s"), "a");
+    assert_eq!(crate::sign::inner_name(".cms"), ".cms");
+    assert_eq!(crate::sign::inner_name("doc.txt"), "doc.txt");
+}
+
+#[test]
+fn signs_an_xml_inside_it() {
+    let g = Arc::new(SoftwareGuard::default());
+    let (v, id) = carol("xml", &g);
+    let nca = fake_nca(false);
+    let s = sign(&v, &nca, &id, "act.xml", file("app/act.xml")).unwrap();
+    assert_eq!(s.name, "act-signed.xml");
+    assert!(nca.engine.is_xml(&s.bytes), "an XML, not a .cms");
+    let rep = nca.engine.verify(&s.bytes, None, None).unwrap();
+    assert_eq!(rep.signers.len(), 1);
+    assert!(rep.signers[0].signature_ok);
+    // and a second signature can go into the same XML
+    let d = inspect(s.name, s.bytes);
+    assert_eq!(d.signers.len(), 1);
+    assert_eq!(d.output, Output::InsideXml);
 }
 
 #[test]

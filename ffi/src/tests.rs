@@ -266,6 +266,91 @@ fn expired_and_future_keys_cant_sign() {
     assert_eq!(cant_sign(c, c.not_before + 1), None);
     assert_eq!(cant_sign(c, c.not_after + 1), Some(CantSign::Expired));
     assert_eq!(cant_sign(c, c.not_before - 1), Some(CantSign::NotYetValid));
+    // both ends of the validity period still sign
+    assert_eq!(cant_sign(c, c.not_before), None);
+    assert_eq!(cant_sign(c, c.not_after), None);
+}
+
+/// The chip's own explanation reaches the vault as the chip gave it.
+#[test]
+fn the_chips_problem_passes_through() {
+    struct Said(Option<String>);
+    impl Chip for Said {
+        fn capabilities(&self) -> ChipCaps {
+            ChipCaps {
+                screen_lock: true,
+                biometric: false,
+                hardware: false,
+            }
+        }
+        fn create(&self, _: String, _: ChipUnlock) -> Result<ChipSecurity, ChipError> {
+            Err(ChipError::Cancelled)
+        }
+        fn seal(
+            &self,
+            _: String,
+            _: Vec<u8>,
+            _: Vec<u8>,
+            _: ChipPrompt,
+        ) -> Result<Vec<u8>, ChipError> {
+            Err(ChipError::Cancelled)
+        }
+        fn open(
+            &self,
+            _: String,
+            _: Vec<u8>,
+            _: Vec<u8>,
+            _: ChipPrompt,
+        ) -> Result<Vec<u8>, ChipError> {
+            Err(ChipError::Cancelled)
+        }
+        fn delete(&self, _: String) {}
+        fn problem(&self) -> Option<String> {
+            self.0.clone()
+        }
+    }
+    for said in [None, Some("no StrongBox on this phone".to_string())] {
+        let g = ChipGuard(Arc::new(Said(said.clone())));
+        assert_eq!(Guard::problem(&g), said);
+    }
+}
+
+/// The errors Kotlin shows read as something, not as an empty line.
+#[test]
+fn errors_and_version_read_as_text() {
+    assert_eq!(version(), kzsigner::version());
+    for (text, has) in [
+        (
+            CoreError::VaultFile {
+                detail: "disk full".into(),
+            }
+            .to_string(),
+            "disk full",
+        ),
+        (
+            ChipError::Failed {
+                detail: "chip busy".into(),
+            }
+            .to_string(),
+            "chip busy",
+        ),
+        (
+            AddKeyError::Failed {
+                detail: "bad file".into(),
+            }
+            .to_string(),
+            "bad file",
+        ),
+        (
+            SignError::Failed {
+                detail: "no room".into(),
+            }
+            .to_string(),
+            "no room",
+        ),
+    ] {
+        assert!(text.contains(has), "{text:?}");
+    }
 }
 
 /// A vault the egui app wrote (same file, same chip) reads and works here: the switch to the
