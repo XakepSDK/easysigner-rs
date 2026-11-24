@@ -1,884 +1,598 @@
-//! The Sign and Signed screens: the document, the key, how to sign, and saving.
+//! Sign and Signed.
 
+use std::path::{Path, PathBuf};
+
+use eframe::egui::{self, RichText};
+use kzsigner_ffi::{CantSign, ChipPrompt, Doc, DocKind, Output, SignError, Signed, Unlock};
+
+use super::home::{self, get_new_key};
+use super::text::{self, t, tf};
+use super::ui::{self, Tone};
 use super::*;
 
+/// Why the last Sign didn't sign.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SignProblem {
+    NoAnswer,
+    CantSign {
+        reason: CantSign,
+        from: i64,
+        to: i64,
+    },
+    WrongPassword {
+        cyrillic: bool,
+    },
+    Wait(u64),
+    KeyReset,
+    Cannot,
+    Failed(String),
+}
+
+/// What the document is, for its card: "PDF document", "Signed file (.cms)", ...
+fn kind_label(doc: &Doc) -> &'static str {
+    match doc.kind {
+        DocKind::Pdf => t("PDF document"),
+        DocKind::Xml => t("XML document"),
+        DocKind::Cms if doc.output == Output::Cannot => t("Signatures only (.cms)"),
+        DocKind::Cms => t("Signed file (.cms)"),
+        DocKind::Key => t("Signature key"),
+        DocKind::Other => t("Document"),
+    }
+}
+
+/// Names joined for a sentence: "A", "A and B", "A, B and C".
+fn names(doc: &Doc) -> String {
+    let n: Vec<&str> = doc.signers.iter().map(|s| s.name.as_str()).collect();
+    match n.as_slice() {
+        [] => String::new(),
+        [a] => a.to_string(),
+        [rest @ .., last] => tf("{} and {}", &[&rest.join(", "), last]),
+    }
+}
+
+/// What signing makes, and where it goes.
+fn output_text(doc: &Doc) -> String {
+    let saved = tf("Saved next to the original as {}.", &[&doc.output_name]);
+    let what = match doc.output {
+        Output::InsidePdf if doc.signers.is_empty() => {
+            t("Your signature goes inside this PDF, and a “Who signed” page is added at the end with your name and the signing time.").to_string()
+        }
+        Output::InsidePdf if doc.who_signed_page => {
+            tf("Your name is added next to {}'s on the “Who signed” page.", &[&names(doc)])
+        }
+        Output::InsidePdf => tf("Your signature is added inside this PDF, next to {}'s.", &[&names(doc)]),
+        Output::InsideXml => t("Your signature goes inside this XML file.").to_string(),
+        Output::NewCms => t("You get one .cms file with the document and your signature inside.").to_string(),
+        Output::JoinCms => tf("Your signature joins {}'s in the same file.", &[&names(doc)]),
+        Output::Cannot if doc.kind == DocKind::Xml => {
+            return t("This XML file is signed in a way that another signature would break. Ask the sender for a copy without signatures.").into();
+        }
+        Output::Cannot => {
+            return t("This .cms holds only signatures, not the document itself. Ask the sender for the .cms with the document inside.").into();
+        }
+    };
+    format!("{what} {saved}")
+}
+
 impl App {
-    pub(super) fn sign_screen(&mut self, ui: &mut egui::Ui) {
+    /// Opens `path` on Sign (Add key first when there is no key yet).
+    pub(super) fn start_sign_with(
+        &mut self,
+        path: PathBuf,
+        name: String,
+        bytes: Vec<u8>,
+        doc: Doc,
+    ) {
+        self.sign = Some(SignState {
+            path,
+            name,
+            bytes: Arc::new(bytes),
+            doc,
+            password: String::new(),
+            shown: false,
+            problem: None,
+            choosing_key: false,
+            request: 0,
+            focus: true,
+        });
+        self.signed = None;
+        if self.keys.is_empty() {
+            self.start_add_key(false);
+            self.add.back = Some(Screen::Home);
+        } else {
+            self.screen = Screen::Sign;
+        }
+    }
+
+    pub(super) fn sign_screen(&mut self, ui: &mut egui::Ui, wide: bool) {
         let ctx = ui.ctx().clone();
-        card(ui, |ui| {
-            step(ui, tr("1 · Document"));
-            if let Some(d) = self.sign.doc.clone() {
-                file_title(ui, &d);
-                if icons::button(
-                    ui,
-                    Icon::Open,
-                    tr("Open the document"),
-                    14.0,
-                    egui::vec2(0.0, 32.0),
-                    false,
-                )
-                .on_hover_text(tr(
-                    "Read it before you sign: it opens in the program your computer uses for it.",
-                ))
-                .clicked()
-                {
-                    self.view_doc(&ctx, d);
-                }
-            }
-            let doc = self.sign.doc.clone();
-            if let Some(f) = self.file_field(ui, "doc", tr("Document to sign"), &doc) {
-                self.set_doc(&ctx, f);
-            }
-            self.sign.doc_note.show(ui);
-            if self.sign.doc_is_detached_cms {
-                ui.add_space(4.0);
-                let o = self.sign.sign_original.clone();
-                if let Some(f) = self.file_field(
-                    ui,
-                    "sign_original",
-                    tr("This signature file does not contain the document. Choose the signed document:"),
-                    &o,
-                ) {
-                    self.sign.sign_original = Some(f);
-                }
-            }
-        });
-        ui.add_space(10.0);
-        card(ui, |ui| {
-            step(ui, tr("2 · Your signature key"));
-            if self.stored_mode() {
-                self.stored_key_card(ui);
-                return;
-            }
-            let kf = self.key.file.clone();
-            if let Some(f) = self.file_field(
-                ui,
-                "key",
-                tr("Key file (.p12), for example GOSTKNCA_… or RSA_…"),
-                &kf,
-            ) {
-                self.set_key_file(&ctx, f);
-            }
-            self.password_field(ui, Some(&ctx));
-            if self.key.aliases.len() > 1 {
-                let before = self.key.alias.clone();
-                ui.horizontal(|ui| {
-                    ui.label(tr("Key in the file:"));
-                    egui::ComboBox::from_id_salt("alias")
-                        .selected_text(self.key.alias.clone().unwrap_or_default())
-                        .show_ui(ui, |ui| {
-                            for a in self.key.aliases.clone() {
-                                ui.selectable_value(&mut self.key.alias, Some(a.clone()), a);
-                            }
-                        });
-                });
-                if self.key.alias != before {
-                    self.open_key(&ctx);
-                }
-            }
-            if self.key.opened.is_some() {
-                let tone = if self.key.ok { Tone::Good } else { Tone::Warn };
-                banner(ui, tone, |ui| self.key.note.show(ui));
-                self.saving_note(ui, &ctx);
-            } else {
-                self.key.note.show(ui);
-            }
-            if !self.stored.is_empty() && ui.link(tr("Use a key kept on this phone")).clicked() {
-                self.key.use_file = false;
-                self.key.password.clear();
-            }
-        });
-        ui.add_space(10.0);
-        card(ui, |ui| {
-            step(ui, tr("3 · How to save the signed document"));
-            self.how_to_save(ui);
-        });
-        ui.add_space(12.0);
-        let key_ready = match self.selected_stored() {
-            Some(k) => !k.level.needs_password() || !self.key.password.is_empty(),
-            None => self.key.opened.is_some() && !self.stored_mode(),
-        };
-        let can_sign = !self.sign.signing
-            && self.sign.doc.is_some()
-            && key_ready
-            && (!self.sign.doc_is_detached_cms || self.sign.sign_original.is_some());
-        let label = if self.sign.signing {
-            tr("Signing…")
-        } else {
-            tr("Sign")
-        };
-        let hint = if self.sign.doc.is_none() {
-            tr("Choose the document first.")
-        } else if !key_ready && self.stored_mode() {
-            tr("Type the key's password.")
-        } else if !key_ready {
-            tr("Choose your key file and type its password.")
-        } else if self.sign.doc_is_detached_cms && self.sign.sign_original.is_none() {
-            tr("Choose the signed document.")
-        } else {
-            ""
-        };
-        if self.narrow {
-            let w = ui.available_width();
-            let clicked = ui
-                .add_enabled_ui(can_sign, |ui| {
-                    icons::button(ui, Icon::Pen, label, 17.0, egui::vec2(w, 52.0), true)
-                })
-                .inner
-                .clicked();
-            if clicked {
-                self.sign(&ctx);
-            }
-            if !hint.is_empty() {
-                ui.vertical_centered(|ui| ui.label(Tone::Muted.text(ui, hint)));
-            }
-            ui.add_space(8.0);
-        } else {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let clicked = ui
-                        .add_enabled_ui(can_sign, |ui| {
-                            icons::button(ui, Icon::Pen, label, 16.0, egui::vec2(120.0, 38.0), true)
-                        })
-                        .inner
-                        .clicked();
-                    if clicked {
-                        self.sign(&ctx);
-                    }
-                    ui.label(Tone::Muted.text(ui, hint));
-                });
-            });
-        }
-    }
-
-    /// The three ways to sign, and their options.
-    pub(super) fn how_to_save(&mut self, ui: &mut egui::Ui) {
-        let kind = self.sign.doc_kind;
-        // a signed file keeps its own kind: a .cms gets another .cms signature, and so on
-        let locked = matches!(kind, DocKind::Cms | DocKind::Card | DocKind::SignedPdf);
-        let pdf_ok = matches!(kind, DocKind::Pdf | DocKind::SignedPdf);
-        // the second way: inside the document itself, a PDF's or an XML document's
-        let inside = if matches!(kind, DocKind::Xml | DocKind::SignedXml(_)) {
-            (
-                SignAs::Xml,
-                tr("Inside the XML"),
-                tr(
-                    "Keeps the XML document, with the signature inside it (XAdES). Only for XML files.",
-                ),
-                matches!(kind, DocKind::Xml | DocKind::SignedXml(true)),
-            )
-        } else {
-            (
-                SignAs::Pdf,
-                tr("Inside the PDF"),
-                tr("Still opens as a normal PDF. Only for PDF files."),
-                pdf_ok && (!locked || kind == DocKind::SignedPdf),
-            )
-        };
-        let options = [
-            (
-                SignAs::Cms,
-                tr("Signature file"),
-                tr("Saves a .cms file, like NCALayer and eGov. Recommended."),
-                !locked || kind == DocKind::Cms,
-            ),
-            inside,
-            (
-                SignAs::Card,
-                tr("Printable card"),
-                tr("A PDF that shows the document and who signed it, to print or send."),
-                !locked || kind == DocKind::Card,
-            ),
-        ];
-        // the three boxes as tall as the tallest one was on the last frame
-        let height_id = egui::Id::unique("how_to_save_height");
-        let height = ui
-            .ctx()
-            .data(|d| d.get_temp::<f32>(height_id))
-            .unwrap_or(60.0);
-        let mut tallest: f32 = 0.0;
-        let narrow = self.narrow;
-        let sign_as = &mut self.sign.sign_as;
-        let mut option =
-            |ui: &mut egui::Ui,
-             i: usize,
-             (value, title, desc, enabled): (SignAs, &str, &str, bool)| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    let id = ui.scope_id().with(("how", i));
-                    let hovered =
-                        enabled && ui.ctx().read_response(id).is_some_and(|r| r.hovered());
-                    let v = ui.visuals();
-                    let stroke = if *sign_as == value {
-                        egui::Stroke::new(2.0, v.selection.bg_fill)
-                    } else if hovered {
-                        egui::Stroke::new(1.0, v.widgets.hovered.fg_stroke.color)
-                    } else {
-                        v.widgets.noninteractive.bg_stroke
-                    };
-                    let frame = egui::Frame::new()
-                        .stroke(stroke)
-                        .corner_radius(10.0)
-                        .inner_margin(if narrow { 12.0 } else { 10.0 })
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            if !narrow {
-                                ui.set_min_height(height);
-                            }
-                            ui.add_enabled_ui(enabled, |ui| {
-                                ui.vertical(|ui| {
-                                    ui.radio_value(sign_as, value, RichText::new(title).strong());
-                                    ui.add(
-                                        egui::Label::new(Tone::Muted.text(ui, desc).size(12.5))
-                                            .wrap()
-                                            .selectable(false),
-                                    );
-                                })
-                                .response
-                                .rect
-                                .height()
-                            })
-                            .inner
-                        });
-                    tallest = tallest.max(frame.inner);
-                    // the whole box picks the option, not only its radio button
-                    let r = ui.interact(frame.response.rect, id, egui::Sense::click());
-                    if enabled {
-                        if r.clicked() {
-                            *sign_as = value;
-                        }
-                        if r.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                    }
-                });
-            };
-        if narrow {
-            for (i, o) in options.into_iter().enumerate() {
-                option(ui, i, o);
-                ui.add_space(4.0);
-            }
-        } else {
-            ui.columns(3, |cols| {
-                for (i, o) in options.into_iter().enumerate() {
-                    option(&mut cols[i], i, o);
-                }
-            });
-        }
-        if (tallest - height).abs() > 0.5 {
-            ui.ctx().data_mut(|d| d.insert_temp(height_id, tallest));
-            ui.ctx().request_repaint();
-        }
-        ui.add_space(6.0);
-        if self.sign.sign_as == SignAs::Card && kind != DocKind::Card {
-            ui.horizontal(|ui| {
-                ui.label(tr("Card language:"));
-                egui::ComboBox::from_id_salt("card_lang")
-                    .selected_text(card_lang_name(self.sign.card_lang))
-                    .show_ui(ui, |ui| {
-                        for l in [CardLang::Ru, CardLang::Kk, CardLang::KkRu] {
-                            ui.selectable_value(&mut self.sign.card_lang, l, card_lang_name(l));
-                        }
-                    });
-            });
-        }
-        egui::CollapsingHeader::new(tr("More options"))
-            .id_salt("more_options")
-            .show(ui, |ui| {
-                if self.sign.sign_as == SignAs::Card {
-                    ui.add_enabled(
-                        false,
-                        egui::Checkbox::new(
-                            &mut true,
-                            tr("Official signing time and key check from NCA (always on a card; needs internet)"),
-                        ),
-                    );
-                    if kind != DocKind::Card {
-                        ui.checkbox(
-                            &mut self.sign.card_qr,
-                            tr("Also print the signatures as QR codes"),
-                        );
-                    }
-                } else {
-                    ui.checkbox(
-                        &mut self.sign.timestamp,
-                        tr("Add the official signing time from NCA (needs internet; only a fingerprint of the document is sent)"),
-                    );
-                    ui.add_enabled(
-                        self.sign.timestamp && self.ocsp,
-                        egui::Checkbox::new(
-                            &mut self.sign.long_term,
-                            tr("Keep it checkable for years: store NCA's revocation answers in the signature and add an archive timestamp (long-term signature)"),
-                        ),
-                    );
-                }
-                if self.sign.sign_as == SignAs::Pdf {
-                    ui.checkbox(
-                        &mut self.sign.stamp,
-                        tr("Add a “Who signed” page at the end, with your name and the signing time"),
-                    );
-                }
-                if self.sign.sign_as == SignAs::Cms {
-                    ui.add_enabled(
-                        !self.sign.doc_is_cms,
-                        egui::Checkbox::new(
-                            &mut self.sign.detached,
-                            tr("Keep the document out of the signature file (then send both files together)"),
-                        ),
-                    );
-                }
-            });
-    }
-
-    // ------------------------------------------------------------------ Signed
-
-    pub(super) fn signed_screen(&mut self, ui: &mut egui::Ui) {
-        let Some(d) = self.sign.done.clone() else {
-            self.screen = Screen::Start;
+        let Some(s) = &self.sign else {
+            self.screen = Screen::Home;
             return;
         };
-        ui.vertical_centered(|ui| {
-            ui.add_space(24.0);
-            let good = Tone::Good.color(ui);
-            icons::badge(ui, Icon::Check, 80.0, good, good.gamma_multiply(0.14));
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(if d.cosigned {
-                    tr("Signature added")
+        ui.add_space(16.0);
+        let title = if s.doc.signers.is_empty() {
+            t("Sign this document?")
+        } else {
+            t("Add your signature?")
+        };
+        ui::title(ui, title);
+        ui.add_space(4.0);
+        if wide {
+            ui.columns(2, |c| {
+                c[0].spacing_mut().item_spacing.y = 10.0;
+                ui::plain(&mut c[0], |ui| self.document_card(&ctx, ui));
+                c[1].spacing_mut().item_spacing.y = 10.0;
+                ui::plain(&mut c[1], |ui| self.sign_side(&ctx, ui));
+            });
+        } else {
+            self.document_card(&ctx, ui);
+            self.sign_side(&ctx, ui);
+        }
+    }
+
+    /// The document: its name, kind, who signed it already, and Read it.
+    fn document_card(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let Some(s) = &self.sign else { return };
+        let mut read = false;
+        ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                icons::show(ui, Icon::File, 40.0, ui::ACCENT);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add(egui::Label::new(RichText::new(&s.name).size(18.0).strong()).wrap());
+                    let mut kind = kind_label(&s.doc).to_string();
+                    if let Some(inner) = &s.doc.inner_name
+                        && s.doc.output == Output::JoinCms
+                    {
+                        kind = format!("{kind} · {}", tf("Inside {}", &[inner]));
+                    }
+                    ui.label(ui::muted(kind));
+                });
+            });
+            for b in &s.doc.signers {
+                let when = b.signed_ms.map(text::date_time).unwrap_or_default();
+                let line = if when.is_empty() {
+                    tf("Already signed by {}", &[&b.name])
                 } else {
-                    tr("Signed")
-                })
-                .size(24.0)
-                .strong(),
-            );
-            ui.add_space(6.0);
-            let when = if d.timestamped {
-                tr("The signing time is confirmed by NCA.")
-            } else {
-                tr("The signing time comes from this computer's clock.")
-            };
-            ui.add(
-                egui::Label::new(format!(
-                    "{} {}",
-                    trf("{} is signed by {}.", &[&d.doc_name, &d.signer]),
-                    when
-                ))
-                .wrap(),
-            );
-            if d.signer_count > 1 {
-                ui.label(trf("Signatures in the file now: {}", &[&d.signer_count]));
+                    format!("{} · {}", tf("Already signed by {}", &[&b.name]), when)
+                };
+                ui.horizontal(|ui| {
+                    icons::show(ui, Icon::Check, 18.0, ui::GREEN);
+                    ui.add(egui::Label::new(line).wrap());
+                });
             }
-            ui.add_space(12.0);
+            ui.add_space(4.0);
+            read = ui::second_button(ui, t("Read it")).clicked();
+            ui.label(
+                ui::muted(t(
+                    "Opens in the computer's viewer, to check what you're signing.",
+                ))
+                .size(13.0),
+            );
         });
-        card(ui, |ui| {
-            file_title_with(ui, &d.saved, Icon::FileCheck);
-            {
-                ui.label(
-                    Tone::Muted.text(
-                        ui,
-                        trf(
-                            "Saved in {}",
-                            &[&d.saved
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default()],
-                        ),
+        if read {
+            let s = self.sign.as_ref().unwrap();
+            if s.doc.kind == DocKind::Cms {
+                let content = kzsigner_ffi::cms_content(s.bytes.to_vec()).unwrap_or_default();
+                let name = s.doc.inner_name.clone().unwrap_or_else(|| s.name.clone());
+                self.view(ctx, None, name, Arc::new(content));
+            } else {
+                let (p, n, b) = (s.path.clone(), s.name.clone(), s.bytes.clone());
+                self.view(ctx, Some(p), n, b);
+            }
+        }
+    }
+
+    /// Who signs, what signing makes, the password and Sign.
+    fn sign_side(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let key = self.key().cloned();
+        let busy = self.busy();
+        let keys = self.keys.clone();
+        let Some(s) = &mut self.sign else { return };
+
+        // the last attempt's problem, before anything else
+        let mut retry = false;
+        let problem = s.problem.clone().or_else(|| {
+            key.as_ref()
+                .and_then(|k| k.cant_sign)
+                .map(|r| SignProblem::CantSign {
+                    reason: r,
+                    from: 0,
+                    to: key.as_ref().unwrap().expires_ms,
+                })
+        });
+        match &problem {
+            Some(SignProblem::NoAnswer) => {
+                ui::notice(
+                    ui,
+                    Tone::Warn,
+                    t("Can't reach NCA right now"),
+                    t(
+                        "Nothing was signed. NCA confirms your key and records the official signing time, and it didn't answer. Check the internet connection and try again in a few minutes.",
                     ),
                 );
+                retry = true;
             }
-            let what = match d.sign_as {
-                SignAs::Cms if d.detached => tr(
-                    "Send this .cms file together with the document: it holds only your signature.",
-                ),
-                SignAs::Cms => {
-                    tr("Send this .cms file: it holds both the document and your signature.")
-                }
-                SignAs::Pdf => {
-                    tr("This PDF opens in any PDF viewer and carries your signature inside it.")
-                }
-                SignAs::Xml => tr("This XML document carries your signature inside it (XAdES)."),
-                SignAs::Card => tr(
-                    "This PDF shows the document and its signatures; the original file and the signatures are attached inside it.",
-                ),
-            };
-            ui.add(egui::Label::new(what).wrap());
-        });
-        for w in &d.warnings {
-            warning(ui, w);
-        }
-        ui.add_space(14.0);
-        action_row(ui, self.narrow, |ui, size, min| {
-            if icons::button(ui, Icon::Folder, tr("Show in folder"), size, min, true).clicked() {
-                self.dialogs.reveal(&d.saved);
+            Some(SignProblem::CantSign { reason, from, to }) => {
+                let (title, body) = home::cant_sign(*reason, *from, *to);
+                ui::notice(ui, Tone::Bad, &title, &body);
+                get_new_key(ui);
             }
-            if icons::button(ui, Icon::Pen, tr("Sign another document"), size, min, false).clicked()
-            {
-                self.sign.doc = None;
-                self.sign.doc_note = Note::default();
-                self.sign.doc_kind = DocKind::Other;
-                self.sign.doc_is_cms = false;
-                self.sign.doc_is_detached_cms = false;
-                self.sign.sign_original = None;
-                self.screen = Screen::Sign;
-            }
-        });
-    }
-
-    // ------------------------------------------------------------------ fields
-
-    pub fn set_doc(&mut self, ctx: &egui::Context, file: PathBuf) {
-        self.sign.doc = Some(file.clone());
-        self.sign.doc_request += 1;
-        let request = self.sign.doc_request;
-        self.sign.doc_is_detached_cms = false;
-        self.sign.doc_is_cms = false;
-        self.sign.doc_kind = DocKind::Other;
-        self.sign.sign_original = None;
-        self.sign.doc_note = Note::default();
-        self.background(ctx, move |e| {
-            let r = std::fs::read(&file)
-                .map_err(|err| format!("{}: {err}", file.display()))
-                .and_then(|data| {
-                    if e.is_signed_cms(&data) {
-                        let rep = e.verify(&data, None, None).map_err(|x| x.0)?;
-                        Ok((DocKind::Cms, Some(rep)))
-                    } else if e.card_original(&data).is_some() {
-                        let rep = e.verify(&data, None, None).map_err(|x| x.0)?;
-                        Ok((DocKind::Card, Some(rep)))
-                    } else if e.is_pdf(&data) {
-                        match e.verify(&data, None, None) {
-                            Ok(rep) if !rep.signers.is_empty() => {
-                                Ok((DocKind::SignedPdf, Some(rep)))
-                            }
-                            _ => Ok((DocKind::Pdf, None)),
-                        }
-                    } else if e.is_xml(&data) {
-                        match e.verify(&data, None, None) {
-                            Ok(rep) if !rep.signers.is_empty() => {
-                                Ok((DocKind::SignedXml(e.xml_has_room(&data)), Some(rep)))
-                            }
-                            Ok(_) => Ok((DocKind::Xml, None)),
-                            Err(_) => Ok((DocKind::Other, None)),
-                        }
-                    } else {
-                        Ok((DocKind::Other, None))
-                    }
-                });
-            Msg::DocChecked(request, r)
-        });
-    }
-
-    pub fn set_key_file(&mut self, ctx: &egui::Context, file: PathBuf) {
-        self.key.file = Some(file);
-        self.key.use_file = true;
-        self.key.saving = Saving::None;
-        self.key.aliases.clear();
-        self.key.alias = None;
-        self.open_key(ctx);
-    }
-
-    /// Opens the key with the current file, password and alias, unless that is already done.
-    pub fn open_key(&mut self, ctx: &egui::Context) {
-        let Some(f) = self.key.file.clone() else {
-            return;
-        };
-        let wanted = self.key.alias.clone();
-        let pw_hash = kzsigner::hex(&kzsigner::gost::sha256(self.key.password.as_bytes()));
-        let request = key_request(&f, wanted.as_deref(), &pw_hash);
-        if self.key.opened_for.as_deref() == Some(request.as_str()) && self.key.opened.is_some() {
-            return; // nothing changed (e.g. focus lost)
-        }
-        self.key.opened = None;
-        self.key.opened_for = None;
-        // any key still being opened is for an older file, password or alias: ignore it
-        self.key.request += 1;
-        let id = self.key.request;
-        if self.key.password.is_empty() {
-            self.key.note = Note::default();
-            return;
-        }
-        self.key.note = Note(vec![(tr("Opening key…").into(), Tone::Muted)]);
-        let pw = self.key.password.clone();
-        self.background(ctx, move |e| {
-            let r = std::fs::read(&f)
-                .map_err(|err| format!("{}: {err}", f.display()))
-                .and_then(|d| match e.open_key(&d, &pw, wanted.as_deref()) {
-                    Ok(k) => Ok((Box::new(k), None)),
-                    // typed on a Russian or Kazakh keyboard? NCA passwords are Latin only
-                    Err(x) => i18n::latin_keyboard(&pw)
-                        .and_then(|alt| {
-                            e.open_key(&d, &alt, wanted.as_deref())
-                                .ok()
-                                .map(|k| (Box::new(k), Some(alt)))
-                        })
-                        .ok_or(x.0),
-                });
-            Msg::KeyOpened(id, f, pw_hash, r)
-        });
-    }
-
-    pub(super) fn describe_key(&self, k: &Key) -> Note {
-        let s = self.engine.describe(&k.cert);
-        let text = |t: String| (t, Tone::Plain);
-        let mut n = vec![(s.name(), Tone::Strong)];
-        if let Some(iin) = s.get("IIN") {
-            n.push(text(trf("IIN {}", &[&iin])));
-        }
-        if let Some(o) = s.get("O") {
-            let bin = s
-                .get("BIN")
-                .map(|b| trf(" (BIN {})", &[&b]))
-                .unwrap_or_default();
-            n.push(text(format!("{o}{bin}")));
-        }
-        n.push(text(trf(
-            "Valid until {} · {}",
-            &[
-                &time::fmt(s.not_after),
-                &s.algorithm.clone().unwrap_or_default(),
-            ],
-        )));
-        let issuer = s.issuer_cn.clone().unwrap_or_default();
-        if s.chain_ok {
-            n.push((trf("Issuer: {} ✔", &[&issuer]), Tone::Plain));
-        } else {
-            n.push((
-                trf("Issuer: {} (not a trusted NCA RK issuer)", &[&issuer]),
+            Some(SignProblem::KeyReset) => ui::notice(
+                ui,
                 Tone::Bad,
-            ));
+                t("This key can't be opened on this computer anymore."),
+                t("Remove it in Your keys and add the key file again."),
+            ),
+            Some(SignProblem::Cannot) => ui::notice(ui, Tone::Bad, "", &output_text(&s.doc)),
+            Some(SignProblem::Failed(e)) => {
+                ui::notice(ui, Tone::Bad, &tf("Couldn't sign: {}", &[e]), "")
+            }
+            _ => {}
         }
-        if let Some(e) = &s.usage_error {
-            n.push((trf("This key may not sign documents: {}", &[e]), Tone::Bad));
-        }
-        for w in self.engine.key_warnings(&k.cert) {
-            n.push((format!("⚠ {w}"), Tone::Warn));
-        }
-        Note(n)
-    }
+        let can_sign = s.doc.output != Output::Cannot
+            && !matches!(
+                problem,
+                Some(SignProblem::CantSign { .. } | SignProblem::KeyReset | SignProblem::Cannot)
+            );
 
-    pub fn sign(&mut self, ctx: &egui::Context) {
-        let Some(doc) = self.sign.doc.clone() else {
-            return;
-        };
-        // a stored key is unlocked only now, after the fingerprint or PIN prompt
-        let stored = self.stored_signing();
-        if let Some(k) = self.selected_stored() {
-            self.key.holder = Some(k.name.clone());
-        }
-        let opened = self.key.opened.clone().filter(|_| stored.is_none());
-        if stored.is_none() && opened.is_none() {
-            return;
-        }
-        let key_alg = match (&opened, self.selected_stored()) {
-            (Some(k), _) => k.cert.key_alg(),
-            (None, Some(s)) => s.key_alg.clone(),
-            _ => return,
-        };
-        let det = self.sign.detached && !self.sign.doc_is_cms;
-        // NCA's timestamp server no longer serves GOST 34.310-2004 keys
-        let gost2004 = key_alg == kzsigner::gost::KEY_GOST2004;
-        let skip_tsa = self.sign.timestamp && gost2004 && self.sign.sign_as != SignAs::Card;
-        let tsa = (self.sign.timestamp && !skip_tsa).then(|| DEFAULT_TSA_URL.to_string());
-        // the long-term data comes from NCA's OCSP server: not when online checks are off
-        let long_term =
-            tsa.is_some() && self.ocsp && self.sign.long_term && self.sign.sign_as != SignAs::Card;
-        let page = self
-            .sign
-            .stamp
-            .then(|| kzsigner::pdf::whosigned::WhoSigned {
-                document: doc
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            });
-        // check that the key is not revoked (Order 500/НҚ p.4.3), unless online checks are off
-        let ocsp = self.ocsp.then(|| DEFAULT_OCSP_URL.to_string());
-        let sign_as = self.sign.sign_as;
-        let (qr, lang) = (self.sign.card_qr, self.sign.card_lang);
-        let card_cosign = self.sign.doc_kind == DocKind::Card;
-        let orig = if self.sign.doc_is_detached_cms {
-            self.sign.sign_original.clone()
-        } else {
-            None
-        };
-        self.sign.signing = true;
-        self.background(ctx, move |e| {
-            let r = (|| -> Result<SignResult, String> {
-                let input =
-                    std::fs::read(&doc).map_err(|err| format!("{}: {err}", doc.display()))?;
-                let key = match (opened, stored) {
-                    (Some(k), _) => k,
-                    (None, Some(s)) => Arc::new(s.unlock(&input)?),
-                    (None, None) => return Err(String::new()),
-                };
-                let o = orig
-                    .map(|p| std::fs::read(&p).map_err(|err| format!("{}: {err}", p.display())))
-                    .transpose()?;
-                let r = match sign_as {
-                    SignAs::Cms => e.sign(
-                        &input,
-                        &key,
-                        det,
-                        tsa.as_deref(),
-                        ocsp.as_deref(),
-                        true,
-                        o.as_deref(),
-                    ),
-                    SignAs::Xml => e.sign_xml(&input, &key, tsa.as_deref(), ocsp.as_deref()),
-                    SignAs::Pdf => match &page {
-                        Some(p) => {
-                            e.sign_pdf_page(&input, &key, tsa.as_deref(), ocsp.as_deref(), p)
+        // who signs
+        ui.label(ui::muted(t("You sign as")).size(14.0));
+        if let Some(k) = &key {
+            ui::card(ui, |ui| {
+                ui.label(RichText::new(&k.name).size(18.0).strong());
+                let w = home::who(k);
+                if !w.is_empty() {
+                    ui.label(ui::muted(w));
+                }
+                if keys.len() > 1 {
+                    if s.choosing_key {
+                        for o in &keys {
+                            let mut line = o.name.clone();
+                            if let Some(c) = &o.company {
+                                line = format!("{line} · {c}");
+                            }
+                            if ui.radio(o.id == k.id, line).clicked() {
+                                self.key_id = Some(o.id.clone());
+                                s.choosing_key = false;
+                                s.problem = None;
+                                s.password.clear();
+                            }
                         }
-                        None => e.sign_pdf(&input, &key, tsa.as_deref(), ocsp.as_deref()),
-                    },
-                    SignAs::Card => {
-                        let name = doc
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        // adding to a card keeps how it was made
-                        let (lang, qr) = if card_cosign {
-                            (None, None)
-                        } else {
-                            (Some(lang), Some(qr))
-                        };
-                        e.sign_card(
-                            &input,
-                            &name,
-                            &key,
-                            DEFAULT_TSA_URL,
-                            DEFAULT_OCSP_URL,
-                            lang,
-                            qr,
-                        )
+                    } else if ui::text_button(ui, t("Sign with another key")).clicked() {
+                        s.choosing_key = true;
                     }
                 }
-                .map_err(|x| x.0)?;
-                let mut r = r;
-                if skip_tsa {
-                    r.warnings.push(tr("No timestamp: NCA's timestamp server no longer serves GOST 34.310-2004 keys.").into());
-                }
-                if !long_term {
-                    return Ok(r);
-                }
-                // the document a detached .cms signs
-                let doc = if det { Some(&input) } else { o.as_ref() };
-                Ok(e.extend_new(
-                    r,
-                    doc.map(Vec::as_slice),
-                    kzsigner::ltv::Level::Lta,
-                    DEFAULT_TSA_URL,
-                    DEFAULT_OCSP_URL,
-                ))
-            })();
-            Msg::Signed(doc, sign_as, r)
-        });
-    }
+            });
+        }
 
-    pub(super) fn save_signed(&mut self, doc: &Path, sign_as: SignAs, r: SignResult) {
-        let suggested = if r.cosigned {
-            doc.to_path_buf()
-        } else {
-            match sign_as {
-                SignAs::Cms => PathBuf::from(format!("{}.cms", doc.display())),
-                SignAs::Pdf => kzsigner::signed_name(doc, "pdf"),
-                SignAs::Xml => kzsigner::signed_name(doc, "xml"),
-                SignAs::Card => PathBuf::from(format!("{}.card.pdf", doc.display())),
+        // what signing makes
+        if s.doc.output != Output::Cannot {
+            ui.label(output_text(&s.doc));
+        } else if problem != Some(SignProblem::Cannot) {
+            ui::notice(
+                ui,
+                Tone::Bad,
+                t("This file can't be signed"),
+                &output_text(&s.doc),
+            );
+        }
+
+        // the password, for a key kept under it
+        let needs_password = key
+            .as_ref()
+            .is_some_and(|k| matches!(k.unlock, Unlock::Password | Unlock::FingerprintAndPassword));
+        let mut enter = false;
+        if can_sign && needs_password {
+            let before = s.password.clone();
+            let r = ui::password(ui, &mut s.password, &mut s.shown, t("Key password"), "");
+            if s.focus {
+                r.request_focus();
+                s.focus = false;
             }
-        };
-        let Some(out) = self.dialogs.save(&suggested) else {
-            return;
-        };
-        if let Err(e) = std::fs::write(&out, &r.cms) {
-            self.message = Some((trf("Could not save: {}", &[&e]), true));
-            return;
+            if s.password != before
+                && matches!(
+                    s.problem,
+                    Some(SignProblem::WrongPassword { .. } | SignProblem::Wait(_))
+                )
+            {
+                s.problem = None;
+            }
+            enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            match &s.problem {
+                Some(SignProblem::WrongPassword { cyrillic }) => {
+                    ui::notice(ui, Tone::Bad, t("That password doesn't open this key."), "");
+                    if *cyrillic {
+                        ui::notice(
+                            ui,
+                            Tone::Warn,
+                            t("Is the keyboard in Russian or Kazakh?"),
+                            t("Switch it to English and try again."),
+                        );
+                    }
+                }
+                Some(SignProblem::Wait(n)) => {
+                    ui::notice(ui, Tone::Warn, &text::wait_seconds(*n), "")
+                }
+                _ => {}
+            }
         }
-        let doc_name = doc
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.sign.done = Some(Done {
-            saved: out,
-            doc_name,
-            signer: self.key.holder.clone().unwrap_or_default(),
-            cosigned: r.cosigned,
-            timestamped: r.timestamped || sign_as == SignAs::Card,
-            sign_as,
-            detached: sign_as == SignAs::Cms && self.sign.detached && !self.sign.doc_is_cms,
-            signer_count: r.signer_count,
-            warnings: r.warnings,
-        });
-        self.screen = Screen::Signed;
-    }
-}
-
-pub(super) fn card_lang_name(l: CardLang) -> &'static str {
-    match l {
-        CardLang::Ru => tr("Russian"),
-        CardLang::Kk => tr("Kazakh"),
-        CardLang::KkRu => tr("Kazakh and Russian"),
-    }
-}
-
-impl App {
-    /// A document check came back: what the document is, and how it can be signed.
-    pub(super) fn doc_checked(
-        &mut self,
-        ctx: &egui::Context,
-        id: u64,
-        r: Result<(DocKind, Option<VerifyReport>), String>,
-    ) {
-        if id != self.sign.doc_request {
-            return;
+        if can_sign {
+            let ready = !busy && (!needs_password || !s.password.is_empty());
+            let label = if busy {
+                t("Signing…")
+            } else if retry {
+                t("Try again")
+            } else if s.doc.signers.is_empty() {
+                t("Sign")
+            } else {
+                t("Add my signature")
+            };
+            let w = ui.available_width();
+            let clicked = ui
+                .add_enabled_ui(ready, |ui| ui::main_button(ui, label, w))
+                .inner
+                .clicked();
+            if busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(ui::muted(t("Asking NCA…")));
+                });
+            }
+            if ready && (clicked || enter) {
+                self.sign_now(ctx);
+            }
         }
-        let route = std::mem::take(&mut self.sign.route_signed_to_check);
-        if route
-            && matches!(
-                &r,
-                Ok((
-                    DocKind::Cms | DocKind::SignedPdf | DocKind::Card | DocKind::SignedXml(_),
-                    _
-                ))
+    }
+
+    fn sign_now(&mut self, ctx: &egui::Context) {
+        let Ok(v) = self.vault.clone() else { return };
+        let Some(key) = self.key().cloned() else {
+            return;
+        };
+        let id = self.next_request();
+        let nca = self.nca.clone();
+        let lang = kzsigner::i18n::lang().code().to_string();
+        let Some(s) = &mut self.sign else { return };
+        s.request = id;
+        s.problem = None;
+        let password = matches!(
+            key.unlock,
+            Unlock::Password | Unlock::FingerprintAndPassword
+        )
+        .then(|| s.password.clone());
+        let (name, bytes) = (s.name.clone(), s.bytes.clone());
+        let prompt = ChipPrompt {
+            title: tf("Sign {}", &[&name]),
+            subtitle: t("Confirm it's you to sign").into(),
+            detail: String::new(),
+        };
+        self.job(ctx, move || {
+            Msg::Signed(
+                id,
+                v.sign(nca, key.id, name, bytes.to_vec(), password, prompt, lang),
             )
-            && let Some(f) = self.sign.doc.take()
+        });
+    }
+
+    pub(super) fn signed_answer(&mut self, id: u64, r: Result<Signed, SignError>) {
+        let Some(s) = &mut self.sign else { return };
+        if s.request != id || self.screen != Screen::Sign {
+            return;
+        }
+        let cyrillic = s
+            .password
+            .chars()
+            .any(|c| ('\u{400}'..='\u{4ff}').contains(&c));
+        s.problem = Some(match r {
+            Ok(signed) => {
+                s.password.clear();
+                let dir = s.path.parent().map(Path::to_path_buf).unwrap_or_default();
+                let pdf = signed.name.to_lowercase().ends_with(".pdf");
+                let (path, next_to_original) = match save_new(&dir, &signed.name, &signed.bytes) {
+                    Ok(p) => (Some(p), true),
+                    // the folder can't be written (a read-only share, a phone): ask where
+                    Err(_) => (
+                        self.dialogs
+                            .save(&dir.join(&signed.name))
+                            .and_then(|p| std::fs::write(&p, &signed.bytes).ok().map(|_| p)),
+                        false,
+                    ),
+                };
+                self.signed = Some(SignedState {
+                    path,
+                    name: signed.name,
+                    bytes: signed.bytes,
+                    nca_time_ms: signed.nca_time_ms,
+                    pdf,
+                    next_to_original,
+                    copy_saved: None,
+                });
+                self.sign = None;
+                self.screen = Screen::Signed;
+                return;
+            }
+            Err(SignError::NoAnswer) => SignProblem::NoAnswer,
+            Err(SignError::KeyCantSign {
+                reason,
+                valid_from_ms,
+                expires_ms,
+            }) => SignProblem::CantSign {
+                reason,
+                from: valid_from_ms,
+                to: expires_ms,
+            },
+            Err(SignError::WrongPassword) => SignProblem::WrongPassword { cyrillic },
+            Err(SignError::Wait { seconds }) => SignProblem::Wait(seconds),
+            Err(SignError::Cancelled) => {
+                s.problem = None;
+                return;
+            }
+            Err(SignError::KeyReset | SignError::NoSuchKey) => SignProblem::KeyReset,
+            Err(SignError::Cannot) => SignProblem::Cannot,
+            Err(SignError::Failed { detail }) => SignProblem::Failed(detail),
+        });
+    }
+
+    pub(super) fn signed_screen(&mut self, ui: &mut egui::Ui) {
+        let Some(s) = &mut self.signed else {
+            self.screen = Screen::Home;
+            return;
+        };
+        ui.add_space(24.0);
+        let body = s
+            .nca_time_ms
+            .map(|ms| tf("Signing time confirmed by NCA, {}", &[&text::date_time(ms)]))
+            .unwrap_or_default();
+        ui::verdict(ui, Tone::Good, Icon::Check, t("Signed"), &body);
+        let mut reveal = None;
+        let mut save_copy = false;
+        ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                icons::show(ui, Icon::FileCheck, 36.0, ui::GREEN);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    match &s.path {
+                        Some(p) => {
+                            let n = p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            ui.add(egui::Label::new(RichText::new(n).size(18.0).strong()).wrap());
+                            let folder = p
+                                .parent()
+                                .map(|d| d.display().to_string())
+                                .unwrap_or_default();
+                            let where_ = if s.next_to_original {
+                                tf("Saved in {}, next to the original", &[&folder])
+                            } else {
+                                tf("Saved in {}", &[&folder])
+                            };
+                            ui.add(egui::Label::new(ui::muted(where_)).wrap());
+                        }
+                        None => {
+                            ui.label(RichText::new(&s.name).size(18.0).strong());
+                            ui.label(
+                                RichText::new(t("Not saved yet.")).color(Tone::Bad.colors().1),
+                            );
+                        }
+                    }
+                });
+            });
+        });
+        let body = if s.pdf {
+            t(
+                "The signature is inside the file. The boxes on the last page only show who signed; a printed copy is just paper.",
+            )
+        } else {
+            t("The signature is inside the file. A printed copy is just paper.")
+        };
+        ui::notice(ui, Tone::Info, t("Send the file, not a printout"), body);
+        if let Some(c) = &s.copy_saved {
+            ui::notice(ui, Tone::Good, &tf("Copy saved: {}", &[&c.display()]), "");
+        }
+        ui.add_space(6.0);
+        ui::actions(ui, |ui| {
+            match &s.path {
+                Some(p) => {
+                    if ui::main_button(ui, t("Show in folder"), 220.0).clicked() {
+                        reveal = Some(p.clone());
+                    }
+                    if ui::second_button(ui, t("Save a copy elsewhere")).clicked() {
+                        save_copy = true;
+                    }
+                }
+                None => {
+                    if ui::main_button(ui, t("Save"), 220.0).clicked() {
+                        save_copy = true;
+                    }
+                }
+            }
+            if ui::text_button(ui, t("Done")).clicked() {
+                self.screen = Screen::Home;
+            }
+        });
+        if let Some(p) = reveal {
+            self.dialogs.reveal(&p);
+        }
+        if save_copy {
+            let s = self.signed.as_mut().unwrap();
+            let suggested = s.path.clone().unwrap_or_else(|| PathBuf::from(&s.name));
+            if let Some(p) = self.dialogs.save(&suggested) {
+                match std::fs::write(&p, &s.bytes) {
+                    Ok(()) if s.path.is_none() => s.path = Some(p),
+                    Ok(()) => s.copy_saved = Some(p),
+                    Err(e) => {
+                        self.message = Some((tf("Couldn't save the file: {}", &[&e]), Tone::Bad))
+                    }
+                }
+            }
+        }
+        if self.screen == Screen::Home {
+            self.signed = None;
+        }
+    }
+}
+
+/// Writes `bytes` as `name` in `dir`, or "name (2).ext", "name (3).ext"... when taken: an
+/// existing file is never replaced.
+pub fn save_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let p = Path::new(name);
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for n in 1..1000 {
+        let candidate = if n == 1 {
+            dir.join(name)
+        } else {
+            dir.join(format!("{stem} ({n}){ext}"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
         {
-            // a signed file opened from the start: the person most likely wants to see
-            // who signed it (adding a signature is one click away, from Sign)
-            self.screen = Screen::Check;
-            self.sign.doc_note = Note::default();
-            self.set_cms(ctx, f);
-            return;
-        }
-        match r {
-            Ok((kind, rep)) => {
-                self.sign.doc_kind = kind;
-                if let Some(rep) = rep {
-                    let names: Vec<String> = rep.signers.iter().map(SignerReport::name).collect();
-                    self.sign.doc_note = Note(vec![
-                            (
-                                trf(
-                                    "Already signed ({}): {}.",
-                                    &[&rep.signers.len(), &names.join(", ")],
-                                ),
-                                Tone::Plain,
-                            ),
-                            (
-                                match kind {
-                                    DocKind::Card => tr(
-                                        "Your signature will be added to this document card.",
-                                    ),
-                                    DocKind::SignedPdf => {
-                                        tr("Your signature can be added inside this PDF.")
-                                    }
-                                    DocKind::SignedXml(true) => tr(
-                                        "Your signature can be added inside this XML document.",
-                                    ),
-                                    DocKind::SignedXml(false) => tr(
-                                        "Another signature cannot go inside this XML document without breaking the first one; yours can go into a .cms file or a card.",
-                                    ),
-                                    _ => tr("Your signature will be added to this file."),
-                                }
-                                .into(),
-                                Tone::Strong,
-                            ),
-                        ]);
-                    if kind == DocKind::Cms {
-                        self.sign.doc_is_cms = true;
-                        self.sign.detached = false;
-                        self.sign.doc_is_detached_cms = !rep.has_content;
-                    }
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(bytes).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&candidate);
+                    return Err(e);
                 }
-                self.sign.sign_as = match kind {
-                    DocKind::Cms => SignAs::Cms,
-                    DocKind::Card => SignAs::Card,
-                    DocKind::SignedPdf => SignAs::Pdf,
-                    DocKind::Xml => SignAs::Xml,
-                    DocKind::SignedXml(true) => SignAs::Xml,
-                    DocKind::SignedXml(false) => SignAs::Cms,
-                    DocKind::Other | DocKind::Pdf if self.sign.sign_as == SignAs::Xml => {
-                        SignAs::Cms
-                    }
-                    DocKind::Other if self.sign.sign_as == SignAs::Pdf => SignAs::Cms,
-                    _ => self.sign.sign_as,
-                };
+                return Ok(candidate);
             }
-            Err(e) => self.sign.doc_note = Note::error(&e),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
         }
     }
+    Err(std::io::Error::other("too many files with this name"))
+}
 
-    /// A key was opened (or could not be).
-    pub(super) fn key_opened(
-        &mut self,
-        ctx: &egui::Context,
-        id: u64,
-        f: &Path,
-        pw_hash: &str,
-        r: Result<(Box<Key>, Option<String>), String>,
-    ) {
-        if id != self.key.request {
-            return;
-        }
-        match r {
-            Ok((k, latin)) => {
-                let mut pw_hash = pw_hash.to_string();
-                if let Some(p) = latin {
-                    pw_hash = kzsigner::hex(&kzsigner::gost::sha256(p.as_bytes()));
-                    self.key.password = p;
-                }
-                let pw_hash = pw_hash.as_str();
-                if !k.other_aliases.is_empty() && self.key.aliases.is_empty() {
-                    self.key.aliases = std::iter::once(k.alias.clone())
-                        .chain(k.other_aliases.iter().cloned())
-                        .collect();
-                    self.key.alias = Some(k.alias.clone());
-                }
-                self.key.note = self.describe_key(&k);
-                let d = self.engine.describe(&k.cert);
-                self.key.holder = Some(d.name());
-                self.key.ok = d.chain_ok
-                    && d.usage_error.is_none()
-                    && self.engine.key_warnings(&k.cert).is_empty();
-                self.key.alias = Some(k.alias.clone());
-                self.key.opened_for = Some(key_request(f, Some(&k.alias), pw_hash));
-                self.key.opened = Some(Arc::new(*k));
-                self.key.saving = Saving::None;
-                self.save_opened_key(ctx);
-            }
-            Err(e) => {
-                self.key.holder = None;
-                self.key.note = Note::error(&e);
-            }
-        }
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    /// Signing finished: save the result, or say why it failed.
-    pub(super) fn signed(&mut self, doc: &Path, sign_as: SignAs, r: Result<SignResult, String>) {
-        self.sign.signing = false;
-        match r {
-            Ok(r) => self.save_signed(doc, sign_as, r),
-            // the fingerprint/PIN prompt was closed
-            Err(e) if e.is_empty() => {}
-            Err(e) => {
-                // NCA's time (on by default) and a card's key check need the internet
-                let offline_hint = e.contains(DEFAULT_TSA_URL) || e.contains(DEFAULT_OCSP_URL);
-                let e = if offline_hint && sign_as == SignAs::Card {
-                    format!(
-                        "{e}\n\n{}",
-                        tr(
-                            "A printable card needs the internet: it gets the official time and the key check from NCA. Check the connection and try again, or save a signature file instead."
-                        )
-                    )
-                } else if offline_hint {
-                    format!(
-                        "{e}\n\n{}",
-                        tr(
-                            "Getting the official time from NCA needs the internet. Check the connection and try again, or turn off the NCA time under More options."
-                        )
-                    )
-                } else {
-                    e
-                };
-                self.message = Some((e, true));
-            }
-        }
+    #[test]
+    fn a_signed_file_never_replaces_another() {
+        let dir = std::env::temp_dir().join(format!("kzsigner-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = save_new(&dir, "X-signed.pdf", b"1").unwrap();
+        let b = save_new(&dir, "X-signed.pdf", b"2").unwrap();
+        let c = save_new(&dir, "doc.txt.cms", b"3").unwrap();
+        let d = save_new(&dir, "doc.txt.cms", b"4").unwrap();
+        assert_eq!(a, dir.join("X-signed.pdf"));
+        assert_eq!(b, dir.join("X-signed (2).pdf"));
+        assert_eq!(c, dir.join("doc.txt.cms"));
+        assert_eq!(d, dir.join("doc.txt (2).cms"));
+        assert_eq!(std::fs::read(&a).unwrap(), b"1");
+        assert_eq!(std::fs::read(&b).unwrap(), b"2");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

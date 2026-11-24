@@ -4,8 +4,9 @@ The phone app's simple flow (compose-plan.md, the design's 24 screens and rules 
 to the desktop window. Still egui, on Windows, Linux and macOS, over the same core. The
 command line (`kzsigner sign`, `verify`, ...) keeps all its options; only the window changes.
 
-Status: reviewed 2026-11-24 (decisions below). Phase 1 done; the desktop screens are
-proposed for review before phase 2.
+Status: phases 1 to 4 done (2026-11-24): the window runs on the app layer with its own texts,
+keys kept on the computer under their password, Sign, Signed and Check as in the reviewed
+design. Next: phase 5 (Windows Hello), phase 6 (finish).
 
 ## What the desktop window is today
 
@@ -100,11 +101,11 @@ Hello and Touch ID come in their own phase.
 
 1. **Desktop crate** (done): the window and command line in `desktop/`, the core a library;
    all tests green, no visible change.
-2. **Words and layout**: the window on the app layer (`kzsigner-ffi`), its texts rewritten, the centred column, Home, Add key,
+2. **Words and layout** (done): the window on the app layer (`kzsigner-ffi`), its texts rewritten, the centred column, Home, Add key,
    Your keys (language, About), the vault in the app data folder with the password unlock.
-3. **Sign**: Sign, Signed, the NCA screens, save next to the original; the old Sign form and
+3. **Sign** (done): Sign, Signed, the NCA screens, save next to the original; the old Sign form and
    its options removed from the window.
-4. **Check**: the phone's verdict screens and details; the old report view removed.
+4. **Check** (done): the phone's verdict screens and details; the old report view removed.
 5. **OS unlock**: Windows Hello; Touch ID once there is a signing identity for macOS.
 6. **Finish**: accessibility pass (NVDA, Narrator, Orca, VoiceOver where possible, 200 %),
    every flow in kittest with screenshots, docs, a check on a real Windows PC and Linux.

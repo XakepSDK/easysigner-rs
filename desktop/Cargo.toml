@@ -17,6 +17,15 @@ path = "src/main.rs"
 
 [dependencies]
 kzsigner = { path = "..", default-features = false }
+# the app layer the phone app uses too: what a file is, what signing makes, what a check says,
+# and the key vault
+kzsigner-ffi = { path = "../ffi" }
+# the stand-in for the phone's key chip (gui/chip.rs)
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+getrandom = "0.4"
+zeroize = "1"
+# dates in the window, in this computer's time zone
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lexopt = "0.3"
 rpassword = "7"
 # file dialogs in the window
@@ -36,10 +45,11 @@ wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl", "
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [dev-dependencies]
-egui_kittest = "0.37"
+egui_kittest = { version = "0.37", features = ["snapshot"] }
+# the window tests' screenshots (tests/render)
+image = { version = "0.25", default-features = false, features = ["png"] }
 # the end-to-end tests look inside signed PDFs
 lopdf = { version = "0.47", default-features = false }
-zeroize = "1"
 
 [build-dependencies]
 winresource = { version = "0.1", default-features = false }

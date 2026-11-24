@@ -1,45 +1,53 @@
-//! The desktop window: a start screen with two choices (sign, check), each on its own screen.
-//! All crypto runs off the UI thread.
+//! The desktop window: the phone app's simple flow (one Sign action, the output decided by the
+//! input, no options) on screens made for a window. Behaviour comes from the app layer the
+//! phone uses too (`kzsigner-ffi`): what a file is, what signing makes, what a check says, and
+//! the key vault. See docs/desktop-plan.md.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
+use kzsigner::i18n::{self, Lang};
+use kzsigner_ffi::{Checked, Doc, KeyInfo, Nca, Signed, Vault};
 
 use crate::icons::{self, Icon};
-use kzsigner::i18n::{self, Lang, tr, trf};
-use kzsigner::p12::Key;
-use kzsigner::pdf::card::CardLang;
-use kzsigner::report::{SignResult, SignerReport, VerifyReport};
-use kzsigner::{DEFAULT_OCSP_URL, DEFAULT_TSA_URL, Engine, time};
 
 mod check;
+pub mod chip;
 mod files;
-mod keys;
-mod report;
+pub mod home;
 mod sign;
-mod widgets;
+pub mod text;
+pub mod ui;
 
 use files::*;
-use keys::Saving;
-pub use keys::{KeyStore, StoredKey};
-pub use report::report;
-use widgets::*;
+use text::{t, tf};
+use ui::Tone;
 
-/// File choosers: the system's own, or scripted ones in tests.
+/// What a file chooser is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pick {
+    /// A key file (.p12).
+    Key,
+    /// A document to sign.
+    Document,
+    /// A signed file to check.
+    Signed,
+    /// The document a detached .cms signs.
+    Original,
+}
+
+/// File choosers and the system's viewer: the system's own, or scripted ones in tests.
 pub trait Dialogs {
-    /// A file for the file field `field`. A chooser that can't answer at once (Android's)
-    /// returns None and hands the file over later through [`Dialogs::poll`].
-    fn open(&mut self, field: &'static str, start: Option<&Path>) -> Option<PathBuf>;
+    fn open(&mut self, what: Pick) -> Option<PathBuf>;
     /// The save location; the system dialog asks before replacing a file.
     fn save(&mut self, suggested: &Path) -> Option<PathBuf>;
     /// Shows a saved file in its folder.
     fn reveal(&mut self, path: &Path) {
         show_in_folder(path);
     }
-    /// Opens `path` in the system's viewer for its type, to read before signing (Digital Code
-    /// Art. 50: the signer sees what they sign). A failure to start the viewer is an error.
+    /// Opens `path` in the system's viewer for its type (the signer reads what they sign).
     fn view(&mut self, path: &Path) -> Result<(), String> {
         open_with_system(path).map_err(|e| e.to_string())
     }
@@ -47,34 +55,23 @@ pub trait Dialogs {
     fn view_dir(&self) -> PathBuf {
         std::env::temp_dir().join("kzsigner-view")
     }
-    /// Shows or hides the on-screen keyboard.
-    fn keyboard(&mut self, _show: bool) {}
-    /// What happened since the last frame: chosen files, files opened from other apps.
-    fn poll(&mut self) -> Option<DialogEvent> {
-        None
-    }
-}
-
-/// See [`Dialogs::poll`].
-pub enum DialogEvent {
-    /// A file chosen for the file field with this id.
-    Picked(&'static str, PathBuf),
-    /// A file opened in kzsigner from another app.
-    Open(PathBuf),
-    /// A message for the user: (text, is error).
-    Message(String, bool),
 }
 
 /// The operating system's file dialogs.
 pub struct SystemDialogs;
 
 impl Dialogs for SystemDialogs {
-    fn open(&mut self, _field: &'static str, start: Option<&Path>) -> Option<PathBuf> {
+    fn open(&mut self, what: Pick) -> Option<PathBuf> {
         let mut d = rfd::FileDialog::new();
-        if let Some(dir) = start.and_then(Path::parent) {
-            d = d.set_directory(dir);
-        }
-        d.pick_file()
+        d = match what {
+            Pick::Key => d
+                .set_title(t("Choose the key file"))
+                .add_filter(t("Signature key"), &["p12", "pfx", "P12", "PFX"]),
+            Pick::Document => d.set_title(t("Sign a document")),
+            Pick::Signed => d.set_title(t("Check a signature")),
+            Pick::Original => d.set_title(t("Choose the document")),
+        };
+        d.add_filter(t("All files"), &["*"]).pick_file()
     }
 
     fn save(&mut self, suggested: &Path) -> Option<PathBuf> {
@@ -89,9 +86,27 @@ impl Dialogs for SystemDialogs {
     }
 }
 
-/// Opens the window and runs until it is closed. `file`: a document, .cms or key to start with.
-pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
+/// Where kzsigner keeps its keys: `%APPDATA%\kzsigner`, `~/Library/Application
+/// Support/kzsigner`, or `$XDG_DATA_HOME/kzsigner` (`~/.local/share/kzsigner`).
+pub fn data_dir() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| Path::new(&h).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share")))
+    }?;
+    Some(base.join("kzsigner"))
+}
+
+/// Opens the window and runs until it is closed. `file`: a document, signed file or key to
+/// start with.
+pub fn run(nca: Arc<Nca>, file: Option<PathBuf>) -> Result<(), String> {
     i18n::set(i18n::detect());
+    let dir = data_dir().ok_or_else(|| t("Can't find the folder for your keys.").to_string())?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("kzsigner")
@@ -101,8 +116,8 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
                 width: 64,
                 height: 64,
             })
-            .with_inner_size([780.0, 720.0])
-            .with_min_inner_size([620.0, 480.0])
+            .with_inner_size([1040.0, 700.0])
+            .with_min_inner_size([480.0, 520.0])
             .with_drag_and_drop(true),
         centered: true,
         ..Default::default()
@@ -110,314 +125,222 @@ pub fn run(engine: Engine, file: Option<PathBuf>) -> Result<(), String> {
     eframe::run_native(
         "kzsigner",
         options,
-        Box::new(|cc| {
-            let mut app = App::new(engine, Box::new(SystemDialogs));
-            install_fonts(&cc.egui_ctx);
-            app.fonts_installed = true;
+        Box::new(move |cc| {
+            let _ = cc;
+            let mut app = App::new(nca, &dir, Box::new(SystemDialogs));
             app.pending_open = file;
-            Ok(Box::new(Window::new(app)))
+            Ok(Box::new(Window(app)))
         }),
     )
-    .map_err(|e| trf("Could not open the window: {}", &[&e]))
+    .map_err(|e| tf("Could not open the window: {}", &[&e]))
 }
 
 struct Window(App);
 
-impl Window {
-    fn new(app: App) -> Window {
-        Window(app)
-    }
-}
-
 impl eframe::App for Window {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| self.0.ui(ui));
+        self.0.ui(ui);
     }
 }
 
 /// The screen the window shows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
-    /// Two big choices: sign or check.
-    Start,
+    Home,
+    AddKey,
+    Keys,
+    About,
     Sign,
-    /// What signing made, and where it was saved.
     Signed,
     Check,
 }
 
+/// Work done off the window's thread.
 enum Msg {
-    DocChecked(u64, Result<(DocKind, Option<VerifyReport>), String>),
-    /// (request, file, password hash, the key and the password it opened with when that is
-    /// the typed one on a Latin keyboard)
-    KeyOpened(
-        u64,
-        PathBuf,
-        String,
-        Result<(Box<Key>, Option<String>), String>,
-    ),
-    /// (the key's id, the kept keys, why the security chip could not be used)
-    KeySaved(Result<(String, Vec<StoredKey>, Option<String>), kzsigner::vault::VaultError>),
-    KeysChanged(Result<Vec<StoredKey>, String>),
-    Signed(PathBuf, SignAs, Result<SignResult, String>),
-    Verified(u64, Result<VerifyReport, String>),
-    /// (file, (suggested name for the saved document, bytes))
-    Extracted(PathBuf, Result<(String, Vec<u8>), String>),
-    /// A document to read, for the request it answers.
-    ToView(ViewFor, Result<PathBuf, String>),
+    KeyAdded(Result<String, kzsigner_ffi::AddKeyError>),
+    Signed(u64, Result<Signed, kzsigner_ffi::SignError>),
+    Checked(u64, Box<Checked>),
+    View(Result<PathBuf, String>),
 }
 
-/// Which choice a document to read was asked for: the document to sign or the signed file
-/// to check, by request number. An answer for an older choice is dropped.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ViewFor {
-    Sign(u64),
-    Check(u64),
+/// The Add key screen.
+#[derive(Default)]
+pub struct AddForm {
+    pub file: Option<PathBuf>,
+    p12: Option<Vec<u8>>,
+    pub password: String,
+    shown: bool,
+    pub problem: Option<home::AddProblem>,
+    /// The screen Back returns to.
+    back: Option<Screen>,
+    /// Pick a document right after: the key was added from "Sign a document".
+    then_pick: bool,
 }
 
-/// What the chosen document is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum DocKind {
-    Other,
-    Cms,
-    Pdf,
-    SignedPdf,
-    Card,
-    Xml,
-    /// An XML document with a signature inside it; true when another one can go in too.
-    SignedXml(bool),
+/// A document opened to sign.
+pub struct SignState {
+    pub path: PathBuf,
+    pub name: String,
+    bytes: Arc<Vec<u8>>,
+    pub doc: Doc,
+    pub password: String,
+    shown: bool,
+    pub problem: Option<sign::SignProblem>,
+    choosing_key: bool,
+    /// Put the cursor in the password box on the next frame.
+    focus: bool,
+    /// The signature being made, to drop an answer for a document closed since.
+    request: u64,
 }
 
-/// What signing makes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SignAs {
-    /// A .cms file.
-    Cms,
-    /// The signature inside the PDF (PAdES).
-    Pdf,
-    /// A document card (ddcard).
-    Card,
-    /// The signature inside the XML document (XAdES).
-    Xml,
+/// A signed file just saved.
+pub struct SignedState {
+    /// Where it was saved; None when the person closed the save dialog.
+    pub path: Option<PathBuf>,
+    pub name: String,
+    bytes: Vec<u8>,
+    pub nca_time_ms: Option<i64>,
+    pdf: bool,
+    /// Saved next to the original (not where the person chose).
+    next_to_original: bool,
+    copy_saved: Option<PathBuf>,
 }
 
-/// A finished signing, for the Signed screen.
-#[derive(Clone, Debug)]
-pub struct Done {
-    /// Where the signed file was saved.
-    pub saved: PathBuf,
-    /// The document's file name.
-    pub doc_name: String,
-    pub signer: String,
-    pub cosigned: bool,
-    pub timestamped: bool,
-    pub sign_as: SignAs,
-    pub detached: bool,
-    pub signer_count: usize,
-    pub warnings: Vec<String>,
+/// A file being checked.
+pub struct CheckState {
+    pub path: PathBuf,
+    pub name: String,
+    bytes: Arc<Vec<u8>>,
+    /// The document a detached .cms signs.
+    pub original: Option<PathBuf>,
+    original_bytes: Option<Arc<Vec<u8>>>,
+    pub result: Option<Checked>,
+    pub details: bool,
+    request: u64,
 }
 
-/// The window's state and behaviour, without the native window around it (tests drive it).
 pub struct App {
-    engine: Arc<Engine>,
+    nca: Arc<Nca>,
+    vault: Result<Arc<Vault>, String>,
     dialogs: Box<dyn Dialogs>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
-    busy: usize,
-    fonts_installed: bool,
-    /// The text in each file field, by field id, while it is being typed.
-    path_fields: std::collections::HashMap<&'static str, PathField>,
-    /// A file given on the command line, opened on the first frame.
-    pub pending_open: Option<PathBuf>,
-    /// A file chosen for a file field (by its id) that the field has not taken yet.
-    picked: Option<(&'static str, PathBuf)>,
-    keyboard_shown: bool,
-    /// A phone-sized window: one column, full-width buttons.
-    narrow: bool,
+    jobs: usize,
+    requests: u64,
     pub screen: Screen,
-    /// A message box: (text, is error).
-    pub message: Option<(String, bool)>,
-    /// Online checks (OCSP, and the NCA time when signing); off for working offline.
-    pub ocsp: bool,
-    /// The Sign screen: the document and how to sign it.
-    pub sign: SignForm,
-    /// The key to sign with.
-    pub key: KeyForm,
-    /// The Check screen.
-    pub check: CheckForm,
-    /// Keys kept on this device (the phone app), and the window's copy of their list.
-    keys: Option<KeyStore>,
-    stored: Vec<StoredKey>,
+    pub keys: Vec<KeyInfo>,
+    /// The key that signs.
+    pub key_id: Option<String>,
+    pub add: AddForm,
+    pub sign: Option<SignState>,
+    pub signed: Option<SignedState>,
+    pub check: Option<CheckState>,
+    /// The key "Remove" was pressed for, waiting for the confirmation.
+    pub confirm_remove: Option<String>,
+    /// A message over the screen: (text, tone).
+    pub message: Option<(String, Tone)>,
+    /// A file to open on the next frame (the command line's).
+    pub pending_open: Option<PathBuf>,
+    /// The language chosen in the window; None: the computer's.
+    pub chosen_lang: Option<Lang>,
+    styled: bool,
 }
 
-/// The Sign screen's state: the document, the options, and the last signing.
-pub struct SignForm {
-    pub doc: Option<PathBuf>,
-    /// For a detached .cms to add a signature to: its document.
-    pub sign_original: Option<PathBuf>,
-    doc_note: Note,
-    doc_kind: DocKind,
-    doc_is_detached_cms: bool,
-    doc_is_cms: bool,
-    /// The number of the latest document check; older answers are dropped.
-    doc_request: u64,
-    /// The document was opened from the start screen: if it turns out to be signed already,
-    /// show the check instead.
-    route_signed_to_check: bool,
-    pub detached: bool,
-    pub timestamp: bool,
-    /// With the timestamp: a long-term signature (B-LTA), checkable after the certificate
-    /// expires.
-    pub long_term: bool,
-    /// Signing inside a PDF: a visible stamp on its last page.
-    pub stamp: bool,
-    pub sign_as: SignAs,
-    pub card_qr: bool,
-    pub card_lang: CardLang,
-    signing: bool,
-    /// The last signing, shown on the Signed screen.
-    pub done: Option<Done>,
-}
-
-impl Default for SignForm {
-    fn default() -> SignForm {
-        SignForm {
-            doc: None,
-            sign_original: None,
-            doc_note: Note::default(),
-            doc_kind: DocKind::Other,
-            doc_is_detached_cms: false,
-            doc_is_cms: false,
-            doc_request: 0,
-            route_signed_to_check: false,
-            detached: false,
-            timestamp: true,
-            long_term: true,
-            stamp: false,
-            sign_as: SignAs::Cms,
-            card_qr: false,
-            card_lang: CardLang::Ru,
-            signing: false,
-            done: None,
-        }
-    }
-}
-
-/// The key file, its password, and the key once opened.
-#[derive(Default)]
-pub struct KeyForm {
-    pub file: Option<PathBuf>,
-    pub password: String,
-    show_password: bool,
-    aliases: Vec<String>,
-    alias: Option<String>,
-    note: Note,
-    /// The opened key's holder, for the line under the key.
-    holder: Option<String>,
-    /// The opened key is from a trusted NCA RK issuer and has no warnings.
-    ok: bool,
-    opened: Option<Arc<Key>>,
-    /// The number of the latest opening; older answers are dropped.
-    request: u64,
-    /// What the opened key was opened with (see [`key_request`]).
-    opened_for: Option<String>,
-    /// The stored key chosen for signing (its id).
-    pub stored: Option<String>,
-    /// With stored keys: a key file is used instead.
-    pub use_file: bool,
-    /// Why the phone's security chip could not be used for the kept key, when it could not.
-    chip_problem: Option<String>,
-    /// Keeping the opened key file on the phone.
-    saving: Saving,
-    /// The stored key to remove once confirmed.
-    confirm_remove: Option<String>,
-}
-
-/// The Check screen's state.
-#[derive(Default)]
-pub struct CheckForm {
-    pub cms: Option<PathBuf>,
-    pub verify_original: Option<PathBuf>,
-    show_verify_original: bool,
-    /// The number of the latest check; older answers are dropped.
-    verify_request: u64,
-    pub result: Option<Result<VerifyReport, String>>,
-    checking: bool,
-}
+/// Files bigger than this are not read into memory to sign or check.
+const TOO_BIG: u64 = 512 << 20;
 
 impl App {
-    pub fn new(engine: Engine, dialogs: Box<dyn Dialogs>) -> App {
+    /// The window's state, with the key vault in `dir`.
+    pub fn new(nca: Arc<Nca>, dir: &Path, dialogs: Box<dyn Dialogs>) -> App {
+        let chip = Arc::new(chip::FileChip::new(dir.join("chip")));
+        let vault = std::fs::create_dir_all(dir)
+            .map_err(|e| e.to_string())
+            .and_then(|_| {
+                Vault::new(dir.join("keys.kzs").to_string_lossy().into_owned(), chip)
+                    .map_err(|e| e.to_string())
+            });
         let (tx, rx) = channel();
-        App {
-            engine: Arc::new(engine),
+        let mut app = App {
+            nca,
+            vault,
             dialogs,
             tx,
             rx,
-            busy: 0,
-            fonts_installed: false,
-            path_fields: Default::default(),
-            pending_open: None,
-            picked: None,
-            keyboard_shown: false,
-            narrow: false,
-            screen: Screen::Start,
+            jobs: 0,
+            requests: 0,
+            screen: Screen::Home,
+            keys: vec![],
+            key_id: None,
+            add: AddForm::default(),
+            sign: None,
+            signed: None,
+            check: None,
+            confirm_remove: None,
             message: None,
-            ocsp: true,
-            sign: SignForm::default(),
-            key: KeyForm::default(),
-            check: CheckForm::default(),
-            keys: None,
-            stored: Vec::new(),
-        }
+            pending_open: None,
+            chosen_lang: i18n::saved(),
+            styled: false,
+        };
+        app.reload_keys();
+        app
     }
 
-    /// Whether background work is running.
+    /// Work is running in the background.
     pub fn busy(&self) -> bool {
-        self.busy > 0
+        self.jobs > 0
     }
 
-    /// Runs `work` off the UI thread; its message comes back through the channel.
-    fn background(
-        &mut self,
-        ctx: &egui::Context,
-        work: impl FnOnce(&Engine) -> Msg + Send + 'static,
-    ) {
-        self.busy += 1;
-        let (tx, engine, ctx) = (self.tx.clone(), self.engine.clone(), ctx.clone());
+    fn job(&mut self, ctx: &egui::Context, f: impl FnOnce() -> Msg + Send + 'static) {
+        self.jobs += 1;
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let m = work(&engine);
-            let _ = tx.send(m);
+            let _ = tx.send(f());
             ctx.request_repaint();
         });
     }
 
+    fn next_request(&mut self) -> u64 {
+        self.requests += 1;
+        self.requests
+    }
+
+    fn reload_keys(&mut self) {
+        self.keys = match &self.vault {
+            Ok(v) => v.keys().keys,
+            Err(_) => vec![],
+        };
+        let still = |id: &String| self.keys.iter().any(|k| &k.id == id);
+        if !self.key_id.as_ref().is_some_and(still) {
+            self.key_id = self
+                .keys
+                .iter()
+                .find(|k| k.cant_sign.is_none())
+                .or(self.keys.first())
+                .map(|k| k.id.clone());
+        }
+    }
+
+    /// The key that signs.
+    pub fn key(&self) -> Option<&KeyInfo> {
+        let id = self.key_id.as_ref()?;
+        self.keys.iter().find(|k| &k.id == id)
+    }
+
+    /// The whole window, one frame.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if !self.fonts_installed {
+        if !self.styled {
             install_fonts(&ctx);
-            self.fonts_installed = true;
+            ui::style(&ctx);
+            self.styled = true;
         }
         while let Ok(m) = self.rx.try_recv() {
-            self.busy -= 1;
+            self.jobs -= 1;
             self.handle(&ctx, m);
-        }
-        if self.busy > 0 {
-            ctx.set_cursor_icon(egui::CursorIcon::Progress);
         }
         if let Some(f) = self.pending_open.take() {
             self.open_file(&ctx, f);
-        }
-        while let Some(e) = self.dialogs.poll() {
-            match e {
-                DialogEvent::Picked(field, f) => self.picked = Some((field, f)),
-                DialogEvent::Open(f) => self.open_file(&ctx, f),
-                DialogEvent::Message(m, error) => self.message = Some((m, error)),
-            }
-        }
-        let typing = ctx.egui_wants_keyboard_input();
-        if typing != self.keyboard_shown {
-            self.keyboard_shown = typing;
-            self.dialogs.keyboard(typing);
         }
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -426,339 +349,287 @@ impl App {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if let Some(f) = dropped.into_iter().find(|p| !p.as_os_str().is_empty()) {
+        if let Some(f) = dropped.into_iter().next() {
             self.open_file(&ctx, f);
         }
-        self.narrow = ui.available_width() < 600.0;
-        self.header(ui);
-        ui.separator();
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.back();
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(egui::Color32::WHITE))
             .show(ui, |ui| {
-                ui.add_space(6.0);
-                match self.screen {
-                    Screen::Start => self.start_screen(ui),
-                    Screen::Sign => self.sign_screen(ui),
-                    Screen::Signed => self.signed_screen(ui),
-                    Screen::Check => self.check_screen(ui),
-                }
-            });
-        self.remove_dialog(&ctx);
-        if let Some((text, error)) = self.message.clone() {
-            egui::Modal::new(egui::Id::unique("message")).show(&ctx, |ui| {
-                ui.set_max_width(460.0);
-                let title = if error {
-                    Tone::Bad.text(ui, tr("Something went wrong"))
-                } else {
-                    Tone::Strong.text(ui, "kzsigner")
-                };
-                ui.label(title.strong().size(16.0));
-                ui.add_space(6.0);
-                ui.label(text);
-                ui.add_space(10.0);
-                if ui.add(primary_button(tr("OK"))).clicked() {
-                    self.message = None;
-                }
-            });
-        }
-    }
-
-    /// [`App::ui`] kept clear of the screen's edges: `insets` is left, top, right, bottom in
-    /// points (a phone's status bar, gesture bar, camera cutout and keyboard).
-    pub fn ui_inset(&mut self, ui: &mut egui::Ui, insets: [f32; 4]) {
-        let [l, t, r, b] = insets.map(|v| v.max(0.0));
-        let full = ui.max_rect();
-        let min = full.min + egui::vec2(l, t);
-        let inner = egui::Rect::from_min_max(min, (full.max - egui::vec2(r, b)).max(min));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-            ui.set_clip_rect(inner);
-            self.ui(ui);
-        });
-    }
-
-    /// The phone's back button: closes the open question or message, else goes back to the
-    /// start screen. False on the start screen, where the app itself goes away.
-    pub fn back(&mut self) -> bool {
-        if self.key.confirm_remove.take().is_some() || self.message.take().is_some() {
-            return true;
-        }
-        if self.screen != Screen::Start {
-            self.screen = Screen::Start;
-            return true;
-        }
-        false
-    }
-
-    /// Back, the screen's title and the language menu.
-    fn header(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
-            ui.set_min_height(32.0);
-            if self.screen == Screen::Start {
-                icons::show(ui, Icon::Logo, 26.0, accent(ui));
-                ui.label(RichText::new("kzsigner").strong().size(18.0));
-            } else {
-                let back = if self.narrow {
-                    // an icon only, as phones show it
-                    let r = ui.add_sized([40.0, 40.0], egui::Button::new("").frame(false));
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Button, true, tr("Back"))
+                self.header(ui);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(8.0);
+                        let wide = ui.available_width() >= 860.0;
+                        let w = match self.screen {
+                            Screen::Sign | Screen::Check if wide => 960.0,
+                            Screen::Sign | Screen::Check => 600.0,
+                            _ => 620.0,
+                        };
+                        ui::centred(ui, w, |ui| {
+                            if let Some((m, tone)) = self.message.clone() {
+                                ui::notice(ui, tone, "", &m);
+                                if ui::text_button(ui, t("Close")).clicked() {
+                                    self.message = None;
+                                }
+                            }
+                            match self.screen {
+                                Screen::Home => self.home(ui),
+                                Screen::AddKey => self.add_key(ui),
+                                Screen::Keys => self.keys_screen(ui),
+                                Screen::About => self.about(ui),
+                                Screen::Sign => self.sign_screen(ui, wide),
+                                Screen::Signed => self.signed_screen(ui),
+                                Screen::Check => self.check_screen(ui, wide),
+                            }
+                            ui.add_space(24.0);
+                        });
                     });
-                    let color = ui.style().interact(&r).fg_stroke.color;
-                    let rect =
-                        egui::Rect::from_center_size(r.rect.center(), egui::vec2(24.0, 24.0));
-                    icons::paint(ui.painter(), rect, Icon::Back, color, 2.0);
-                    r.on_hover_text(tr("Back"))
-                } else {
-                    icons::button(
-                        ui,
-                        Icon::Back,
-                        tr("Back"),
-                        15.0,
-                        egui::vec2(0.0, 30.0),
-                        false,
-                    )
-                };
-                if back.clicked() {
-                    self.screen = Screen::Start;
-                }
-                let title = match self.screen {
-                    Screen::Check => tr("Check a signed file"),
-                    _ => tr("Sign a document"),
-                };
+            });
+        // a file held over the window
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let r = ctx.content_rect();
+            let p = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("kzsigner-drop"),
+            ));
+            p.rect_filled(r, 0.0, egui::Color32::from_white_alpha(225));
+            p.rect_stroke(
+                r.shrink(12.0),
+                18.0,
+                egui::Stroke::new(3.0, ui::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+            p.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                t("Drop the file to open it"),
+                egui::FontId::proportional(24.0),
+                ui::ACCENT,
+            );
+        }
+    }
+
+    /// The top bar: Back (or the name) on the left, the key on the right.
+    fn header(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.set_min_height(48.0);
+            if self.screen == Screen::Home || self.screen == Screen::Signed {
                 ui.add_space(8.0);
-                ui.label(RichText::new(title).strong().size(18.0));
+                icons::show(ui, Icon::Logo, 30.0, ui::ACCENT);
+                ui.label(RichText::new("kzsigner").size(20.0).strong());
+            } else {
+                let b = ui.add(
+                    egui::Button::new(RichText::new(t("Back")).size(15.0).strong())
+                        .frame(false)
+                        .min_size(egui::vec2(90.0, 44.0)),
+                );
+                icons::paint(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        b.rect.left_center() + egui::vec2(4.0, 0.0),
+                        egui::Vec2::splat(18.0),
+                    ),
+                    Icon::Back,
+                    ui::TEXT,
+                    2.0,
+                );
+                if b.clicked() {
+                    self.back();
+                }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut lang = i18n::lang();
-                egui::ComboBox::from_id_salt("language")
-                    .selected_text(lang.name())
-                    .show_ui(ui, |ui| {
-                        for l in Lang::ALL {
-                            ui.selectable_value(&mut lang, l, l.name());
-                        }
-                    })
-                    .response
-                    .on_hover_text(tr("Language"));
-                if lang != i18n::lang() {
-                    i18n::save(lang);
-                    self.set_language(&ctx, lang);
+                ui.add_space(8.0);
+                if matches!(self.screen, Screen::Keys | Screen::About | Screen::AddKey) {
+                    return;
+                }
+                let (label, to) = match self.key() {
+                    Some(k) => (k.name.clone(), Screen::Keys),
+                    None => (t("Add key").to_string(), Screen::AddKey),
+                };
+                let b = ui.add(
+                    egui::Button::new(RichText::new(&label).size(14.0).strong())
+                        .fill(ui::SURFACE)
+                        .stroke(egui::Stroke::new(1.0, ui::BORDER))
+                        .corner_radius(22.0)
+                        .min_size(egui::vec2(0.0, 40.0)),
+                );
+                let b = b.on_hover_text(t("Your keys"));
+                if b.clicked() {
+                    if to == Screen::AddKey {
+                        self.start_add_key(false);
+                    } else {
+                        self.confirm_remove = None;
+                        self.screen = Screen::Keys;
+                    }
                 }
             });
         });
-    }
-
-    // ------------------------------------------------------------------ Start
-
-    fn start_screen(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(tr("What do you want to do?"))
-                .size(22.0)
-                .strong(),
+        let r = ui.max_rect();
+        ui.painter().hline(
+            r.x_range(),
+            ui.cursor().top(),
+            egui::Stroke::new(1.0, ui::LINE),
         );
-        ui.add_space(14.0);
-        let sign = |ui: &mut egui::Ui| {
-            let c = accent(ui);
-            choice_card(
-                ui,
-                "start_sign",
-                tr("Sign a document"),
-                tr(
-                    "Put your electronic signature (ЭЦП) on a contract, a letter or any other file.",
-                ),
-                true,
-                (Icon::Pen, c),
-            )
-        };
-        let check = |ui: &mut egui::Ui| {
-            let c = Tone::Good.color(ui);
-            choice_card(
-                ui,
-                "start_check",
-                tr("Check a signed file"),
-                tr(
-                    "See who signed it and when, and whether it was changed. Get the document out of a .cms file.",
-                ),
-                false,
-                (Icon::ShieldCheck, c),
-            )
-        };
-        if self.narrow {
-            if sign(ui).clicked() {
-                self.screen = Screen::Sign;
-            }
-            ui.add_space(12.0);
-            if check(ui).clicked() {
-                self.screen = Screen::Check;
-            }
-        } else {
-            ui.columns(2, |cols| {
-                let left = egui::Layout::top_down(egui::Align::Min);
-                if cols[0].with_layout(left, sign).inner.clicked() {
-                    self.screen = Screen::Sign;
-                }
-                if cols[1].with_layout(left, check).inner.clicked() {
-                    self.screen = Screen::Check;
-                }
-            });
-        }
-        ui.add_space(18.0);
-        card(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(10.0);
-                icons::show(ui, Icon::Download, 28.0, Tone::Muted.color(ui));
-                ui.add_space(4.0);
-                ui.label(RichText::new(tr("Or drop a file onto this window")).size(16.0));
-                ui.add_space(4.0);
-                ui.label(Tone::Muted.text(
-                    ui,
-                    tr("A document opens for signing, a signed file is checked, and a key file (.p12) is remembered for signing."),
-                ));
-                ui.add_space(12.0);
-            });
-        });
     }
 
-    // ------------------------------------------------------------------ Sign
+    /// Back, as the Back button or Esc. False on Home.
+    pub fn back(&mut self) -> bool {
+        self.message = None;
+        self.screen = match self.screen {
+            Screen::Home => return false,
+            Screen::AddKey => self.add.back.unwrap_or(Screen::Home),
+            Screen::About => Screen::Keys,
+            Screen::Signed => {
+                self.signed = None;
+                Screen::Home
+            }
+            Screen::Sign => {
+                self.sign = None;
+                Screen::Home
+            }
+            Screen::Check => {
+                self.check = None;
+                Screen::Home
+            }
+            Screen::Keys => Screen::Home,
+        };
+        true
+    }
 
-    /// A file field: label, path, Browse button. The path can also be typed or pasted; it is
-    /// taken when the field loses focus or Enter is pressed. Returns a newly chosen file.
-    fn file_field(
-        &mut self,
-        ui: &mut egui::Ui,
-        id: &'static str,
-        label: &str,
-        current: &Option<PathBuf>,
-    ) -> Option<PathBuf> {
-        let mut chosen = match self.picked.take() {
-            Some((f, p)) if f == id => Some(p),
-            other => {
-                self.picked = other;
+    /// A dropped file, or one opened with kzsigner: a key goes to Add key, a detached .cms to
+    /// Check (or, while a check waits for it, the document it signs), anything else to Sign
+    /// (a signed file asks "Add your signature?"). On the Check screen, a file is checked.
+    pub fn open_file(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let Some((name, bytes)) = self.read(&path) else {
+            return;
+        };
+        let doc = kzsigner_ffi::inspect(name.clone(), bytes.clone());
+        if doc.kind == kzsigner_ffi::DocKind::Key || self.screen == Screen::AddKey {
+            if self.screen != Screen::AddKey {
+                self.start_add_key(false);
+            }
+            self.set_key_file(path, bytes);
+            return;
+        }
+        if self.screen == Screen::Check {
+            let waiting = self.check.as_ref().is_some_and(|c| {
+                c.result
+                    .as_ref()
+                    .is_some_and(|r| r.verdict == kzsigner_ffi::Verdict::NeedsDocument)
+            });
+            if waiting && doc.kind != kzsigner_ffi::DocKind::Cms {
+                self.set_original(ctx, path, bytes);
+            } else {
+                self.start_check_with(ctx, path, name, bytes);
+            }
+            return;
+        }
+        if doc.kind == kzsigner_ffi::DocKind::Cms && doc.output == kzsigner_ffi::Output::Cannot {
+            self.start_check_with(ctx, path, name, bytes);
+            return;
+        }
+        self.start_sign_with(path, name, bytes, doc);
+    }
+
+    /// The file's name and content, or a message saying why it can't be read.
+    fn read(&mut self, path: &Path) -> Option<(String, Vec<u8>)> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "document".into());
+        let r = std::fs::metadata(path).and_then(|m| {
+            if m.len() > TOO_BIG {
+                Err(std::io::Error::other(t("This file is too big.")))
+            } else {
+                std::fs::read(path)
+            }
+        });
+        match r {
+            Ok(b) => Some((name, b)),
+            Err(e) => {
+                self.message = Some((tf("Can't read {}: {}", &[&name, &e]), Tone::Bad));
                 None
             }
-        };
-        let l = ui.label(label);
-        let field = self.path_fields.entry(id).or_default();
-        if field.shown != *current {
-            // chosen another way (Browse, drop, command line): show it
-            field.text = current
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            field.shown = current.clone();
-        }
-        let dialogs = &mut self.dialogs;
-        ui.horizontal(|ui| {
-            let w = ui.available_width() - 90.0;
-            let r = ui
-                .add_sized(
-                    [w.max(100.0), 22.0],
-                    egui::TextEdit::singleline(&mut field.text),
-                )
-                .labelled_by(l.id);
-            if r.lost_focus() {
-                // "Copy as path" in Windows Explorer adds quotes
-                let typed = field.text.trim().trim_matches('"').trim();
-                let typed = (!typed.is_empty()).then(|| PathBuf::from(typed));
-                if typed.is_some() && typed != *current {
-                    chosen = typed;
-                } else if typed.is_none() {
-                    // emptied: put back the current file
-                    field.shown = current.clone();
-                    field.text = current
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default();
-                }
-            }
-            if ui.button(tr("Browse…")).on_hover_text(label).clicked() {
-                chosen = dialogs.open(id, current.as_deref());
-            }
-        });
-        chosen
-    }
-
-    /// A dropped or command-line file: a key goes to the key field, a signed file is checked
-    /// (unless a document is being signed, where it is co-signed), anything else is signed.
-    /// (A PDF is signed: it may be a document to sign, a signed PDF or a card.)
-    pub fn open_file(&mut self, ctx: &egui::Context, f: PathBuf) {
-        let ext = f
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        if ext == "p12" || ext == "pfx" {
-            if self.screen != Screen::Sign {
-                self.screen = Screen::Sign;
-            }
-            self.set_key_file(ctx, f);
-        } else if self.screen == Screen::Check || (self.screen != Screen::Sign && ext == "cms") {
-            self.screen = Screen::Check;
-            self.set_cms(ctx, f);
-        } else {
-            self.sign.route_signed_to_check = self.screen == Screen::Start;
-            self.screen = Screen::Sign;
-            self.set_doc(ctx, f);
         }
     }
 
-    /// Switches the window's language and redoes what holds translated text: the key details,
-    /// the document check and the verification report.
-    pub fn set_language(&mut self, ctx: &egui::Context, lang: Lang) {
-        i18n::set(lang);
-        if let Some(k) = self.key.opened.clone() {
-            self.key.note = self.describe_key(&k);
-        } else if self.key.file.is_some() && !self.key.password.is_empty() {
-            self.key.opened_for = None;
-            self.open_key(ctx);
+    /// Switches the window's language (None: the computer's) and remembers it.
+    pub fn set_language(&mut self, ctx: &egui::Context, lang: Option<Lang>) {
+        self.chosen_lang = lang;
+        match lang {
+            Some(l) => {
+                i18n::save(l);
+                i18n::set(l);
+            }
+            None => {
+                i18n::forget();
+                i18n::set(i18n::detect());
+            }
         }
-        if let Some(d) = self.sign.doc.clone() {
-            let original = self.sign.sign_original.clone();
-            self.set_doc(ctx, d);
-            self.sign.sign_original = original;
-        }
-        if self.check.result.is_some() {
-            self.verify(ctx);
+        // a check's details are in the language it was made in
+        if let Some(c) = &self.check
+            && c.result.is_some()
+        {
+            self.recheck(ctx);
         }
     }
-
-    // ------------------------------------------------------------------ Check
 
     fn handle(&mut self, ctx: &egui::Context, m: Msg) {
         match m {
-            Msg::DocChecked(id, r) => self.doc_checked(ctx, id, r),
-            Msg::KeyOpened(id, f, pw_hash, r) => self.key_opened(ctx, id, &f, &pw_hash, r),
-            Msg::KeySaved(r) => self.key_saved(r),
-            Msg::KeysChanged(r) => self.keys_changed(r),
-            Msg::Signed(doc, sign_as, r) => self.signed(&doc, sign_as, r),
-            Msg::Verified(id, r) => self.verified(id, r),
-            Msg::Extracted(file, r) => match r {
-                Ok((name, d)) => self.save_extracted(&file, name, d),
-                Err(e) => self.message = Some((e, true)),
-            },
-            // another document has been chosen since: don't show the old one
-            Msg::ToView(ViewFor::Sign(id), _) if id != self.sign.doc_request => {}
-            Msg::ToView(ViewFor::Check(id), _) if id != self.check.verify_request => {}
-            Msg::ToView(_, r) => {
+            Msg::KeyAdded(r) => self.key_added(ctx, r),
+            Msg::Signed(id, r) => self.signed_answer(id, r),
+            Msg::Checked(id, r) => {
+                if let Some(c) = &mut self.check
+                    && c.request == id
+                {
+                    c.result = Some(*r);
+                }
+            }
+            Msg::View(r) => {
                 if let Err(e) = r.and_then(|f| {
                     check_viewable(&f)?;
                     self.dialogs.view(&f)
                 }) {
-                    self.message = Some((trf("Could not open the document: {}", &[&e]), true));
+                    self.message = Some((tf("Could not open the document: {}", &[&e]), Tone::Bad));
                 }
             }
         }
     }
-}
 
-/// What a key was opened with: file, alias and a hash of the password.
-fn key_request(file: &Path, alias: Option<&str>, pw_hash: &str) -> String {
-    format!("{}|{}|{pw_hash}", file.display(), alias.unwrap_or(""))
+    /// Opens `content` (a file named `name`) in the system's viewer, from a private copy when
+    /// it is not the file `path` itself.
+    fn view(
+        &mut self,
+        ctx: &egui::Context,
+        path: Option<PathBuf>,
+        name: String,
+        content: Arc<Vec<u8>>,
+    ) {
+        let dir = self.dialogs.view_dir();
+        self.job(ctx, move || {
+            let r = match path {
+                Some(p) => std::fs::File::open(&p)
+                    .map_err(|e| format!("{}: {e}", p.display()))
+                    .and_then(|f| for_viewing(&dir, &p, f)),
+                None => {
+                    let mut c = std::io::Cursor::new(content.as_slice());
+                    viewable_name(&name, &mut c)
+                        .and_then(|n| write_for_viewing(&dir, &n, content.as_slice()))
+                }
+            };
+            Msg::View(r)
+        });
+    }
 }
 
 /// Noto Sans cut down to Latin and Cyrillic (with Kazakh), and ✔ ✖ ⚠ from Noto Emoji: 51 KB
 /// instead of egui's bundled 650 KB of fonts. See assets/README.md.
-fn install_fonts(ctx: &egui::Context) {
+pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::empty();
     for (name, data) in [
         (
@@ -780,187 +651,4 @@ fn install_fonts(ctx: &egui::Context) {
             .insert(family, vec!["text".into(), "symbols".into()]);
     }
     ctx.set_fonts(fonts);
-}
-
-#[derive(Default)]
-struct PathField {
-    text: String,
-    /// The path the text was last set from.
-    shown: Option<PathBuf>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn names_for_taken_out_documents() {
-        let f = Path::new("/x/contract.pdf.cms");
-        assert_eq!(original_name(f, None), "contract.pdf");
-        assert_eq!(original_name(Path::new("/x/a.p7s"), None), "a.p7s.original");
-        assert_eq!(original_name(f, Some("../../etc/passwd")), "passwd");
-        assert_eq!(original_name(f, Some("dir\\note.txt")), "note.txt");
-        let ok = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d)).unwrap();
-        assert_eq!(ok("contract.pdf", b"%PDF-1.7"), "contract.pdf");
-        assert_eq!(ok("contract", b"%PDF-1.7"), "contract.pdf");
-        assert_eq!(
-            ok("a.p7s.original", "текст".as_bytes()),
-            "a.p7s.original.txt"
-        );
-        // a card can't name a Windows stream or hide the real extension
-        assert_eq!(original_name(f, Some("a.exe:b.pdf")), "a.exe_b.pdf");
-        assert_eq!(
-            original_name(f, Some("invoice\u{202e}fdp.exe")),
-            "invoice_fdp.exe"
-        );
-    }
-
-    /// A zip holding `names` (each with empty content).
-    fn zip_of(names: &[(&str, &[u8])]) -> Vec<u8> {
-        use std::io::Write as _;
-        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (n, d) in names {
-            z.start_file(*n, zip::write::SimpleFileOptions::default())
-                .unwrap();
-            z.write_all(d).unwrap();
-        }
-        z.finish().unwrap().into_inner()
-    }
-
-    #[test]
-    fn the_content_decides_how_a_file_is_opened() {
-        let name = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d));
-        // a program, whatever it is called, is never opened
-        let exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff";
-        for n in ["a.exe", "a.pdf", "a.docx", "a.txt", "noext"] {
-            assert!(name(n, exe).is_err(), "{n}");
-        }
-        assert!(name("a.bin", &[0, 1, 2, 3]).is_err());
-        // a document under a dangerous name gets its real type added
-        assert_eq!(name("invoice.exe", b"%PDF-1.7").unwrap(), "invoice.exe.pdf");
-        assert_eq!(
-            name("a.lnk", b"\x89PNG\r\n\x1a\n....").unwrap(),
-            "a.lnk.png"
-        );
-        // scripts and pages are text, shown as text, never run or rendered
-        assert_eq!(
-            name("a.hta", b"<html><script>x()</script>").unwrap(),
-            "a.hta.txt"
-        );
-        assert_eq!(name("a.js", b"WScript.Shell").unwrap(), "a.js.txt");
-        assert_eq!(name("a.xml", b"<svg onload='x()'/>").unwrap(), "a.xml.txt");
-        assert_eq!(name("a.csv", b"=cmd|' /c calc'!A1").unwrap(), "a.csv.txt");
-        assert_eq!(
-            name("a.xml", b"<?xml version='1.0'?><doc/>").unwrap(),
-            "a.xml"
-        );
-        assert_eq!(name("data", b"\xef\xbb\xbf<doc/>").unwrap(), "data.xml");
-        // windows-1251 text
-        assert_eq!(
-            name("a.txt", &[0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]).unwrap(),
-            "a.txt"
-        );
-        // Office files by what the zip holds, refused with macros
-        let docx = zip_of(&[("[Content_Types].xml", b""), ("word/document.xml", b"")]);
-        assert_eq!(name("a.docx", &docx).unwrap(), "a.docx");
-        assert_eq!(name("a.exe", &docx).unwrap(), "a.exe.docx");
-        let xlsx = zip_of(&[("[Content_Types].xml", b""), ("xl/workbook.xml", b"")]);
-        assert_eq!(name("a.docx", &xlsx).unwrap(), "a.docx.xlsx");
-        let docm = zip_of(&[
-            ("[Content_Types].xml", b""),
-            ("word/document.xml", b""),
-            ("word/vbaProject.bin", b""),
-        ]);
-        assert!(name("a.docx", &docm).is_err());
-        let odt = zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.text")]);
-        assert_eq!(name("a.odt", &odt).unwrap(), "a.odt");
-        assert_eq!(
-            name("a.jar", &zip_of(&[("x.class", b"")])).unwrap(),
-            "a.jar.zip"
-        );
-        // old Office files keep the claimed one of doc/xls/ppt
-        let ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest";
-        assert_eq!(name("a.xls", ole).unwrap(), "a.xls");
-        assert_eq!(name("a.exe", ole).unwrap(), "a.exe.doc");
-    }
-
-    /// Counts the bytes read through it.
-    struct Counting<R> {
-        inner: R,
-        read: usize,
-    }
-
-    impl<R: std::io::Read> std::io::Read for Counting<R> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let n = self.inner.read(buf)?;
-            self.read += n;
-            Ok(n)
-        }
-    }
-
-    impl<R: std::io::Seek> std::io::Seek for Counting<R> {
-        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-            self.inner.seek(pos)
-        }
-    }
-
-    #[test]
-    fn a_large_document_is_not_read_whole() {
-        // a Word file with a 20 MB picture inside: only its start and table of contents are read
-        let big = vec![7u8; 20 << 20];
-        let docx = zip_of(&[
-            ("[Content_Types].xml", b""),
-            ("word/media/image1.png", &big),
-            ("word/document.xml", b""),
-        ]);
-        let mut r = Counting {
-            inner: std::io::Cursor::new(&docx),
-            read: 0,
-        };
-        assert_eq!(viewable_name("a.docx", &mut r).unwrap(), "a.docx");
-        assert!(r.read < 1 << 20, "read {} bytes", r.read);
-        // a PDF (it might be a card) and other documents: just the start
-        let mut pdf = b"%PDF-1.7\n".to_vec();
-        pdf.extend(&big);
-        let mut r = Counting {
-            inner: std::io::Cursor::new(&pdf),
-            read: 0,
-        };
-        assert_eq!(viewable_name("a.pdf", &mut r).unwrap(), "a.pdf");
-        assert!(r.read <= 8192, "read {} bytes", r.read);
-        assert!(!may_be_signed(b"\x89PNG\r\n\x1a\n...."));
-        assert!(
-            may_be_signed(b"%PDF-1.7") && may_be_signed(b"\x30\x82") && may_be_signed(b"MIIB+a==")
-        );
-    }
-
-    #[test]
-    fn only_documents_are_opened() {
-        for ok in [
-            "a.pdf", "a.PDF", "b.docx", "c.xlsx", "d.txt", "e.jpg", "f.zip", "g.xml",
-        ] {
-            assert!(check_viewable(Path::new(ok)).is_ok(), "{ok}");
-        }
-        for bad in [
-            "a.exe", "a.lnk", "a.hta", "a.csv", "a.html", "a.docm", "a.pdf.", "noext",
-        ] {
-            assert!(check_viewable(Path::new(bad)).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn viewing_copies_are_private_and_replaced() {
-        let dir = std::env::temp_dir().join(format!("kzsigner-view-test-{}", std::process::id()));
-        let a = write_for_viewing(&dir, "a.txt", &b"one"[..]).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let b = write_for_viewing(&dir, "b.txt", &b"two"[..]).unwrap();
-        assert!(!a.exists() && std::fs::read(&b).unwrap() == b"two");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o700);
-        }
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 }

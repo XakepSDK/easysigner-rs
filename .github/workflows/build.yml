@@ -72,6 +72,14 @@ jobs:
       - name: Test
         shell: bash
         run: sh scripts/cargo.sh test --release --locked
+      - name: Window screenshots for review (Linux)
+        if: runner.os == 'Linux'
+        run: KZSIGNER_SCREENS="$RUNNER_TEMP/screens" sh scripts/cargo.sh test --release --locked -p kzsigner-desktop --test gui
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: window-screens
+          path: ${{ runner.temp }}/screens/
       - name: Test the app's calls into the core (ffi, not in default-members)
         shell: bash
         run: sh scripts/cargo.sh test --release --locked -p kzsigner-ffi

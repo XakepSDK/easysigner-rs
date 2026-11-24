@@ -858,8 +858,22 @@ fn info(o: Opts) -> R<u8> {
 }
 
 fn gui(o: Opts) -> R<u8> {
-    let e = engine(&o)?;
-    kzsigner_desktop::gui::run(e, o.file).map_err(Fail::User)?;
+    // extra trusted CAs: a test setup (with KZSIGNER_TSA / KZSIGNER_OCSP for fake servers)
+    let nca = if o.trust.is_empty() {
+        kzsigner_ffi::Nca::kazakhstan()
+    } else {
+        let mut cas = vec![];
+        for t in &o.trust {
+            cas.push(read(t)?);
+        }
+        let url = |var: &str, default: &str| std::env::var(var).unwrap_or_else(|_| default.into());
+        kzsigner_ffi::Nca::for_tests(
+            url("KZSIGNER_TSA", kzsigner::DEFAULT_TSA_URL),
+            url("KZSIGNER_OCSP", kzsigner::DEFAULT_OCSP_URL),
+            cas,
+        )
+    };
+    kzsigner_desktop::gui::run(nca, o.file).map_err(Fail::User)?;
     Ok(0)
 }
 

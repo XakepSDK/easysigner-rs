@@ -2,100 +2,10 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use super::*;
+use std::path::{Path, PathBuf};
 
-impl App {
-    /// Opens the document to sign for reading: the file itself, or the document inside a
-    /// signed file (a .cms or a card), taken out into a private temporary folder. For a
-    /// detached .cms, the original chosen beside it.
-    pub fn view_doc(&mut self, ctx: &egui::Context, doc: PathBuf) {
-        let original = self.sign.sign_original.clone();
-        self.view_file(ctx, doc, original, ViewFor::Sign(self.sign.doc_request));
-    }
-
-    /// Opens `doc` for reading, or the document inside it when it is signed (`original` for a
-    /// detached .cms). `id`: the choice it is for.
-    pub(super) fn view_file(
-        &mut self,
-        ctx: &egui::Context,
-        doc: PathBuf,
-        original: Option<PathBuf>,
-        id: ViewFor,
-    ) {
-        let dir = self.dialogs.view_dir();
-        self.background(ctx, move |e| {
-            let r = (|| -> Result<PathBuf, String> {
-                let fail = |p: &Path, err: std::io::Error| format!("{}: {err}", p.display());
-                let mut f = std::fs::File::open(&doc).map_err(|err| fail(&doc, err))?;
-                let head = read_head(&mut f).map_err(|err| fail(&doc, err))?;
-                // only a file that could be a .cms or a card (a PDF) is read whole, to look
-                // inside it (the background check may still be running); any other document
-                // is checked from its start and, for a zip, its table of contents
-                if !may_be_signed(&head) {
-                    return for_viewing(&dir, &doc, f);
-                }
-                let data = std::fs::read(&doc).map_err(|err| fail(&doc, err))?;
-                let signed = e.is_signed_cms(&data) || e.card_original(&data).is_some();
-                if !signed {
-                    return for_viewing(&dir, &doc, f);
-                }
-                let (name, content) = match taken_out(e, &doc, &data) {
-                    Ok(x) => x,
-                    // detached: the document is the original chosen beside it
-                    Err(_) if e.is_signed_cms(&data) => {
-                        let original = original
-                            .ok_or_else(|| tr("Choose the signed document.").to_string())?;
-                        let f =
-                            std::fs::File::open(&original).map_err(|err| fail(&original, err))?;
-                        return for_viewing(&dir, &original, f);
-                    }
-                    Err(err) => return Err(err),
-                };
-                let mut content = std::io::Cursor::new(content);
-                let name = viewable_name(&name, &mut content)?;
-                write_for_viewing(&dir, &name, content)
-            })();
-            Msg::ToView(id, r)
-        });
-    }
-}
-
-/// The name for the document taken out of signed `file`: a card's document keeps its own name
-/// (only the name, never a path inside the card), "x.pdf.cms" gives "x.pdf", anything else
-/// "<name>.original".
-pub(super) fn original_name(file: &Path, card_name: Option<&str>) -> String {
-    let n = file
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let card_name = card_name
-        .and_then(|n| n.rsplit(['/', '\\']).next())
-        .filter(|n| !n.is_empty() && *n != "." && *n != "..");
-    if let Some(c) = card_name {
-        // no Windows stream names (a.exe:b.pdf), reserved characters or control characters
-        c.chars()
-            .map(|ch| {
-                if ch.is_control() || "<>:\"|?*".contains(ch) || is_bidi_control(ch) {
-                    '_'
-                } else {
-                    ch
-                }
-            })
-            .collect()
-    } else if n.to_lowercase().ends_with(".cms") {
-        n[..n.len() - 4].to_string()
-    } else {
-        format!("{n}.original")
-    }
-}
-
-/// The document inside a signed file (a card's original, or a .cms's content), with its name.
-pub(super) fn taken_out(e: &Engine, file: &Path, data: &[u8]) -> Result<(String, Vec<u8>), String> {
-    match e.card_original(data) {
-        Some((name, d)) => Ok((original_name(file, Some(&name)), d)),
-        None => Ok((original_name(file, None), e.extract(data).map_err(|x| x.0)?)),
-    }
-}
+use super::text::t;
+use kzsigner::time;
 
 /// How much of a file's start is read to tell what it is (what `infer` itself reads).
 const HEAD: u64 = 8192;
@@ -106,16 +16,6 @@ fn read_head(r: &mut (impl Read + Seek)) -> std::io::Result<Vec<u8>> {
     let mut head = Vec::new();
     r.take(HEAD).read_to_end(&mut head)?;
     Ok(head)
-}
-
-/// Whether a file starting with `head` could be a .cms (DER, or Base64/PEM text) or a card
-/// (a PDF): only those are read whole.
-pub(super) fn may_be_signed(head: &[u8]) -> bool {
-    head.first() == Some(&0x30)
-        || infer::is(head, "pdf")
-        || head
-            .iter()
-            .all(|b| b.is_ascii_alphanumeric() || b"+/=-_ \t\r\n".contains(b))
 }
 
 /// What the content of `r` really is: the extension to open it with. None for anything that
@@ -294,7 +194,7 @@ pub(super) fn for_viewing(
 }
 
 fn not_viewable() -> String {
-    tr("kzsigner opens only documents and pictures, and this file is neither (or is an Office file with macros). Save it and open it yourself only if you trust whoever sent it: a valid signature does not make a file safe to run.").into()
+    t("kzsigner opens only documents and pictures, and this file is neither (or is an Office file with macros). Save it and open it yourself only if you trust whoever sent it: a valid signature does not make a file safe to run.").into()
 }
 
 /// Copies `data` to `name` in a fresh folder under `dir`, readable only by this user; copies
@@ -330,11 +230,6 @@ pub(super) fn write_for_viewing(
         let _ = std::fs::write(zone, b"[ZoneTransfer]\r\nZoneId=3\r\n");
     }
     Ok(out)
-}
-
-/// Unicode bidirectional controls, which can make "fdp.exe" look like "exe.pdf" in a name.
-fn is_bidi_control(ch: char) -> bool {
-    matches!(ch, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// The types "Open the document" hands to the system's viewer: documents and pictures, never
@@ -398,4 +293,165 @@ pub(super) fn show_in_folder(f: &Path) {
         .arg(f.parent().unwrap_or(Path::new(".")))
         .spawn();
     let _ = r;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_for_documents_to_view() {
+        let ok = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d)).unwrap();
+        assert_eq!(ok("contract.pdf", b"%PDF-1.7"), "contract.pdf");
+        assert_eq!(ok("contract", b"%PDF-1.7"), "contract.pdf");
+        assert_eq!(
+            ok("a.p7s.original", "текст".as_bytes()),
+            "a.p7s.original.txt"
+        );
+    }
+
+    /// A zip holding `names` (each with empty content).
+    fn zip_of(names: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (n, d) in names {
+            z.start_file(*n, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(d).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn the_content_decides_how_a_file_is_opened() {
+        let name = |n: &str, d: &[u8]| viewable_name(n, &mut std::io::Cursor::new(d));
+        // a program, whatever it is called, is never opened
+        let exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff";
+        for n in ["a.exe", "a.pdf", "a.docx", "a.txt", "noext"] {
+            assert!(name(n, exe).is_err(), "{n}");
+        }
+        assert!(name("a.bin", &[0, 1, 2, 3]).is_err());
+        // a document under a dangerous name gets its real type added
+        assert_eq!(name("invoice.exe", b"%PDF-1.7").unwrap(), "invoice.exe.pdf");
+        assert_eq!(
+            name("a.lnk", b"\x89PNG\r\n\x1a\n....").unwrap(),
+            "a.lnk.png"
+        );
+        // scripts and pages are text, shown as text, never run or rendered
+        assert_eq!(
+            name("a.hta", b"<html><script>x()</script>").unwrap(),
+            "a.hta.txt"
+        );
+        assert_eq!(name("a.js", b"WScript.Shell").unwrap(), "a.js.txt");
+        assert_eq!(name("a.xml", b"<svg onload='x()'/>").unwrap(), "a.xml.txt");
+        assert_eq!(name("a.csv", b"=cmd|' /c calc'!A1").unwrap(), "a.csv.txt");
+        assert_eq!(
+            name("a.xml", b"<?xml version='1.0'?><doc/>").unwrap(),
+            "a.xml"
+        );
+        assert_eq!(name("data", b"\xef\xbb\xbf<doc/>").unwrap(), "data.xml");
+        // windows-1251 text
+        assert_eq!(
+            name("a.txt", &[0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]).unwrap(),
+            "a.txt"
+        );
+        // Office files by what the zip holds, refused with macros
+        let docx = zip_of(&[("[Content_Types].xml", b""), ("word/document.xml", b"")]);
+        assert_eq!(name("a.docx", &docx).unwrap(), "a.docx");
+        assert_eq!(name("a.exe", &docx).unwrap(), "a.exe.docx");
+        let xlsx = zip_of(&[("[Content_Types].xml", b""), ("xl/workbook.xml", b"")]);
+        assert_eq!(name("a.docx", &xlsx).unwrap(), "a.docx.xlsx");
+        let docm = zip_of(&[
+            ("[Content_Types].xml", b""),
+            ("word/document.xml", b""),
+            ("word/vbaProject.bin", b""),
+        ]);
+        assert!(name("a.docx", &docm).is_err());
+        let odt = zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.text")]);
+        assert_eq!(name("a.odt", &odt).unwrap(), "a.odt");
+        assert_eq!(
+            name("a.jar", &zip_of(&[("x.class", b"")])).unwrap(),
+            "a.jar.zip"
+        );
+        // old Office files keep the claimed one of doc/xls/ppt
+        let ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest";
+        assert_eq!(name("a.xls", ole).unwrap(), "a.xls");
+        assert_eq!(name("a.exe", ole).unwrap(), "a.exe.doc");
+    }
+
+    /// Counts the bytes read through it.
+    struct Counting<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: std::io::Read> std::io::Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: std::io::Seek> std::io::Seek for Counting<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn a_large_document_is_not_read_whole() {
+        // a Word file with a 20 MB picture inside: only its start and table of contents are read
+        let big = vec![7u8; 20 << 20];
+        let docx = zip_of(&[
+            ("[Content_Types].xml", b""),
+            ("word/media/image1.png", &big),
+            ("word/document.xml", b""),
+        ]);
+        let mut r = Counting {
+            inner: std::io::Cursor::new(&docx),
+            read: 0,
+        };
+        assert_eq!(viewable_name("a.docx", &mut r).unwrap(), "a.docx");
+        assert!(r.read < 1 << 20, "read {} bytes", r.read);
+        // a PDF (it might be a card) and other documents: just the start
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        pdf.extend(&big);
+        let mut r = Counting {
+            inner: std::io::Cursor::new(&pdf),
+            read: 0,
+        };
+        assert_eq!(viewable_name("a.pdf", &mut r).unwrap(), "a.pdf");
+        assert!(r.read <= 8192, "read {} bytes", r.read);
+    }
+
+    #[test]
+    fn only_documents_are_opened() {
+        for ok in [
+            "a.pdf", "a.PDF", "b.docx", "c.xlsx", "d.txt", "e.jpg", "f.zip", "g.xml",
+        ] {
+            assert!(check_viewable(Path::new(ok)).is_ok(), "{ok}");
+        }
+        for bad in [
+            "a.exe", "a.lnk", "a.hta", "a.csv", "a.html", "a.docm", "a.pdf.", "noext",
+        ] {
+            assert!(check_viewable(Path::new(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn viewing_copies_are_private_and_replaced() {
+        let dir = std::env::temp_dir().join(format!("kzsigner-view-test-{}", std::process::id()));
+        let a = write_for_viewing(&dir, "a.txt", &b"one"[..]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let b = write_for_viewing(&dir, "b.txt", &b"two"[..]).unwrap();
+        assert!(!a.exists() && std::fs::read(&b).unwrap() == b"two");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

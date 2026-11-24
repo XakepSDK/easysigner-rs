@@ -82,17 +82,23 @@ default timestamp, since NCA no longer serves them.
 
 ## Use
 
-Run `kzsigner` with no arguments (or double-click it) for the window. It starts with two choices,
-**Sign a document** and **Check a signed file**, each on a screen of its own in plain words; the
-technical details are folded away. A file opened with it (`kzsigner document.pdf`) or dropped on
-the window goes where it belongs: a document to signing, a signed file (.cms, signed PDF, card)
-to checking, a key file to the key field. In a narrow window, the screens switch to one
-column with full-width buttons. Safe by default: signing adds NCA's official time and
-checking asks NCA whether the keys were revoked (both need internet; they can be turned off
-under More options). When NCA cannot be reached, a check says the signatures are valid but not
-checked for revocation, rather than failing. The window is in Kazakh, Russian or English: it starts in the
-system's language and the menu at the top right switches (the choice is remembered;
-`KZSIGNER_LANG=kk|ru|en` also sets it). The command line stays in English.
+Run `kzsigner` with no arguments (or double-click it) for the window. It follows the phone app's
+rules on screens made for a window: **Sign a document** and **Check a signature**, no options.
+The key is added once (**Add key**: the .p12 file from NCA or egov.kz and its password) and kept on
+the computer in the app data folder (`%APPDATA%\kzsigner`, `~/.local/share/kzsigner`), locked with
+its own password, which is typed for each signature (Windows Hello and Touch ID come later). Sign
+shows the document (**Read it** opens it in the system's viewer), who signs and what signing makes,
+decided by the file: a PDF is signed inside with a "Who signed" page, an XML file inside, a signed
+.cms gets the signature joined, anything else becomes a .cms with the document inside. NCA checks
+the key first (a revoked or unrecognized key is refused; no internet says so, with Try again) and
+stamps the official time. The signed file is saved next to the original (`X-signed.pdf`,
+`X.docx.cms`), never over another file (`X-signed (2).pdf`), with **Show in folder** and **Save a
+copy elsewhere**. Check gives the phone's verdicts (valid, do not trust and why, couldn't confirm,
+not signed, a detached .cms asking for its document), who signed, and the details to copy. A file
+opened with kzsigner or dropped anywhere on the window goes where it belongs. Enter signs, Esc goes
+back. The window is in Kazakh, Russian or English (Your keys › Language; it starts in the system's
+language, and `KZSIGNER_LANG=kk|ru|en` also sets it). Detached .cms, document cards, levels and the
+visible stamp are made with the command line, which stays in English.
 
 **On the phone** (Android 11 or newer) kzsigner is its own app, built for one touch per
 signature. A key file is added once and kept in the app, locked by the phone's security chip:
@@ -226,7 +232,7 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   text, so the rest of the document stays byte for byte as it was.
 * `http.rs`: the POST to the timestamp and OCSP servers and the CRL downloads, with `ureq`
   (plain http, which NCA's servers use; a proxy from the environment is honoured).
-* `gui/`: the window (`mod.rs` the app, its state grouped as `SignForm`, `KeyForm` and `CheckForm`, and the routing between screens; `sign.rs`, `check.rs` the two screens; `keys.rs` keys kept on the phone; `report.rs` a check's result; `files.rs`, `widgets.rs`) ([egui](https://github.com/emilk/egui)): OpenGL on Linux, Direct3D 12 on
+* `desktop/src/gui/`: the window ([egui](https://github.com/emilk/egui)) on the phone app's layer (`kzsigner-ffi`: what a file is, what signing makes, what a check says, the key vault): `mod.rs` the app and the routing between screens, `home.rs` Home, Add key, Your keys and About, `sign.rs` Sign and Signed, `check.rs` Check, `ui.rs` the look, `text.rs` its words in three languages, `chip.rs` the vault's key files, `files.rs` opening documents safely. OpenGL on Linux, Direct3D 12 on
   Windows (which falls back to Windows' software renderer, so it also works in virtual machines
   and over remote desktop). `icons.rs` draws the icons from SVG path data as vector shapes, so
 they stay sharp at any scale with no image files. Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
@@ -249,7 +255,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `ffi/`: the core's calls for the Android app (UniFFI): the key vault over the phone's chip,
   signing with the output picked by the input, and checking with one verdict and reason.
 * `android/compose`: the Android app; `android/uitest`: its emulator tests.
-* `i18n.rs`: the Kazakh and Russian texts of the window and of the core's messages, one table. The Kazakh was not written by a
+* `i18n.rs`: the Kazakh and Russian texts of the core's messages and document cards (the window has its own, `desktop/src/gui/text.rs`). The Kazakh was not written by a
   native speaker; corrections are welcome.
 * `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `desktop/build.rs` puts it
   and the version into the Windows `.exe`. `packaging/linux/`: the menu entry and installer.
@@ -287,10 +293,12 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
   refused. Test PDFs are in `tests/fixtures/pdf`.
-* `desktop/tests/gui.rs`: drives the window without a display (egui_kittest): from the start screen picks
-  a document and key, types the password, opens the document, signs, checks the result, saves the document back out
-  and switches languages; signs a PDF inside, checks it and a card, saves the card's document;
-  and opens a signed PDF from the start, which goes to checking.
+* `desktop/tests/gui.rs`: drives the window without a display (egui_kittest) against fake NCA
+  servers: add a key (wrong password, Russian keyboard, not recognized, GOST 2004, not a key,
+  already added), sign text, XML, a signed PDF and a .cms, NCA down then Try again, a revoked key,
+  every check verdict with details, Your keys, language and About, a narrow window and text at
+  200 %; every control must have a name for screen readers. With `KZSIGNER_SCREENS=dir` it saves a
+  screenshot of each screen (drawn on the CPU by `tests/render`); CI keeps them as `window-screens`.
 * `tests/malformed.rs`: damaged files (bytes changed, cut, lengths broken: .cms, .p12, plain and
   signed PDFs), deep nesting, page-tree loops and broken OIDs give errors, never a crash.
 * `tests/pdf_changes.rs`: a signed PDF whose page is redrawn by a later update fails, later
