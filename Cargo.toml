@@ -62,3 +62,8 @@ opt-level = 1
 
 [profile.mutants.package."*"]
 opt-level = 3
+
+# Local test runs (cargo test without --release): the crypto in the dependencies optimized,
+# as for mutants, so the GOST and RSA tests don't take minutes.
+[profile.dev.package."*"]
+opt-level = 3

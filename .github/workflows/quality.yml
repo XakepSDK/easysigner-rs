@@ -9,7 +9,13 @@
 # test really checks. A full run is long (about 2500 mutants), so it runs weekly and by hand,
 # split over 16 shards (up to 1.5 hours each); a pull request runs it only on the lines it changes. Survivors are
 # reported, not failed on, while the existing ones are worked down: see mutants.out in the
-# artifact (missed.txt).
+# artifact (missed.txt). It covers the whole workspace: the core, the app layer (ffi) and the
+# desktop command line.
+#
+# lint: rustfmt and clippy (no warnings allowed) on every push and pull request.
+#
+# deps: cargo deny (deny.toml): known vulnerabilities, unmaintained crates, duplicate versions,
+# where crates come from. Also weekly, since new advisories appear without any change here.
 name: quality
 on:
   push:
@@ -39,6 +45,31 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
 jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust (pinned) with rustfmt and clippy
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans sources
+
   coverage:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -111,9 +142,9 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/scripts/memory-limit.sh
         run: |
           set +e
-          args="--no-shuffle -j 2 --timeout 180 --output ."
+          args="--workspace --no-shuffle -j 2 --timeout 180 --output ."
           if [ "${{ github.event_name }}" = pull_request ]; then
-            git diff "$BASE...HEAD" -- src > pr.diff
+            git diff "$BASE...HEAD" -- src ffi/src desktop/src > pr.diff
             args="$args --in-diff pr.diff"
           else
             args="$args --shard ${{ matrix.shard }}/$TOTAL"
