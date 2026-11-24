@@ -41,10 +41,7 @@ import kz.kzsigner.core.ChipUnlock
  * The core calls it off the main thread and waits; a prompt is shown on [activity] and the
  * call returns once the owner answers it.
  */
-class KeystoreChip(
-    private val context: Context,
-    private val activity: () -> Activity?,
-) : Chip {
+class KeystoreChip(private val context: Context, private val activity: () -> Activity?) : Chip {
     /** Whether keys can live in hardware; asked once. */
     private var hardware: Boolean? = null
     private var hardwareProblem: String? = null
@@ -54,7 +51,7 @@ class KeystoreChip(
         return ChipCaps(
             screenLock = km?.isDeviceSecure == true,
             biometric = hasFingerprint(context),
-            hardware = hardware(),
+            hardware = hardware()
         )
     }
 
@@ -141,7 +138,7 @@ class KeystoreChip(
     private fun generate(name: String, unlock: ChipUnlock, strongBox: Boolean) {
         val b = KeyGenParameterSpec.Builder(
             name,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
@@ -215,7 +212,7 @@ class KeystoreChip(
             if (pinToo) {
                 b.setAllowedAuthenticators(
                     BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                        BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+                        BiometricManager.Authenticators.DEVICE_CREDENTIAL
                 )
             } else {
                 b.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
@@ -243,7 +240,7 @@ class KeystoreChip(
                             }
                             done.countDown()
                         }
-                    },
+                    }
                 )
             } catch (e: RuntimeException) {
                 answer = ChipException.Failed(why(e))

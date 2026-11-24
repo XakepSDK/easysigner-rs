@@ -1,0 +1,10 @@
+# Kotlin style, checked by ktlint (CI: the "kotlin" job in .github/workflows/quality.yml).
+root = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 140
+ktlint_code_style = android_studio
+# Composables are named like classes
+ktlint_function_naming_ignore_when_annotated_with = Composable

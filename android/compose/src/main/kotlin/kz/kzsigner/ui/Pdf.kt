@@ -144,7 +144,7 @@ fun PdfReader(name: String, bytes: ByteArray, onBack: () -> Unit) {
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.MiddleEllipsis,
-                    modifier = Modifier.padding(start = 60.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
+                    modifier = Modifier.padding(start = 60.dp, end = 16.dp, top = 16.dp, bottom = 16.dp)
                 )
             }
             if (pdf == null) {
@@ -153,7 +153,7 @@ fun PdfReader(name: String, bytes: ByteArray, onBack: () -> Unit) {
             }
             LazyColumn(
                 contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(pdf.pages) { i -> PdfPage(pdf, i) }
             }

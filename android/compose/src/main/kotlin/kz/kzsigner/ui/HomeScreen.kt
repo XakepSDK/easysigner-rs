@@ -5,16 +5,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,10 +36,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import kz.kzsigner.core.Unlock
 import kz.kzsigner.KeysModel
 import kz.kzsigner.Opened
 import kz.kzsigner.R
+import kz.kzsigner.core.Unlock
 import kz.kzsigner.hasFingerprint
 
 /** Screen 1: Sign a document, Check a signature, the key chip (to Your keys), and Share. */
@@ -66,7 +66,9 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
             scope.launch {
                 when (model.openForCheck(uri)) {
                     Opened.TOO_BIG -> Toast.makeText(context, tooBig, Toast.LENGTH_LONG).show()
+
                     Opened.UNREADABLE -> Toast.makeText(context, unreadable, Toast.LENGTH_LONG).show()
+
                     // the app goes to Check (App.kt)
                     else -> {}
                 }
@@ -82,16 +84,28 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
             pick.launch(arrayOf("*/*"))
         }
     }
-    val confirm = if (keys.isEmpty()) R.string.home_sign_first else when (keys.firstOrNull()?.unlock) {
-        Unlock.PASSWORD -> R.string.home_sign_password
-        Unlock.FINGERPRINT, Unlock.FINGERPRINT_AND_PASSWORD -> R.string.home_sign_fingerprint
-        else -> if (hasFingerprint(context)) R.string.home_sign_fingerprint else R.string.home_sign_lock
+    val confirm = if (keys.isEmpty()) {
+        R.string.home_sign_first
+    } else {
+        when (keys.firstOrNull()?.unlock) {
+            Unlock.PASSWORD -> R.string.home_sign_password
+            Unlock.FINGERPRINT, Unlock.FINGERPRINT_AND_PASSWORD -> R.string.home_sign_fingerprint
+            else -> if (hasFingerprint(context)) R.string.home_sign_fingerprint else R.string.home_sign_lock
+        }
     }
 
     Screen(onBack = null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             // the app's name is a wordmark: a fixed size, so large text leaves room for the chip
-            Text("kzsigner", fontSize = with(LocalDensity.current) { 20.dp.toSp() }, fontWeight = FontWeight.Bold, softWrap = false, modifier = Modifier.weight(1f))
+            Text(
+                "kzsigner",
+                fontSize = with(LocalDensity.current) {
+                    20.dp.toSp()
+                },
+                fontWeight = FontWeight.Bold,
+                softWrap = false,
+                modifier = Modifier.weight(1f)
+            )
             Spacer(Modifier.width(12.dp))
             Box { KeyChip(keys.firstOrNull()?.name, noKey, onKeys) }
         }
@@ -109,7 +123,7 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         ) {
             Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(painterResource(R.drawable.ic_pen), null, modifier = Modifier.size(30.dp))
@@ -123,9 +137,13 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Row(Modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.padding(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(painterResource(R.drawable.ic_shield_check), null, tint = LocalNotices.current.good, modifier = Modifier.size(28.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(stringResource(R.string.home_check), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -139,7 +157,7 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
                 stringResource(R.string.home_share_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(16.dp)
             )
         }
     }
@@ -155,15 +173,23 @@ private fun KeyChip(name: String?, none: Boolean, onClick: () -> Unit) {
         shape = RoundedCornerShape(50),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         color = MaterialTheme.colorScheme.background,
-        modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = label },
+        modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = label }
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(painterResource(R.drawable.ic_key), null, modifier = Modifier.size(18.dp))
-            Text(name?.let { firstName(it) } ?: label, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
+            Text(
+                name?.let {
+                    firstName(it)
+                } ?: label,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 160.dp)
+            )
         }
     }
 }

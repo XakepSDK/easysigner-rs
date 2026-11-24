@@ -107,7 +107,7 @@ class KeysModel(app: Application) : AndroidViewModel(app) {
             Nca.forTests(
                 "http://10.0.2.2:18080/",
                 "http://10.0.2.2:18081/",
-                a.list("testca").orEmpty().map { a.open("testca/$it").use { s -> s.readBytes() } },
+                a.list("testca").orEmpty().map { a.open("testca/$it").use { s -> s.readBytes() } }
             )
         } else {
             Nca.kazakhstan()

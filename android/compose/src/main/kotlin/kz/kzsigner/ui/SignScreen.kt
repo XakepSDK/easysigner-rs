@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -56,22 +57,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import kz.kzsigner.core.CantSign
-import kz.kzsigner.core.Checked
-import kz.kzsigner.core.Reason
-import kz.kzsigner.core.SignerCheck
-import kz.kzsigner.core.ChipPrompt
-import kz.kzsigner.core.DocKind
-import kz.kzsigner.core.KeyInfo
-import kz.kzsigner.core.Output
-import kz.kzsigner.core.SignException
-import kz.kzsigner.core.SignedBy
-import kz.kzsigner.core.Unlock
-import kz.kzsigner.core.cmsContent
 import kz.kzsigner.DocFile
 import kz.kzsigner.Files
 import kz.kzsigner.KeysModel
 import kz.kzsigner.R
+import kz.kzsigner.core.CantSign
+import kz.kzsigner.core.Checked
+import kz.kzsigner.core.ChipPrompt
+import kz.kzsigner.core.DocKind
+import kz.kzsigner.core.KeyInfo
+import kz.kzsigner.core.Output
+import kz.kzsigner.core.Reason
+import kz.kzsigner.core.SignException
+import kz.kzsigner.core.SignedBy
+import kz.kzsigner.core.SignerCheck
+import kz.kzsigner.core.Unlock
+import kz.kzsigner.core.cmsContent
 
 /** Why the key can't sign, with its dates: screen 3f. */
 class Refusal(val reason: CantSign, val validFromMs: Long, val expiresMs: Long)
@@ -86,16 +87,11 @@ class Reading(val name: String, val bytes: ByteArray)
  * can't sign goes to [onCantSign].
  */
 @Composable
-fun SignScreen(
-    model: KeysModel,
-    onBack: () -> Unit,
-    onRead: (Reading) -> Unit,
-    onSigned: () -> Unit,
-    onCantSign: (Refusal) -> Unit,
-) {
+fun SignScreen(model: KeysModel, onBack: () -> Unit, onRead: (Reading) -> Unit, onSigned: () -> Unit, onCantSign: (Refusal) -> Unit) {
     val doc = model.document ?: return
     val keys = model.keys?.keys.orEmpty()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var keyId by rememberSaveable { mutableStateOf(keys.firstOrNull { it.cantSign == null }?.id ?: keys.firstOrNull()?.id) }
     val key = keys.firstOrNull { it.id == keyId } ?: keys.firstOrNull() ?: return
@@ -104,6 +100,7 @@ fun SignScreen(
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
+
     /** NCA didn't answer: true without internet, false when NCA is down. */
     var noAnswer by remember { mutableStateOf<Boolean?>(null) }
 
@@ -131,16 +128,26 @@ fun SignScreen(
             } catch (e: SignException) {
                 when (e) {
                     is SignException.NoAnswer -> noAnswer = model.online().not()
+
                     is SignException.KeyCantSign -> onCantSign(Refusal(e.reason, e.validFromMs, e.expiresMs))
+
                     is SignException.WrongPassword -> wrong = true
-                    is SignException.Wait -> problem = context.resources.getQuantityString(
-                        R.plurals.wait_seconds, e.seconds.toInt(), e.seconds.toInt(),
+
+                    is SignException.Wait -> problem = resources.getQuantityString(
+                        R.plurals.wait_seconds,
+                        e.seconds.toInt(),
+                        e.seconds.toInt()
                     )
+
                     is SignException.Cancelled -> {}
+
                     is SignException.KeyReset -> problem = resetText
+
                     is SignException.NoSuchKey -> problem = e.toString()
+
                     is SignException.Cannot -> {}
-                    is SignException.Failed -> problem = context.getString(R.string.sign_failed, e.detail)
+
+                    is SignException.Failed -> problem = resources.getString(R.string.sign_failed, e.detail)
                 }
             } finally {
                 busy = false
@@ -158,20 +165,26 @@ fun SignScreen(
             Notice(
                 stringResource(if (off) R.string.no_internet_title else R.string.nca_down_title),
                 stringResource(if (off) R.string.no_internet_body else R.string.nca_down_body),
-                n.warnBg, n.warnTitle, n.warnText, R.drawable.ic_wifi_off,
+                n.warnBg,
+                n.warnTitle,
+                n.warnText,
+                R.drawable.ic_wifi_off
             )
         }
         return
     }
 
-    val read_: () -> Unit = {
+    val readDocument: () -> Unit = {
         val inner = if (info.kind == DocKind.CMS) cmsContent(doc.bytes) else null
         when {
             info.kind == DocKind.PDF -> onRead(Reading(doc.name, doc.bytes))
+
             inner != null && info.innerKind == DocKind.PDF -> onRead(Reading(info.innerName ?: doc.name, inner))
+
             inner != null -> if (!Files.view(context, info.innerName ?: doc.name, inner)) {
                 Toast.makeText(context, noApp, Toast.LENGTH_LONG).show()
             }
+
             else -> if (!Files.view(context, doc.name, doc.bytes)) {
                 Toast.makeText(context, noApp, Toast.LENGTH_LONG).show()
             }
@@ -188,17 +201,23 @@ fun SignScreen(
                     fingerprint = !needsPassword && info.kind != DocKind.CMS,
                     enabled = !needsPassword || password.isNotEmpty(),
                     busy = busy,
-                    onClick = sign,
+                    onClick = sign
                 )
                 if (shownElsewhere) {
                     Small(stringResource(R.string.open_to_check), modifier = Modifier.fillMaxWidth(), center = true)
                 }
-                if (keys.size > 1) KeyPicker(keys, key) { keyId = it.id; password = ""; wrong = false }
+                if (keys.size > 1) {
+                    KeyPicker(keys, key) {
+                        keyId = it.id
+                        password = ""
+                        wrong = false
+                    }
+                }
             }
-        },
+        }
     ) {
         Title(stringResource(if (joins) R.string.add_sign_title else R.string.sign_title))
-        if (info.kind == DocKind.CMS) CmsCard(doc, read_) else DocCard(doc, read_)
+        if (info.kind == DocKind.CMS) CmsCard(doc, readDocument) else DocCard(doc, readDocument)
         // who signed already, and once NCA has answered, whether their signatures hold
         val checked by produceState<Checked?>(null, doc) {
             // another document: forget the last one's check first
@@ -224,7 +243,10 @@ fun SignScreen(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it; wrong = false },
+                    onValueChange = {
+                        password = it
+                        wrong = false
+                    },
                     label = { Text(stringResource(R.string.key_password)) },
                     singleLine = true,
                     isError = wrong,
@@ -235,12 +257,12 @@ fun SignScreen(
                         IconButton(onClick = { shown = !shown }) {
                             Icon(
                                 painterResource(if (shown) R.drawable.ic_eye_off else R.drawable.ic_eye),
-                                stringResource(if (shown) R.string.hide_password else R.string.show_password),
+                                stringResource(if (shown) R.string.hide_password else R.string.show_password)
                             )
                         }
                     },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
                 )
                 if (wrong) {
                     Small(stringResource(R.string.wrong_password), MaterialTheme.colorScheme.error)
@@ -260,12 +282,15 @@ fun SignScreen(
                         joins -> R.string.out_pdf_join
                         else -> R.string.out_pdf
                     }
+
                     Output.INSIDE_XML -> R.string.out_xml
+
                     Output.JOIN_CMS -> R.string.out_cms_join
+
                     else -> R.string.out_cms
                 },
-                first,
-            ),
+                first
+            )
         )
         if (needsPassword && key.unlock == Unlock.PASSWORD) {
             Grey(stringResource(if (model.screenLock) R.string.sign_password_nochip else R.string.sign_password_nolock))
@@ -279,7 +304,7 @@ private fun Grey(text: String) {
         text,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(14.dp),
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)).padding(14.dp)
     )
 }
 
@@ -290,7 +315,7 @@ private fun Small(text: String, modifier: Modifier, center: Boolean) {
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = if (center) TextAlign.Center else null,
-        modifier = modifier,
+        modifier = modifier
     )
 }
 
@@ -302,7 +327,7 @@ private fun SignButton(text: String, fingerprint: Boolean, enabled: Boolean, bus
         enabled = enabled && !busy,
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
     ) {
         if (busy) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -326,15 +351,15 @@ private fun TypeBadge(name: String, size: Int = 52) {
     Box(
         Modifier.size(size.dp).background(
             if (pdf) LocalNotices.current.badBg else LocalNotices.current.infoBg,
-            RoundedCornerShape(10.dp),
+            RoundedCornerShape(10.dp)
         ),
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.Center
     ) {
         Text(
             ext(name),
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = if (pdf) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            color = if (pdf) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
         )
     }
 }
@@ -348,7 +373,7 @@ private fun DocCard(doc: DocFile, onRead: () -> Unit) {
         Box(
             Modifier.fillMaxWidth().height(150.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)),
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.Center
         ) {
             val first = pdf?.first
             if (first != null) {
@@ -358,7 +383,7 @@ private fun DocCard(doc: DocFile, onRead: () -> Unit) {
                     contentScale = ContentScale.Crop,
                     alignment = Alignment.TopCenter,
                     modifier = Modifier.padding(top = 14.dp).width(112.dp).height(136.dp)
-                        .border(1.dp, MaterialTheme.colorScheme.outline),
+                        .border(1.dp, MaterialTheme.colorScheme.outline)
                 )
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -378,7 +403,7 @@ private fun DocCard(doc: DocFile, onRead: () -> Unit) {
                         pluralStringResource(R.plurals.pages, pages, pages)
                     } else {
                         ext(doc.name) + " · " + Formatter.formatShortFileSize(context, doc.bytes.size.toLong())
-                    },
+                    }
                 )
             }
             ReadButton(onRead)
@@ -392,7 +417,7 @@ private fun DocRow(doc: DocFile) {
     Row(
         Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         TypeBadge(doc.info.innerName ?: doc.name, 44)
         Text(doc.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
@@ -405,7 +430,7 @@ private fun CmsCard(doc: DocFile, onRead: () -> Unit) {
     val inner = doc.info.innerName ?: doc.name
     Column(
         Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
             TypeBadge(inner, 44)
@@ -418,7 +443,7 @@ private fun CmsCard(doc: DocFile, onRead: () -> Unit) {
             OutlinedButton(
                 onClick = onRead,
                 shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
             ) { Text(stringResource(R.string.read_it), fontWeight = FontWeight.SemiBold) }
         }
     }
@@ -445,7 +470,7 @@ private fun AlreadySigned(s: SignedBy, check: SignerCheck?) {
     }
     Row(
         Modifier.fillMaxWidth().background(bg, RoundedCornerShape(12.dp)).padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         val icon = when {
             bad -> R.drawable.ic_x
@@ -461,7 +486,9 @@ private fun AlreadySigned(s: SignedBy, check: SignerCheck?) {
                 check.valid -> stringResource(R.string.valid_short)
                 else -> stringResource(reasonTitle(check.reason))
             }
-            listOfNotNull(date, state).joinToString(" · ").takeIf { it.isNotEmpty() }?.let { Small(it, if (bad) fg else MaterialTheme.colorScheme.onSurfaceVariant) }
+            listOfNotNull(date, state).joinToString(" · ").takeIf {
+                it.isNotEmpty()
+            }?.let { Small(it, if (bad) fg else MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }
@@ -484,7 +511,7 @@ private fun KeyPicker(keys: List<KeyInfo>, current: KeyInfo, onPick: (KeyInfo) -
                     onClick = {
                         open = false
                         onPick(k)
-                    },
+                    }
                 )
             }
         }

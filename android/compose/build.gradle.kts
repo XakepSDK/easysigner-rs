@@ -55,7 +55,11 @@ android {
                 keyAlias = System.getenv("KZSIGNER_KEY_ALIAS") ?: "kzsigner"
                 keyPassword = storePassword
             } else {
-                // a development key whose password is public: -dev versions only (apk.sh checks)
+                // a development key whose password is public: -dev versions only (apk.sh checks
+                // too, but a Gradle run of its own would not)
+                if (!appVersion.contains('-')) {
+                    throw GradleException("release $appVersion: set KZSIGNER_KEYSTORE (the release signing key)")
+                }
                 storeFile = file("../dev.keystore")
                 storePassword = "kzsigner-dev"
                 keyAlias = "kzsigner-dev"
@@ -124,4 +128,7 @@ dependencies {
     // the UniFFI bindings call the Rust library through JNA; the aar carries its Android .so
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.21"))
+
+    // JVM unit tests (src/test): plain logic, no phone needed
+    testImplementation("junit:junit:4.13.2")
 }

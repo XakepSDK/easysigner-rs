@@ -45,11 +45,7 @@ import kz.kzsigner.R
  * the buttons kept at the bottom, above the keyboard.
  */
 @Composable
-fun Screen(
-    onBack: (() -> Unit)?,
-    buttons: @Composable ColumnScope.() -> Unit = {},
-    content: @Composable ColumnScope.() -> Unit,
-) {
+fun Screen(onBack: (() -> Unit)?, buttons: @Composable ColumnScope.() -> Unit = {}, content: @Composable ColumnScope.() -> Unit) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
             if (onBack != null) {
@@ -62,12 +58,12 @@ fun Screen(
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                content = content,
+                content = content
             )
             Column(
                 Modifier.fillMaxWidth().padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-                content = buttons,
+                content = buttons
             )
         }
     }
@@ -78,7 +74,7 @@ fun Title(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 28.sp),
-        modifier = Modifier.semantics { heading() },
+        modifier = Modifier.semantics { heading() }
     )
 }
 
@@ -104,7 +100,7 @@ fun MainButton(text: String, onClick: () -> Unit, enabled: Boolean = true, busy:
         } else {
             ButtonDefaults.buttonColors()
         },
-        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
     ) {
         if (busy) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -121,7 +117,7 @@ fun SecondButton(text: String, onClick: () -> Unit) {
         shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
     ) {
         Text(text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
     }
@@ -132,7 +128,7 @@ fun SecondButton(text: String, onClick: () -> Unit) {
 fun Notice(title: String?, text: String?, bg: Color, titleColor: Color, textColor: Color, icon: Int? = null) {
     Row(
         Modifier.fillMaxWidth().background(bg, RoundedCornerShape(12.dp)).padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (icon != null) {
             Icon(painterResource(icon), null, tint = titleColor, modifier = Modifier.size(22.dp))
@@ -164,15 +160,14 @@ fun Card(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> U
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
-        content = content,
+        content = content
     )
 }
 
 /** The name as people write it: "ИВАНОВ АЛИБЕК" → "Иванов Алибек". */
-fun displayName(name: String): String =
-    name.lowercase().split(' ').joinToString(" ") { w ->
-        w.split('-').joinToString("-") { p -> p.replaceFirstChar { it.titlecase() } }
-    }
+fun displayName(name: String): String = name.lowercase().split(' ').joinToString(" ") { w ->
+    w.split('-').joinToString("-") { p -> p.replaceFirstChar { it.titlecase() } }
+}
 
 @Composable
 fun Label(text: String) {
@@ -185,6 +180,6 @@ fun Center(content: @Composable ColumnScope.() -> Unit) {
         Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
-        content = content,
+        content = content
     )
 }

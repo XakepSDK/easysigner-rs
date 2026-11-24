@@ -17,9 +17,9 @@ import androidx.navigation.compose.rememberNavController
 import kz.kzsigner.ui.AboutScreen
 import kz.kzsigner.ui.AddKeyScreen
 import kz.kzsigner.ui.CantSignScreen
+import kz.kzsigner.ui.Center
 import kz.kzsigner.ui.CheckDetailsScreen
 import kz.kzsigner.ui.CheckScreen
-import kz.kzsigner.ui.Center
 import kz.kzsigner.ui.HomeScreen
 import kz.kzsigner.ui.KeysScreen
 import kz.kzsigner.ui.PdfReader
@@ -92,6 +92,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
 
     /** Back, or out of the app on its first screen. */
     val back: () -> Unit = { if (!nav.popBackStack()) finish() }
+
     /** Home, with nothing behind it. */
     val home: () -> Unit = {
         model.closeDocument()
@@ -106,7 +107,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
                     model.signAfterAdd = false
                     nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD)
                 },
-                onAddKey = { nav.navigate(Route.ADD) },
+                onAddKey = { nav.navigate(Route.ADD) }
             )
         }
         composable(Route.SIGN) {
@@ -126,7 +127,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
                 onCantSign = {
                     refused = it
                     nav.navigate(Route.CANT_SIGN)
-                },
+                }
             )
         }
         composable(Route.READ) {
@@ -143,7 +144,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
                 onBack = back,
                 onAdd = { nav.navigate(Route.ADD) },
                 onAbout = { nav.navigate(Route.ABOUT) },
-                onEmpty = { nav.restart(Route.HOME) },
+                onEmpty = { nav.restart(Route.HOME) }
             )
         }
         composable(Route.ADD) {
@@ -163,19 +164,22 @@ fun App(model: KeysModel, finish: () -> Unit) {
                             model.pickDocument = true
                             nav.restart(Route.HOME)
                         }
+
                         // 2c: straight back to the document
                         model.document != null && model.signed == null -> {
                             nav.restart(Route.HOME)
                             nav.navigate(Route.SIGN)
                         }
+
                         nav.previousBackStackEntry != null -> nav.popBackStack()
+
                         else -> nav.restart(Route.HOME)
                     }
                 },
                 onCantSign = {
                     refused = Refusal(it.reason, it.validFromMs, it.expiresMs)
                     nav.navigate(Route.CANT_SIGN)
-                },
+                }
             )
         }
         composable(Route.CANT_SIGN) {
@@ -189,7 +193,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
                     onAddNew = {
                         nav.popBackStack(Route.ADD, inclusive = true)
                         nav.navigate(Route.ADD)
-                    },
+                    }
                 )
             }
         }
@@ -209,7 +213,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
                     reading = it
                     nav.navigate(Route.READ)
                 },
-                onAnother = leave,
+                onAnother = leave
             )
         }
         composable(Route.DETAILS) { CheckDetailsScreen(model, onBack = back) }
