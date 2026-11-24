@@ -45,6 +45,39 @@ fn a_freshly_signed_pdf_is_valid_with_ncas_time() {
     assert_eq!(sg.signed_ms, s.nca_time_ms);
     assert!(c.fingerprint.is_some());
     assert_eq!(c.document.as_deref(), Some(&s.bytes[..]));
+    // a "good" answer from NCA is not a problem to show
+    assert!(sg.problems.is_empty(), "{:?}", sg.problems);
+}
+
+#[test]
+fn a_signed_xml_is_checked_as_xml() {
+    let s = signed_by_carol("check-xml", "act.xml", file("app/act.xml"));
+    assert_eq!(s.name, "act-signed.xml");
+    let c = run(&fake_nca(false), &s.name, s.bytes.clone(), None);
+    assert_eq!(c.verdict, Verdict::Valid, "{c:?}");
+    assert_eq!(c.format, Some(Format::Xml));
+    assert_eq!(c.signers.len(), 1);
+    assert_eq!(c.document.as_deref(), Some(&s.bytes[..]));
+
+    // the same XML unsigned: not signed, not broken
+    let c = run(&fake_nca(false), "act.xml", file("app/act.xml"), None);
+    assert_eq!(c.verdict, Verdict::NotSigned, "{c:?}");
+    assert_eq!(c.format, Some(Format::Xml));
+}
+
+#[test]
+fn a_document_card_is_checked_with_its_original() {
+    let nca = fake_nca(false);
+    let key = kzsigner::p12::open(&file("ocsp/carol.p12"), "Qwerty12", None).unwrap();
+    let r = nca
+        .engine
+        .sign_card(b"the act", "Akt.txt", &key, &nca.tsa, &nca.ocsp, None, None)
+        .unwrap();
+    let c = run(&nca, "Akt-card.pdf", r.cms, None);
+    assert_eq!(c.format, Some(Format::Card), "{c:?}");
+    assert_eq!(c.document_name, "Akt.txt");
+    assert_eq!(c.document.as_deref(), Some(&b"the act"[..]));
+    assert_eq!(c.signers.len(), 1);
 }
 
 #[test]
@@ -64,9 +97,21 @@ fn revoked_keys_and_changed_documents_are_not_valid() {
     assert_eq!(c.verdict, Verdict::NeedsDocument);
     assert_eq!(c.format, Some(Format::DetachedCms));
     assert_eq!(c.signers.len(), 1);
-    let c = run(&nca, "doc.txt.cms", det, Some(b"another text".to_vec()));
+    let c = run(
+        &nca,
+        "doc.txt.cms",
+        det.clone(),
+        Some(b"another text".to_vec()),
+    );
     assert_eq!(c.verdict, Verdict::Invalid, "{c:?}");
     assert_eq!(c.signers[0].reason, Some(Reason::Changed));
+    // with its own document: checked (NCA can't be asked here), and that document is shown
+    let doc = file("kalkan/doc.txt");
+    let c = run(&nca, "doc.txt.cms", det, Some(doc.clone()));
+    assert_eq!(c.format, Some(Format::DetachedCms));
+    assert_eq!(c.verdict, Verdict::Unknown, "{c:?}");
+    assert_eq!(c.signers[0].reason, Some(Reason::NotConfirmed));
+    assert_eq!(c.document.as_deref(), Some(&doc[..]));
 }
 
 #[test]
