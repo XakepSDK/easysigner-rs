@@ -620,8 +620,8 @@ pub unsafe extern "C" fn kz_tsp_request(
             bytes(hash, hash_len)?,
             required(policy)?,
             bytes(nonce, nonce_len)?,
-        );
-        put(out, r.encode());
+        )?;
+        put(out, r.encode()?);
         Ok(())
     })
 }

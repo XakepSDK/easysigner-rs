@@ -3,7 +3,7 @@
 //! can be re-hashed and copied exactly as they were.
 
 use crate::prelude::*;
-use crate::{Error, Result};
+use crate::{Error, Result, trf};
 
 pub const BOOLEAN: u8 = 0x01;
 pub const INTEGER: u8 = 0x02;
@@ -362,14 +362,24 @@ pub fn oid_to_string(c: &[u8]) -> Result<String> {
     Ok(s)
 }
 
-pub fn oid_content(s: &str) -> Vec<u8> {
-    let n: Vec<u64> = s
-        .split('.')
-        .map(|p| p.parse().expect("valid OID"))
-        .collect();
+/// The content octets of the OID in dotted form `s`, or None when `s` is not a valid OID
+/// (at least two arcs of ASCII digits, the first 0 to 2, the second under 40 unless the first
+/// is 2).
+pub fn try_oid_content(s: &str) -> Option<Vec<u8>> {
+    let mut n = Vec::new();
+    for p in s.split('.') {
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        n.push(p.parse::<u64>().ok()?);
+    }
+    let (&first, &second) = (n.first()?, n.get(1)?);
+    if first > 2 || (first < 2 && second >= 40) {
+        return None;
+    }
+    let mut arcs = vec![(first * 40).checked_add(second)?];
+    arcs.extend(n.get(2..).unwrap_or_default());
     let mut out = Vec::new();
-    let mut arcs = vec![n[0] * 40 + n[1]];
-    arcs.extend(&n[2..]);
     for a in arcs {
         let mut tmp = vec![(a & 0x7f) as u8];
         let mut x = a >> 7;
@@ -380,7 +390,21 @@ pub fn oid_content(s: &str) -> Vec<u8> {
         tmp.reverse();
         out.extend(tmp);
     }
-    out
+    Some(out)
+}
+
+/// Fails with [`ErrorKind::Malformed`](crate::ErrorKind) when `s` is not a valid dotted OID.
+/// Check strings from outside the crate with this before they reach [`oid`].
+pub fn check_oid(s: &str) -> Result<()> {
+    try_oid_content(s)
+        .map(|_| ())
+        .ok_or_else(|| Error::malformed(trf("'{}' is not an object identifier", &[&s])))
+}
+
+/// The content octets of the OID `s`. `s` must be a valid OID, such as one of this crate's
+/// constants or one read from DER; check any other string with [`check_oid`] first.
+pub fn oid_content(s: &str) -> Vec<u8> {
+    try_oid_content(s).expect("a valid OID (see check_oid)")
 }
 
 // ------------------------------------------------------------------ DER writer

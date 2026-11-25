@@ -554,4 +554,22 @@ fn timestamps() {
         )
     };
     assert_eq!(s, KzStatus::InvalidArgument);
+    // a malformed object identifier is an error, not a crash of the calling process
+    for bad in [c"1", c"1.2.x", c"9.9", c""] {
+        let mut req = empty();
+        let s = unsafe {
+            kz_tsp_request(
+                bad.as_ptr(),
+                digest.as_ptr(),
+                digest.len(),
+                c"1.2".as_ptr(),
+                nonce.as_ptr(),
+                nonce.len(),
+                &mut req,
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(s, KzStatus::Malformed, "{bad:?}");
+        assert!(req.ptr.is_null());
+    }
 }

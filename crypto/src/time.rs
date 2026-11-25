@@ -63,6 +63,7 @@ pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
     let s = core::str::from_utf8(content).map_err(|_| bad_time())?;
     let num = |a: usize, b: usize| -> Result<i64> {
         s.get(a..b)
+            .filter(|x| x.bytes().all(|c| c.is_ascii_digit()))
             .and_then(|x| x.parse::<i64>().ok())
             .ok_or_else(bad_time)
     };
@@ -213,6 +214,12 @@ mod tests {
         assert!(!bad(b"20240229000000Z"));
         assert!(!bad(b"20000229000000Z"));
         assert!(!bad(b"20261231235959Z"));
+        // digits only: no signs or spaces inside the fields
+        assert!(bad(b"2026+101000000Z"));
+        assert!(bad(b"202601-1000000Z"));
+        assert!(bad(b"20260101 1 0000Z"));
+        assert!(bad(b"20260101000000+-100"));
+        assert!(parse_asn1(crate::der::UTC_TIME, b"+60101000000Z").is_err());
     }
 
     #[test]

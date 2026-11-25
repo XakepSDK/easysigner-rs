@@ -48,6 +48,7 @@ impl TstInfo {
 }
 
 /// A timestamp request (TimeStampReq).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub hash_oid: String,
     pub hash: Vec<u8>,
@@ -60,21 +61,29 @@ impl Request {
     /// A request for a token over `hash` (made with `hash_oid`) under `policy`, with the TSA's
     /// certificate. `nonce`: random bytes (8 are usual); the first byte is adjusted so that the
     /// nonce is a positive INTEGER with no leading zero byte, and reads back exactly as sent.
-    pub fn new(hash_oid: &str, hash: &[u8], policy: &str, nonce: &[u8]) -> Request {
+    /// Fails when `hash_oid` or `policy` is not an object identifier.
+    pub fn new(hash_oid: &str, hash: &[u8], policy: &str, nonce: &[u8]) -> Result<Request> {
+        der::check_oid(hash_oid)?;
+        der::check_oid(policy)?;
         let mut nonce = nonce.to_vec();
         if let Some(b) = nonce.first_mut() {
             *b = (*b & 0x7f) | 0x40;
         }
-        Request {
+        Ok(Request {
             hash_oid: hash_oid.into(),
             hash: hash.to_vec(),
             policy: Some(policy.into()),
             nonce: Some(nonce),
             cert_req: true,
-        }
+        })
     }
 
-    pub fn encode(&self) -> Vec<u8> {
+    /// Fails when `hash_oid` or `policy` is not an object identifier.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        der::check_oid(&self.hash_oid)?;
+        if let Some(p) = &self.policy {
+            der::check_oid(p)?;
+        }
         let mut b = der::small_int(1);
         // the hash algorithm without parameters, as Bouncy Castle (NCALayer's library) writes it
         b.extend(der::seq(&[
@@ -90,7 +99,7 @@ impl Request {
         if self.cert_req {
             b.extend(der::boolean(true));
         }
-        der::tlv(der::SEQUENCE, &b)
+        Ok(der::tlv(der::SEQUENCE, &b))
     }
 
     pub fn parse(data: &[u8]) -> Result<Request> {
@@ -372,7 +381,7 @@ mod tests {
             nonce: Some(vec![0x41, 2, 3]),
             cert_req: true,
         };
-        let back = Request::parse(&r.encode()).unwrap();
+        let back = Request::parse(&r.encode().unwrap()).unwrap();
         assert_eq!(back.hash_oid, r.hash_oid);
         assert_eq!(back.hash, r.hash);
         assert_eq!(back.policy, r.policy);
@@ -384,7 +393,7 @@ mod tests {
             nonce: None,
             ..r
         };
-        let back = Request::parse(&r.encode()).unwrap();
+        let back = Request::parse(&r.encode().unwrap()).unwrap();
         assert!(!back.cert_req && back.policy.is_none() && back.nonce.is_none());
 
         // granted (0) and granted with modifications (1) give the token; anything else is a
@@ -465,10 +474,31 @@ mod tests {
         let c = check_token(&live(case, "data.bin"), token, &TrustStore::empty()).unwrap();
         assert!(c.ok() && !c.trusted() && c.tsa_ca().is_none());
         // requests made here
-        let r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[0xff, 0]);
+        let r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[0xff, 0]).unwrap();
         assert_eq!(r.nonce, Some(vec![0x7f, 0]));
         assert!(r.cert_req);
-        let r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[0x00, 0]);
+        let r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[0x00, 0]).unwrap();
         assert_eq!(r.nonce, Some(vec![0x40, 0]));
+        // object identifiers from outside are checked, never a panic
+        for bad in [
+            "",
+            "1",
+            "1.",
+            "x.2",
+            "3.1",
+            "1.40",
+            "+1.2",
+            "1.2.99999999999999999999",
+        ] {
+            let e = Request::new(bad, &[1; 32], "1.2.3", &[1]).unwrap_err();
+            assert_eq!(e.kind, crate::ErrorKind::Malformed, "{bad}");
+            assert!(
+                Request::new(gost::H_SHA256, &[1; 32], bad, &[1]).is_err(),
+                "{bad}"
+            );
+        }
+        let mut r = Request::new(gost::H_SHA256, &[1; 32], "2.999.1", &[1]).unwrap();
+        r.policy = Some("nonsense".into());
+        assert!(r.encode().is_err());
     }
 }

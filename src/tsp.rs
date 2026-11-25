@@ -27,8 +27,8 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>) -> Result<()
 pub fn request(url: &str, hash_oid: &str, hash: &[u8], policy: &str) -> Result<Vec<u8>> {
     let mut nonce = [0u8; 8];
     crate::random(&mut nonce)?;
-    let req = Request::new(hash_oid, hash, policy, &nonce);
-    let resp = http::post(url, CONTENT_TYPE, &req.encode(), "timestamp server")?;
+    let req = Request::new(hash_oid, hash, policy, &nonce)?;
+    let resp = http::post(url, CONTENT_TYPE, &req.encode()?, "timestamp server")?;
     Ok(read_answer(&req, &resp)?)
 }
 

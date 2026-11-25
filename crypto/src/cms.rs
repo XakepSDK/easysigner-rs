@@ -447,6 +447,7 @@ pub fn sign_digest(
     extra: &[Vec<u8>],
     rng: &mut dyn Rng,
 ) -> Result<SignedData> {
+    der::check_oid(content_type)?;
     let digest_oid = key.digest_oid();
     // CAdES-BES signed attributes, the same set NCALayer writes
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&gost::sha256(
