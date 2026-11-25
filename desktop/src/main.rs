@@ -168,7 +168,7 @@ enum Fail {
 
 impl From<Error> for Fail {
     fn from(e: Error) -> Fail {
-        Fail::User(e.0)
+        Fail::User(e.to_string())
     }
 }
 
@@ -392,13 +392,11 @@ fn network_defaults(o: &mut Opts, signing: bool, help: &'static str) -> R<()> {
 /// A failed default timestamp says how to sign without one.
 fn tsa_hint(o: &Opts) -> impl Fn(kzsigner::Error) -> Fail + '_ {
     move |e| {
-        // every timestamp error names the server, or its URL
-        let about_tsa = o.tsa.as_deref().is_some_and(|u| e.0.contains(u))
-            || e.0.contains(kzsigner::i18n::tr("timestamp server"));
+        let about_tsa = e.server() == Some(kzsigner::Server::Timestamp);
         if o.tsa_default && about_tsa {
             Fail::User(format!(
                 "{}\nA timestamp is added by default; --no-tsa (or --offline) signs without one.",
-                e.0
+                e
             ))
         } else {
             e.into()

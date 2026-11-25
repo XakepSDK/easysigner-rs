@@ -176,7 +176,12 @@ mod tests {
         let text = format!("noise\n{}\n", p.join("\n"));
         assert_eq!(assemble(&text).unwrap(), vec![(3, cms)]);
         let missing = p[1..].join("\n");
-        assert!(assemble(&missing).unwrap_err().0.contains("missing"));
+        assert!(
+            assemble(&missing)
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
         let v: Value = serde_json::from_str(&p[0]).unwrap();
         assert_eq!(v["signId"], 3);
     }
@@ -205,7 +210,7 @@ mod tests {
 
     #[test]
     fn bad_part_numbers() {
-        let err = |t: &str| assemble(t).unwrap_err().0;
+        let err = |t: &str| assemble(t).unwrap_err().to_string();
         assert!(err(&part(1, 2, 0, "")).contains("bad part number"));
         assert!(err(&part(1, 2, 3, "")).contains("bad part number"));
         assert!(err(&part(1, 1001, 1, "")).contains("bad part number"));
@@ -226,7 +231,7 @@ mod tests {
         assert!(
             assemble(&p.join("\n"))
                 .unwrap_err()
-                .0
+                .to_string()
                 .contains("more than a signature")
         );
     }

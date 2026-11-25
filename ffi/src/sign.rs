@@ -386,10 +386,13 @@ impl Vault {
             _ => e.sign(&bytes, &key, false, tsa, None, true, None),
         }
         .map_err(|x| {
-            if x.0.contains(&nca.tsa) {
+            // NCA's timestamp server not answering; anything else is a failure to show
+            if x.server() == Some(kzsigner::Server::Timestamp) {
                 SignError::NoAnswer
             } else {
-                SignError::Failed { detail: x.0 }
+                SignError::Failed {
+                    detail: x.to_string(),
+                }
             }
         })?;
         // long-term, as the desktop app does by default: when that fails, the signature

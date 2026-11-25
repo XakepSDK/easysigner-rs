@@ -540,7 +540,7 @@ pub fn check_archives(
                     let t = SignedData::parse_inner(&token).ok();
                     ArchiveStamp {
                         checked: true,
-                        error: Some(e.0),
+                        error: Some(e.to_string()),
                         time: t
                             .as_ref()
                             .and_then(|t| t.content.as_deref())

@@ -999,7 +999,7 @@ fn check_field(
     let mut s = match verify::verify_kept(c.value, Some(&c.signed), trust, ocsp_url, kept) {
         Ok(rep) if rep.signers.len() == 1 => rep.signers.into_iter().next().unwrap_or_default(),
         Ok(_) => failed(tr("A PDF signature must hold exactly one signer.")),
-        Err(e) => failed(&e.0),
+        Err(e) => failed(&e.to_string()),
     };
     if c.gap_bad {
         s.valid = false;
@@ -1039,7 +1039,7 @@ fn check_doc_timestamp(
     };
     let mut r = SignerReport::default();
     if let Err(e) = tsp::check_token(&mut r, &c.signed, c.value, trust) {
-        return (bad(trf("unreadable timestamp: {}", &[&e.0])), c.end);
+        return (bad(trf("unreadable timestamp: {}", &[&e])), c.end);
     }
     let mut a = ArchiveStamp {
         checked: true,

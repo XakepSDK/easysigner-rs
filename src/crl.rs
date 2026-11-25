@@ -42,7 +42,7 @@ fn fetch(url: &str, now: i64) -> Result<Arc<Crl>> {
     {
         return r.clone();
     }
-    let r = http::get(url, MAX_CRL, "revocation list server")
+    let r = http::get(url, MAX_CRL, crate::Server::RevocationList)
         .and_then(|d| Ok(Crl::parse(&d)?))
         .map(Arc::new);
     let until = match &r {

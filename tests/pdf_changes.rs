@@ -114,7 +114,7 @@ fn certified_pdfs_that_allow_no_changes_are_not_signed() {
     let Err(err) = e.sign_pdf(&data, &rsa, None, None) else {
         panic!("signed a no-changes PDF");
     };
-    assert!(err.0.contains("DocMDP"), "{}", err.0);
+    assert!(err.to_string().contains("DocMDP"), "{}", err.to_string());
 }
 
 #[test]

@@ -153,7 +153,7 @@ pub fn check_archives(
             })();
             checked.unwrap_or_else(|e| ArchiveStamp {
                 checked: true,
-                error: Some(e.0),
+                error: Some(e.to_string()),
                 time: token.as_deref().and_then(gen_time),
                 tsa: token.as_deref().and_then(tsp::token_cert).map(|c| c.cn()),
                 ..Default::default()

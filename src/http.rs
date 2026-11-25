@@ -4,8 +4,7 @@
 
 use std::time::Duration;
 
-use crate::i18n::{tr, trf};
-use crate::{Error, Result};
+use crate::{Error, NetProblem, Result, Server};
 
 /// The User-Agent of NCALayer 1.4 (bundled JRE 1.8.0_492).
 const NCALAYER_USER_AGENT: &str = "Java/1.8.0_492";
@@ -13,33 +12,30 @@ const NCALAYER_USER_AGENT: &str = "Java/1.8.0_492";
 /// Answers larger than this are refused (timestamp and OCSP answers are a few KB).
 const MAX_ANSWER: u64 = 4 << 20;
 
-/// POSTs `body`; `what` names the server in error messages.
-pub fn post(url: &str, content_type: &str, body: &[u8], what: &str) -> Result<Vec<u8>> {
-    request(url, what, Some((content_type, body)), MAX_ANSWER, 120)
+/// POSTs `body` to `server`.
+pub fn post(url: &str, content_type: &str, body: &[u8], server: Server) -> Result<Vec<u8>> {
+    request(url, server, Some((content_type, body)), MAX_ANSWER, 120)
 }
 
 /// GETs `url` (a certificate revocation list); answers up to `limit` bytes.
-pub fn get(url: &str, limit: u64, what: &str) -> Result<Vec<u8>> {
-    request(url, what, None, limit, 300)
+pub fn get(url: &str, limit: u64, server: Server) -> Result<Vec<u8>> {
+    request(url, server, None, limit, 300)
 }
 
 fn request(
     url: &str,
-    what: &str,
+    server: Server,
     post: Option<(&str, &[u8])>,
     limit: u64,
     seconds: u64,
 ) -> Result<Vec<u8>> {
-    let fail = |e: &dyn std::fmt::Display| {
-        Error::new(trf(
-            "Could not reach the {} at {}: {}",
-            &[&tr_what(what), &url, e],
-        ))
+    let fail = |problem| Error::Network {
+        server,
+        url: url.to_string(),
+        problem,
     };
     if !url.starts_with("http://") {
-        return Err(fail(
-            &"only http:// is supported (NCA's timestamp, OCSP and CRL servers use http)",
-        ));
+        return Err(fail(NetProblem::NotHttp));
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
@@ -62,13 +58,10 @@ fn request(
             .send(body),
         None => agent.get(url).call(),
     };
-    let mut resp = resp.map_err(|e| fail(&e))?;
+    let mut resp = resp.map_err(|e| fail(NetProblem::Unreachable(e.to_string())))?;
     let code = resp.status().as_u16();
     if code != 200 {
-        return Err(Error::new(trf(
-            "The {} answered HTTP {} ({})",
-            &[&tr_what(what), &code, &url],
-        )));
+        return Err(fail(NetProblem::Status(code)));
     }
     resp.body_mut()
         .with_config()
@@ -76,21 +69,9 @@ fn request(
         .read_to_vec()
         .map_err(|e| match e {
             // the server answered, with more than any real answer holds
-            ureq::Error::BodyExceedsLimit(n) => Error::new(trf(
-                "The {} at {} sent an answer larger than {} bytes",
-                &[&tr_what(what), &url, &n],
-            )),
-            e => fail(&e),
+            ureq::Error::BodyExceedsLimit(n) => fail(NetProblem::TooLarge(n)),
+            e => fail(NetProblem::Unreachable(e.to_string())),
         })
-}
-
-fn tr_what(what: &str) -> &str {
-    match what {
-        "timestamp server" => tr("timestamp server"),
-        "OCSP server" => tr("OCSP server"),
-        "revocation list server" => tr("revocation list server"),
-        other => other,
-    }
 }
 
 #[cfg(test)]
@@ -117,27 +98,53 @@ mod tests {
 
     #[test]
     fn answers_and_failures() {
+        use crate::{Error, NetProblem, Server};
         assert_eq!(
-            super::get(&serve("200 OK", b"list"), 100, "x").unwrap(),
+            super::get(&serve("200 OK", b"list"), 100, Server::RevocationList).unwrap(),
             b"list"
         );
         let big = serve("200 OK", b"too long");
-        let e = super::get(&big, 4, "x").unwrap_err();
+        let e = super::get(&big, 4, Server::RevocationList).unwrap_err();
         assert_eq!(
-            e.0,
-            format!("The x at {big} sent an answer larger than 4 bytes")
+            e,
+            Error::Network {
+                server: Server::RevocationList,
+                url: big.clone(),
+                problem: NetProblem::TooLarge(4)
+            }
         );
-        let e = super::get(&serve("404 Not Found", b""), 100, "OCSP server").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!("The revocation list server at {big} sent an answer larger than 4 bytes")
+        );
+        let e = super::get(&serve("404 Not Found", b""), 100, Server::Ocsp).unwrap_err();
+        assert!(matches!(
+            e,
+            Error::Network {
+                server: Server::Ocsp,
+                problem: NetProblem::Status(404),
+                ..
+            }
+        ));
         assert!(
-            e.0.starts_with("The OCSP server answered HTTP 404"),
-            "{}",
-            e.0
+            e.to_string()
+                .starts_with("The OCSP server answered HTTP 404"),
+            "{e}"
         );
-        let e = super::get("https://example.invalid/", 100, "timestamp server").unwrap_err();
-        assert!(e.0.contains("timestamp server") && e.0.contains("only http://"));
-        assert_eq!(
-            super::tr_what("revocation list server"),
-            "revocation list server"
+        let e = super::get("https://example.invalid/", 100, Server::Timestamp).unwrap_err();
+        assert_eq!(e.server(), Some(Server::Timestamp));
+        let m = e.to_string();
+        assert!(
+            m.contains("timestamp server") && m.contains("only http://"),
+            "{m}"
         );
+        let e = super::post("http://127.0.0.1:9/", "x", b"", Server::Ocsp).unwrap_err();
+        assert!(matches!(
+            e,
+            Error::Network {
+                problem: NetProblem::Unreachable(_),
+                ..
+            }
+        ));
     }
 }

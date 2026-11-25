@@ -162,7 +162,7 @@ mod tests {
         assert!(text.contains("Ша"));
         assert!(decode(b"<?xml version=\"1.0\" encoding=\"koi8-r\"?><a/>").is_err());
         for bom in [&b"\xff\xfe<\x00"[..], b"\xfe\xff\x00<"] {
-            assert!(decode(bom).is_err_and(|e| e.0.contains("UTF-16")));
+            assert!(decode(bom).is_err_and(|e| e.to_string().contains("UTF-16")));
         }
         // a character the encoding lacks is written as a reference
         assert_eq!(

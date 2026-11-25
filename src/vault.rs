@@ -381,7 +381,7 @@ impl From<GuardError> for VaultError {
 
 impl From<crate::Error> for VaultError {
     fn from(e: crate::Error) -> VaultError {
-        VaultError::Failed(e.0)
+        VaultError::Failed(e.to_string())
     }
 }
 
@@ -630,7 +630,7 @@ impl<G: Guard> Store<G> {
             Err(e) => return Err(VaultError::Failed(format!("{}: {e}", path.display()))),
         };
         s.read(&data).map_err(|e| {
-            VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e.0))
+            VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e))
         })?;
         Ok(s)
     }
@@ -745,12 +745,12 @@ impl<G: Guard> Store<G> {
             VaultError::Failed(format!(
                 "{}: {}",
                 tr("The key store is damaged"),
-                crate::Error::from(e).0
+                crate::Error::from(e)
             ))
         })?;
         let entries = read_index(t.expect(der::SEQUENCE).map_err(VaultError::from)?.content)
             .map_err(|e| {
-                VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e.0))
+                VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e))
             })?;
         h.list_key = Some(key);
         self.entries = Some(entries);

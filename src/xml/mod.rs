@@ -639,7 +639,7 @@ fn check_one(
                 );
             }
         }
-        Err(e) => sr.signature_error = Some(e.0),
+        Err(e) => sr.signature_error = Some(e.to_string()),
     }
 
     // the signature timestamp, over the canonical SignatureValue
@@ -662,7 +662,7 @@ fn check_one(
             Ok(ca) => tsa_ca = ca,
             Err(e) => {
                 sr.timestamp_ok = Some(false);
-                sr.timestamp_info = Some(trf("unreadable timestamp: {}", &[&e.0]));
+                sr.timestamp_info = Some(trf("unreadable timestamp: {}", &[&e]));
             }
         }
     }

@@ -1279,7 +1279,7 @@ pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> Verify
                 ..Default::default()
             },
             Err(e) => SignerReport {
-                signature_error: Some(e.0),
+                signature_error: Some(e.to_string()),
                 ..Default::default()
             },
         };

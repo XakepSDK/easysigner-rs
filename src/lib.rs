@@ -422,19 +422,103 @@ impl Engine {
     }
 }
 
-/// An error meant to be shown to the user as-is.
+/// What went wrong. Callers branch on the variant; [`Display`](std::fmt::Display) words it in
+/// the language set in [`i18n`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error(pub String);
+pub enum Error {
+    /// From the cryptography (parsing, keys, signatures), kept as kzcrypto's value.
+    Crypto(kzcrypto::Error),
+    /// A server could not be reached, or answered with something other than an answer.
+    Network {
+        server: Server,
+        url: String,
+        problem: NetProblem,
+    },
+    /// Anything else, already worded for people.
+    Message(String),
+}
+
+/// Which of NCA's servers (or another one) a network error is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Server {
+    Timestamp,
+    Ocsp,
+    RevocationList,
+}
+
+/// How talking to a server failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NetProblem {
+    /// Only http:// addresses are supported.
+    NotHttp,
+    /// No connection, a timeout, a broken answer: the transport's own words.
+    Unreachable(String),
+    /// An HTTP status other than 200.
+    Status(u16),
+    /// The answer was larger than this many bytes.
+    TooLarge(u64),
+}
 
 impl Error {
+    /// An error worded for people.
     pub fn new(m: impl Into<String>) -> Error {
-        Error(m.into())
+        Error::Message(m.into())
+    }
+
+    /// The server a network error is about.
+    pub fn server(&self) -> Option<Server> {
+        match self {
+            Error::Network { server, .. } => Some(*server),
+            _ => None,
+        }
+    }
+}
+
+impl Server {
+    /// "timestamp server", in the reader's language.
+    pub fn name(self) -> &'static str {
+        match self {
+            Server::Timestamp => i18n::tr("timestamp server"),
+            Server::Ocsp => i18n::tr("OCSP server"),
+            Server::RevocationList => i18n::tr("revocation list server"),
+        }
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        use i18n::{tr, trf};
+        match self {
+            Error::Crypto(e) => f.write_str(&i18n::text(&e.text)),
+            Error::Message(m) => f.write_str(m),
+            Error::Network {
+                server,
+                url,
+                problem,
+            } => {
+                let name = server.name();
+                f.write_str(&match problem {
+                    NetProblem::NotHttp => trf(
+                        "Could not reach the {} at {}: {}",
+                        &[
+                            &name,
+                            url,
+                            &tr("only http:// is supported (NCA's timestamp, OCSP and CRL servers use http)"),
+                        ],
+                    ),
+                    NetProblem::Unreachable(why) => {
+                        trf("Could not reach the {} at {}: {}", &[&name, url, why])
+                    }
+                    NetProblem::Status(code) => {
+                        trf("The {} answered HTTP {} ({})", &[&name, code, url])
+                    }
+                    NetProblem::TooLarge(n) => trf(
+                        "The {} at {} sent an answer larger than {} bytes",
+                        &[&name, url, n],
+                    ),
+                })
+            }
+        }
     }
 }
 
@@ -443,9 +527,8 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<kzcrypto::Error> for Error {
-    /// The message in the reader's language.
     fn from(e: kzcrypto::Error) -> Error {
-        Error(i18n::text(&e.text))
+        Error::Crypto(e)
     }
 }
 

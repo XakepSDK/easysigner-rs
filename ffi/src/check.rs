@@ -189,7 +189,7 @@ pub fn check_file(
             // a PDF or XML document without signatures reads as one; anything else is broken
             if kind == DocKind::Cms {
                 out.verdict = Verdict::Invalid;
-                out.signers = vec![broken(err.0)];
+                out.signers = vec![broken(err.to_string())];
             }
             return out;
         }

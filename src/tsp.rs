@@ -28,7 +28,7 @@ pub fn request(url: &str, hash_oid: &str, hash: &[u8], policy: &str) -> Result<V
     let mut nonce = [0u8; 8];
     crate::random(&mut nonce)?;
     let req = Request::new(hash_oid, hash, policy, &nonce)?;
-    let resp = http::post(url, CONTENT_TYPE, &req.encode()?, "timestamp server")?;
+    let resp = http::post(url, CONTENT_TYPE, &req.encode()?, crate::Server::Timestamp)?;
     Ok(read_answer(&req, &resp)?)
 }
 

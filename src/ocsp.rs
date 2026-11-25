@@ -37,6 +37,6 @@ pub fn fetch(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<A
     let mut nonce = [0u8; 16];
     crate::random(&mut nonce)?;
     let req = request(c, issuer, &nonce)?;
-    let body = http::post(url, CONTENT_TYPE, &req, "OCSP server")?;
+    let body = http::post(url, CONTENT_TYPE, &req, crate::Server::Ocsp)?;
     Ok(read_fresh(&body, c, issuer, &nonce, trust, time::now_ms())?)
 }
