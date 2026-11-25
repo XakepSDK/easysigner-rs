@@ -12,6 +12,9 @@ use kzsigner::tsp::{Request, TST_INFO};
 
 const PASSWORD: &str = "Qwerty12";
 
+/// When the fake OCSP responder says a key was revoked: 2026-11-02 00:00 UTC.
+const REVOKED_AT: i64 = 1_793_577_600_000;
+
 /// tests/fixtures, from this crate or from ffi/; or from the current folder, for the fake
 /// servers built on one machine and run from a checkout on another (CI's emulators).
 fn fixtures() -> PathBuf {
@@ -133,9 +136,12 @@ pub fn ocsp_answer(
                 .to_vec();
             let now = kzsigner::time::now_ms();
             let status = if revoked() {
+                // revoked at a fixed time, before every signature the tests check (the test
+                // CA starts on 2026-11-01): not "a day ago", which a stored signed file
+                // (tests/fixtures/app) outlives
                 der::tlv(
                     der::ctx(1),
-                    &kzsigner::time::encode_generalized(now - 86_400_000),
+                    &kzsigner::time::encode_generalized(REVOKED_AT.min(now - 86_400_000)),
                 )
             } else {
                 vec![0x80, 0x00]
