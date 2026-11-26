@@ -417,7 +417,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use i18n::{tr, trf};
         match self {
-            Error::Crypto(e) => f.write_str(&i18n::text(&e.text)),
+            Error::Crypto(e) => f.write_str(&i18n::text(e)),
             Error::Message(m) => f.write_str(m),
             Error::Network {
                 server,
@@ -462,15 +462,13 @@ impl From<kzcrypto::Error> for Error {
 
 impl From<::der::oid::Error> for Error {
     fn from(e: ::der::oid::Error) -> Error {
-        Error::Crypto(kzcrypto::Error::malformed(format!(
-            "bad object identifier: {e}"
-        )))
+        Error::Crypto(kzcrypto::Error::Asn1(format!("bad object identifier: {e}")))
     }
 }
 
 impl From<::der::Error> for Error {
     fn from(e: ::der::Error) -> Error {
-        Error::Crypto(kzcrypto::Error::malformed(format!("malformed ASN.1: {e}")))
+        Error::Crypto(kzcrypto::Error::Asn1(format!("{e}")))
     }
 }
 
@@ -484,12 +482,7 @@ pub struct OsRng;
 
 impl kzcrypto::Rng for OsRng {
     fn fill(&mut self, buf: &mut [u8]) -> kzcrypto::Result<()> {
-        getrandom::fill(buf).map_err(|e| {
-            kzcrypto::Error::of(
-                kzcrypto::ErrorKind::Random,
-                format!("no random numbers from the system: {e}"),
-            )
-        })
+        getrandom::fill(buf).map_err(|e| kzcrypto::Error::Random(e.to_string()))
     }
 }
 

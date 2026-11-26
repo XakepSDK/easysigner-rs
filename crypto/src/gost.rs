@@ -95,9 +95,7 @@ pub fn hash(oid: &str, data: &[u8]) -> Result<Vec<u8>> {
         H_SHA384 => sha2::Sha384::digest(data).to_vec(),
         H_SHA512 => sha2::Sha512::digest(data).to_vec(),
         _ => {
-            return Err(Error::unsupported(format!(
-                "Unsupported digest algorithm {oid}"
-            )));
+            return Err(Error::UnsupportedAlgorithm(oid.into()));
         }
     })
 }
@@ -111,9 +109,7 @@ pub fn digest_len(oid: &str) -> Result<usize> {
         H_SHA224 => 28,
         H_SHA384 => 48,
         _ => {
-            return Err(Error::unsupported(format!(
-                "Unsupported digest algorithm {oid}"
-            )));
+            return Err(Error::UnsupportedAlgorithm(oid.into()));
         }
     })
 }

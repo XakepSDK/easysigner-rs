@@ -3,7 +3,7 @@
 //! answers by hand, malformed ones included, and look inside what the code wrote. The code
 //! itself uses RustCrypto's `der`.
 
-use kzcrypto::{Error, Result, trf};
+use kzcrypto::{Error, Result};
 
 pub const BOOLEAN: u8 = 0x01;
 pub const INTEGER: u8 = 0x02;
@@ -32,7 +32,7 @@ pub const fn ctx_prim(n: u8) -> u8 {
 }
 
 fn bad(what: &str) -> Error {
-    Error::malformed(format!("malformed ASN.1: {what}"))
+    Error::Asn1(what.to_string())
 }
 
 /// One element: its tag byte, its content, and its complete encoding.
@@ -398,12 +398,12 @@ pub fn try_oid_content(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Fails with [`ErrorKind::Malformed`](kzcrypto::ErrorKind) when `s` is not a valid dotted OID.
+/// Fails with [`Error::NotOid`](kzcrypto::Error::NotOid) when `s` is not a valid dotted OID.
 /// Check strings from outside the crate with this before they reach [`oid`].
 pub fn check_oid(s: &str) -> Result<()> {
     try_oid_content(s)
         .map(|_| ())
-        .ok_or_else(|| Error::malformed(trf("'{}' is not an object identifier", &[&s])))
+        .ok_or_else(|| Error::NotOid(s.into()))
 }
 
 /// The content octets of the OID `s`. `s` must be a valid OID, such as one of this crate's

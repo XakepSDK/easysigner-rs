@@ -43,11 +43,13 @@ What the caller does:
   `ErrorKind::Random`; it is never replaced by zeros or by something weaker. GOST nonces are
   hedged: even with a broken source they differ for every message and key, so a signature
   never gives the private key away.
-* **Words.** Errors and statuses are `Text` (English template and arguments). The application
-  translates the template and shows times in the reader's time zone. `Display` gives English.
+* **Words.** None in errors. An `Error` is an enum of what went wrong, with data (an OID, a key
+  alias, a parser's diagnostic), never a sentence; the application words it in its own
+  language. Statuses (`trust::PathStatus`, `ocsp::Status`, `crl::ListStatus`,
+  `cert::SigningRefusal`) are enums too.
 
-Errors carry an `ErrorKind` (`Malformed`, `Unsupported`, `WrongPassword`, `Random`, `Other`) for
-programs.
+`Error::kind()` gives the broad class (`Malformed`, `Unsupported`, `WrongPassword`, `Random`,
+`Other`) and `Error::code()` a stable number for each variant, for logs and other languages.
 
 ## Size
 

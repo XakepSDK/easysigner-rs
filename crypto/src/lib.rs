@@ -12,9 +12,8 @@
 //! * passes the current time in, as milliseconds since 1970 (UTC);
 //! * passes a random source in ([`Rng`]) wherever randomness is needed (signing, nonces).
 //!
-//! Messages for people (errors and statuses) are [`Text`]s: an English template and its
-//! arguments, so that the application can show them in its own language. `Display` gives the
-//! English.
+//! Errors and statuses are values ([`Error`], [`trust::PathStatus`], [`ocsp::Status`], ...),
+//! not messages: the application words them in its own language.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -27,6 +26,7 @@ mod asn1;
 pub mod cert;
 pub mod cms;
 pub mod crl;
+pub mod error;
 pub mod gost;
 pub mod keys;
 pub mod ocsp;
@@ -51,66 +51,7 @@ pub use text::{Text, tr, trf};
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// What went wrong, for programs. The [`Text`] says it for people.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-#[repr(u32)]
-pub enum ErrorKind {
-    /// Anything else.
-    Other = 1,
-    /// The input is not well-formed (ASN.1, a certificate, a CMS file, a key file, ...).
-    Malformed = 2,
-    /// An algorithm, key type or format this crate does not support.
-    Unsupported = 3,
-    /// The key file's password is wrong.
-    WrongPassword = 4,
-    /// The random source failed.
-    Random = 5,
-}
-
-/// An error: what kind, and a message for people.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    pub kind: ErrorKind,
-    pub text: Text,
-}
-
-impl Error {
-    /// An error of kind [`ErrorKind::Other`].
-    pub fn new(t: impl Into<Text>) -> Error {
-        Error {
-            kind: ErrorKind::Other,
-            text: t.into(),
-        }
-    }
-
-    /// An error of kind [`ErrorKind::Malformed`].
-    pub fn malformed(t: impl Into<Text>) -> Error {
-        Error::of(ErrorKind::Malformed, t)
-    }
-
-    /// An error of kind [`ErrorKind::Unsupported`].
-    pub fn unsupported(t: impl Into<Text>) -> Error {
-        Error::of(ErrorKind::Unsupported, t)
-    }
-
-    pub fn of(kind: ErrorKind, t: impl Into<Text>) -> Error {
-        Error {
-            kind,
-            text: t.into(),
-        }
-    }
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(&self.text, f)
-    }
-}
-
-impl core::error::Error for Error {}
-
-pub type Result<T> = core::result::Result<T, Error>;
+pub use error::{Error, ErrorKind, Result};
 
 /// A source of cryptographically secure random bytes, supplied by the caller (on a computer or
 /// phone: the operating system's generator).
@@ -178,7 +119,7 @@ pub(crate) mod testing {
 
     impl Rng for OsRng {
         fn fill(&mut self, buf: &mut [u8]) -> Result<()> {
-            getrandom::fill(buf).map_err(|_| Error::of(ErrorKind::Random, "no random numbers"))
+            getrandom::fill(buf).map_err(|e| Error::Random(format!("{e}")))
         }
     }
 

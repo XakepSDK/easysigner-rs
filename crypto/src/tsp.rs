@@ -12,10 +12,9 @@ use x509_tsp::{MessageImprint, TimeStampReq, TimeStampResp, TspVersion};
 use crate::asn1::{err as asn1, oid, positive, strip_zeros};
 use crate::gost::{self, Scheme};
 use crate::prelude::*;
-use crate::text::trf;
 use crate::trust::{Chain, TrustStore};
 use crate::verify::{self, Outcome};
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 pub const TST_INFO: &str = "1.2.840.113549.1.9.16.1.4";
 /// The content type to send a request with.
@@ -34,8 +33,8 @@ impl TstInfo {
     /// From a token's encapsulated content (DER), read by `x509-tsp`.
     pub fn parse(data: &[u8]) -> Result<TstInfo> {
         let t = x509_tsp::TstInfo::from_der(data).map_err(asn1)?;
-        let ms = i64::try_from(t.gen_time.to_unix_duration().as_millis())
-            .map_err(|_| Error::malformed("TSTInfo time out of range"))?;
+        let ms =
+            i64::try_from(t.gen_time.to_unix_duration().as_millis()).map_err(|_| Error::BadTime)?;
         Ok(TstInfo {
             policy: t.policy.to_string(),
             imprint_alg: t.message_imprint.hash_algorithm.oid.to_string(),
@@ -130,12 +129,7 @@ pub fn hash_and_policy_for(key_alg: &str) -> (&'static str, &'static str) {
 /// The checked token (a ContentInfo, as encoded) in the TSA's answer `resp` to `req`.
 pub fn read_answer(req: &Request, resp: &[u8]) -> Result<Vec<u8>> {
     let token = read_response(resp)?;
-    validate(req, &token).map_err(|e| {
-        Error::new(trf(
-            "The timestamp server's answer does not match the request: {}",
-            &[&e],
-        ))
-    })?;
+    validate(req, &token).map_err(|e| Error::TimestampMismatch(Box::new(e)))?;
     Ok(token)
 }
 
@@ -147,15 +141,7 @@ pub fn token_cert(token: &[u8]) -> Option<Cert> {
 
 /// The token (a ContentInfo, DER) from a TimeStampResp.
 pub fn read_response(resp: &[u8]) -> Result<Vec<u8>> {
-    let bad = |e: ::der::Error| {
-        Error::of(
-            ErrorKind::Malformed,
-            trf(
-                "The timestamp server's answer is unreadable ({})",
-                &[&format!("{e}")],
-            ),
-        )
-    };
+    let bad = |e: ::der::Error| Error::TimestampUnreadable(format!("{e}"));
     let r = TimeStampResp::from_der(resp)
         .or_else(|_| TimeStampResp::from_ber(resp))
         .map_err(bad)?;
@@ -168,10 +154,7 @@ pub fn read_response(resp: &[u8]) -> Result<Vec<u8>> {
                 .as_ref()
                 .and_then(|t| t.first())
                 .map(|t| t.as_str().to_string());
-            Err(Error::new(trf(
-                "The timestamp server refused the request{}",
-                &[&text.map(|t| format!(": {t}")).unwrap_or_default()],
-            )))
+            Err(Error::TimestampRefused(text))
         }
     }
 }
@@ -179,30 +162,24 @@ pub fn read_response(resp: &[u8]) -> Result<Vec<u8>> {
 /// Whether `token` answers `req`: nonce, policy, hash and (when asked for) certificate.
 pub fn validate(req: &Request, token: &[u8]) -> Result<()> {
     let sd = SignedData::parse_inner(token)?;
-    let info = TstInfo::parse(
-        sd.content
-            .as_deref()
-            .ok_or_else(|| Error::new("token without TSTInfo"))?,
-    )?;
+    let info = TstInfo::parse(sd.content.as_deref().ok_or(Error::NoContent)?)?;
     let strip = |n: &Option<Vec<u8>>| {
         n.as_deref()
             .map(|b| b[b.iter().position(|&x| x != 0).unwrap_or(b.len())..].to_vec())
     };
     if req.nonce.is_some() && strip(&info.nonce) != strip(&req.nonce) {
-        return Err(Error::new("response contains wrong nonce value."));
+        return Err(Error::WrongNonce);
     }
     if let Some(p) = &req.policy
         && *p != info.policy
     {
-        return Err(Error::new("TSA policy wrong for request."));
+        return Err(Error::WrongPolicy);
     }
     if info.imprint_alg != req.hash_oid || info.imprint != req.hash {
-        return Err(Error::new("response for different message imprint digest."));
+        return Err(Error::WrongImprint);
     }
     if req.cert_req && sd.signers.first().and_then(|s| sd.signer_cert(s)).is_none() {
-        return Err(Error::new(
-            "Certificate requested but not present in response.",
-        ));
+        return Err(Error::NoTsaCertificate);
     }
     Ok(())
 }
@@ -248,23 +225,18 @@ impl TokenCheck {
 pub fn check_token(stamped: &[u8], token: &[u8], trust: &TrustStore) -> Result<TokenCheck> {
     let sd = SignedData::parse_inner(token)?;
     if sd.signers.len() != 1 {
-        return Err(Error::new("time-stamp token signed by multiple signers."));
+        return Err(Error::MultipleSigners);
     }
     if sd.content_type != TST_INFO {
-        return Err(Error::new("ContentInfo object not for a time stamp."));
+        return Err(Error::NotTstInfo);
     }
     let tsi = &sd.signers[0];
     if tsi.signed_attr(ATTR_SIGNING_CERT).is_none()
         && tsi.signed_attr(ATTR_SIGNING_CERT_V2).is_none()
     {
-        return Err(Error::new(
-            "no signing certificate attribute found, time stamp invalid.",
-        ));
+        return Err(Error::NoSigningCertAttr);
     }
-    let content = sd
-        .content
-        .clone()
-        .ok_or_else(|| Error::new("time stamp without TSTInfo"))?;
+    let content = sd.content.clone().ok_or(Error::NoContent)?;
     let info = TstInfo::parse(&content)?;
     let tsa_cert: Option<Cert> = sd.signer_cert(tsi);
     let imprint_ok = gost::hash(&info.imprint_alg, stamped).is_ok_and(|h| h == info.imprint);
@@ -314,7 +286,7 @@ mod tests {
         let mut r = req();
         *r.nonce.as_mut().unwrap().last_mut().unwrap() ^= 1;
         let e = validate(&r, token).unwrap_err();
-        assert!(e.to_string().contains("nonce"), "{e}");
+        assert_eq!(e, Error::WrongNonce);
         // no nonce asked: none checked
         let mut r = req();
         r.nonce = None;
@@ -323,7 +295,7 @@ mod tests {
         let mut r = req();
         r.policy = Some("1.2.398.3.3.2.6.4".into());
         let e = validate(&r, token).unwrap_err();
-        assert!(e.to_string().contains("policy"), "{e}");
+        assert_eq!(e, Error::WrongPolicy);
         let mut r = req();
         r.policy = None;
         validate(&r, token).unwrap();
@@ -331,18 +303,18 @@ mod tests {
         let mut r = req();
         r.hash[0] ^= 1;
         let e = validate(&r, token).unwrap_err();
-        assert!(e.to_string().contains("imprint"), "{e}");
+        assert_eq!(e, Error::WrongImprint);
         let mut r = req();
         r.hash_oid = gost::H_SHA1.into();
         let e = validate(&r, token).unwrap_err();
-        assert!(e.to_string().contains("imprint"), "{e}");
+        assert_eq!(e, Error::WrongImprint);
 
         // a token without the TSA's certificate, when the request asked for it
         let mut sd = SignedData::parse_inner(token).unwrap();
         sd.certs.clear();
         let bare = sd.encode().unwrap();
         let e = validate(&req(), &bare).unwrap_err();
-        assert!(e.to_string().contains("Certificate requested"), "{e}");
+        assert_eq!(e, Error::NoTsaCertificate);
         let mut r = req();
         r.cert_req = false;
         validate(&r, &bare).unwrap();
@@ -505,7 +477,7 @@ mod tests {
             "1.2.99999999999999999999",
         ] {
             let e = Request::new(bad, &[1; 32], "1.2.3", &[1]).unwrap_err();
-            assert_eq!(e.kind, crate::ErrorKind::Malformed, "{bad}");
+            assert_eq!(e.kind(), crate::ErrorKind::Malformed, "{bad}");
             assert!(
                 Request::new(gost::H_SHA256, &[1; 32], bad, &[1]).is_err(),
                 "{bad}"

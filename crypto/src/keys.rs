@@ -57,9 +57,7 @@ fn curve_id(param_set: &str) -> Result<GostCurveId> {
     } else if named(Tc26_512A::PARAM_SET_OIDS) {
         Ok(GostCurveId::Tc26_512A)
     } else {
-        Err(Error::unsupported(format!(
-            "Unsupported GOST curve parameter set {param_set}"
-        )))
+        Err(Error::UnsupportedCurve(param_set.into()))
     }
 }
 
@@ -72,18 +70,18 @@ fn gost_sign<C: GostCurve>(k: &SigningKey<C>, hash: &[u8], rng: &mut dyn Rng) ->
     rng.fill(&mut fresh)?;
     let sig = k
         .sign_prehash_with_fresh(hash, &fresh)
-        .map_err(|_| Error::new("GOST signing failed"))?;
+        .map_err(|_| Error::SigningFailed(None))?;
     let mut out = [0u8; 128];
     Ok(sig
         .to_nca_bytes(&mut out)
-        .map_err(|_| Error::new("GOST signing failed"))?
+        .map_err(|_| Error::SigningFailed(None))?
         .to_vec())
 }
 
 impl GostPublic {
     /// From NCA's form: x || y, little-endian.
     fn from_nca_bytes(curve: GostCurveId, xy: &[u8]) -> Result<GostPublic> {
-        let bad = |_| Error::malformed("malformed GOST public key");
+        let bad = |_| Error::BadPublicKey(None);
         Ok(match curve {
             GostCurveId::CryptoProA => {
                 GostPublic::CryptoProA(VerifyingKey::from_nca_bytes(xy).map_err(bad)?)
@@ -119,7 +117,7 @@ impl GostPublic {
 impl GostPrivate {
     /// From d, little-endian (as long as the curve's field).
     fn from_le(curve: GostCurveId, d: &[u8]) -> Result<GostPrivate> {
-        let bad = |_| Error::malformed("malformed GOST private key");
+        let bad = |_| Error::BadPrivateKey(None);
         Ok(match curve {
             GostCurveId::CryptoProA => {
                 GostPrivate::CryptoProA(SigningKey::from_nca_bytes(d).map_err(bad)?)
@@ -161,7 +159,7 @@ fn field_len(curve: GostCurveId) -> usize {
 
 /// The curve's parameter set: the first OID in a GOST key's algorithm parameters.
 fn param_set(params: Option<&::der::Any>) -> Result<String> {
-    let none = || Error::new("GOST key without curve parameters");
+    let none = || Error::NoCurveParameters;
     let items: Vec<::der::Any> = params.ok_or_else(none)?.decode_as().map_err(asn1::err)?;
     let first = items.first().ok_or_else(none)?;
     Ok(first
@@ -178,7 +176,7 @@ impl PublicKey {
         let bits = k
             .subject_public_key
             .as_bytes()
-            .ok_or_else(|| Error::malformed("malformed ASN.1: SubjectPublicKeyInfo"))?;
+            .ok_or(Error::BadPublicKey(None))?;
         if gost::by_key(&oid).is_some() {
             let curve = curve_id(&param_set(k.algorithm.parameters.as_ref())?)?;
             let xy = OctetString::from_der(bits).map_err(asn1::err)?;
@@ -189,7 +187,7 @@ impl PublicKey {
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PublicKey::from_pkcs1_der(bits)
-                .map_err(|e| Error::malformed(format!("malformed RSA public key: {e}")))?;
+                .map_err(|e| Error::BadPublicKey(Some(format!("{e}"))))?;
             return Ok(PublicKey::Rsa(k));
         }
         Ok(PublicKey::Other(oid))
@@ -208,7 +206,7 @@ impl PublicKey {
         match self {
             PublicKey::Gost(k) => {
                 let sc = gost::by_sig(sig_alg)
-                    .ok_or_else(|| Error::new(format!("Key does not match {sig_alg}")))?;
+                    .ok_or_else(|| Error::KeyAlgorithmMismatch(sig_alg.into()))?;
                 let h = gost::hash(sc.digest_oid, data)?;
                 Ok(k.verify_prehash(&h, sig))
             }
@@ -224,9 +222,7 @@ impl PublicKey {
                     .iter()
                     .any(|di| k.verify(Pkcs1v15Sign::new_unprefixed(), di, sig).is_ok()))
             }
-            PublicKey::Other(oid) => Err(Error::unsupported(format!(
-                "Unsupported key algorithm {oid}"
-            ))),
+            PublicKey::Other(oid) => Err(Error::UnsupportedKey(oid.to_string())),
         }
     }
 }
@@ -250,9 +246,7 @@ fn rsa_digest<'a>(sig_alg: &str, digest_alg: Option<&'a str>) -> Result<&'a str>
             _ => gost::H_SHA256,
         },
         _ => {
-            return Err(Error::new(format!(
-                "Unsupported signature algorithm {sig_alg}"
-            )));
+            return Err(Error::UnsupportedAlgorithm(sig_alg.into()));
         }
     })
 }
@@ -285,7 +279,7 @@ impl PrivateKey {
         // version, algorithm, key, and whatever follows (attributes, a v2 public key)
         let k: Vec<::der::Any> = Vec::from_der(pki).map_err(asn1::err)?;
         let (Some(alg), Some(key)) = (k.get(1), k.get(2)) else {
-            return Err(Error::malformed("malformed PrivateKeyInfo"));
+            return Err(Error::BadPrivateKey(None));
         };
         let alg: spki::AlgorithmIdentifierOwned = alg.decode_as().map_err(asn1::err)?;
         let key = zeroize::Zeroizing::new(
@@ -310,14 +304,14 @@ impl PrivateKey {
                     be
                 }
                 ::der::Tag::OctetString => v.value().to_vec(),
-                _ => return Err(Error::new("unexpected GOST private key encoding")),
+                _ => return Err(Error::BadPrivateKey(None)),
             });
             let n = field_len(curve);
             while d.len() > n && d.last() == Some(&0) {
                 d.pop();
             }
             if d.len() > n {
-                return Err(Error::malformed("malformed GOST private key"));
+                return Err(Error::BadPrivateKey(None));
             }
             d.resize(n, 0);
             let key = GostPrivate::from_le(curve, &d)?;
@@ -325,12 +319,10 @@ impl PrivateKey {
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PrivateKey::from_pkcs1_der(&key)
-                .map_err(|e| Error::malformed(format!("malformed RSA private key: {e}")))?;
+                .map_err(|e| Error::BadPrivateKey(Some(format!("{e}"))))?;
             return Ok(PrivateKey::Rsa(k));
         }
-        Err(Error::unsupported(format!(
-            "Unsupported private key type {oid}"
-        )))
+        Err(Error::UnsupportedKey(oid.to_string()))
     }
 
     /// The KZ GOST scheme, or None for RSA.
@@ -361,9 +353,7 @@ impl PrivateKey {
         if let PrivateKey::Gost { scheme, .. } = self
             && scheme.key_oid == gost::KEY_GOST2004
         {
-            return Err(Error::unsupported(
-                "GOST 34.310-2004 keys can no longer sign; they only check old signatures",
-            ));
+            return Err(Error::Gost2004CannotSign);
         }
         let h = gost::hash(self.digest_oid(), data)?;
         match self {
@@ -377,7 +367,7 @@ impl PrivateKey {
                         Pkcs1v15Sign::new_unprefixed(),
                         &digest_info(gost::H_SHA256, &h, Some(::der::asn1::Any::null()))?,
                     )
-                    .map_err(|e| Error::new(format!("RSA signing failed: {e}")));
+                    .map_err(|e| Error::SigningFailed(Some(format!("{e}"))));
                 match r.failed {
                     Some(e) => Err(e),
                     None => sig,
@@ -463,12 +453,12 @@ mod tests {
         struct Broken;
         impl crate::Rng for Broken {
             fn fill(&mut self, _: &mut [u8]) -> Result<()> {
-                Err(Error::of(crate::ErrorKind::Random, "broken"))
+                Err(Error::Random("broken".into()))
             }
         }
         for name in ["alice_rsa", "alice_gost2015", "alice_gost2015_256"] {
             let e = key(name).private_key.sign(b"x", &mut Broken).unwrap_err();
-            assert_eq!(e.kind, crate::ErrorKind::Random, "{name}");
+            assert_eq!(e.kind(), crate::ErrorKind::Random, "{name}");
             let sig = key(name)
                 .private_key
                 .sign(b"x", &mut crate::testing::OsRng)
@@ -492,7 +482,7 @@ mod tests {
             .private_key
             .sign(b"x", &mut crate::testing::OsRng)
             .unwrap_err();
-        assert_eq!(e.kind, crate::ErrorKind::Unsupported);
+        assert_eq!(e.kind(), crate::ErrorKind::Unsupported);
         assert!(k.private_key.matches(&k.cert.public_key().unwrap()));
     }
 

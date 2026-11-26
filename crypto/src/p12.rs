@@ -18,8 +18,7 @@ use spki::AlgorithmIdentifierOwned;
 use crate::cert::Cert;
 use crate::keys::PrivateKey;
 use crate::prelude::*;
-use crate::text::{tr, trf};
-use crate::{Error, ErrorKind, Result, hex};
+use crate::{Error, Result, hex};
 
 /// A private key opened from a .p12 file, with its certificate chain.
 pub struct Key {
@@ -76,14 +75,9 @@ fn pick(
     certs: Vec<Bag<Cert>>,
     wanted_alias: Option<&str>,
 ) -> Result<(Key, zeroize::Zeroizing<Vec<u8>>)> {
-    read.map_err(|e| {
-        Error::new(trf(
-            "Could not open the key file. The password is probably wrong, or the file uses an unsupported format ({})",
-            &[&e],
-        ))
-    })?;
+    read.map_err(|e| Error::KeyFileUnreadable(Box::new(e)))?;
     if keys.is_empty() {
-        return Err(Error::new(tr("The key file contains no private key.")));
+        return Err(Error::NoPrivateKey);
     }
     let aliases: Vec<String> = keys
         .iter()
@@ -94,14 +88,13 @@ fn pick(
         .map(str::to_string)
         .unwrap_or_else(|| aliases[0].clone());
     let Some(idx) = aliases.iter().position(|a| *a == alias) else {
-        return Err(Error::new(trf(
-            "No key with alias '{}'. Available: [{}]",
-            &[&alias, &aliases.join(", ")],
-        )));
+        return Err(Error::NoSuchAlias {
+            alias,
+            available: aliases,
+        });
     };
     let kb = &keys[idx];
-    let private_key = PrivateKey::from_pkcs8(&kb.value)
-        .map_err(|e| Error::unsupported(trf("Unsupported private key type: {}", &[&e])))?;
+    let private_key = PrivateKey::from_pkcs8(&kb.value)?;
     let pool: Vec<Cert> = certs.iter().map(|b| b.value.clone()).collect();
     let mut leaf = None;
     for c in &certs {
@@ -115,8 +108,7 @@ fn pick(
             .find(|c| c.public_key().is_ok_and(|p| private_key.matches(&p)))
             .cloned();
     }
-    let leaf =
-        leaf.ok_or_else(|| Error::new(tr("The key file has no certificate for its key.")))?;
+    let leaf = leaf.ok_or(Error::NoCertificateForKey)?;
     let other_aliases = aliases.iter().filter(|a| **a != alias).cloned().collect();
     let pkcs8 = zeroize::Zeroizing::new(kb.value.clone());
     let key = Key {
@@ -170,19 +162,12 @@ fn octets(any: &::der::Any) -> ::der::Result<Vec<u8>> {
 
 /// The AuthenticatedSafe bytes and the MAC, unchecked.
 fn pfx_parts(p12: &[u8]) -> Result<(Vec<u8>, Option<MacData>)> {
-    let not_p12 = |e: &dyn core::fmt::Display| {
-        Error::new(trf(
-            "Could not open the key file: it is not a PKCS#12 (.p12) key ({})",
-            &[&format!("{e}")],
-        ))
-    };
-    let pfx: Pfx = ber(p12).map_err(|e| not_p12(&e))?;
+    let not_p12 = |e: Error| Error::NotPkcs12(Box::new(e));
+    let pfx: Pfx = ber(p12).map_err(|e| not_p12(asn1(e)))?;
     if pfx.auth_safe.content_type.to_string() != DATA {
-        return Err(not_p12(
-            &"unsupported PFX content (public-key integrity mode)",
-        ));
+        return Err(not_p12(Error::UnsupportedPfxMode));
     }
-    let auth_safe = octets(&pfx.auth_safe.content).map_err(|e| not_p12(&e))?;
+    let auth_safe = octets(&pfx.auth_safe.content).map_err(|e| not_p12(asn1(e)))?;
     Ok((auth_safe, pfx.mac_data))
 }
 
@@ -192,10 +177,7 @@ fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
     if let Some(mac) = mac {
         let ok = check_mac(&mac, &auth_safe, password).unwrap_or(false);
         if !ok {
-            return Err(Error::of(
-                ErrorKind::WrongPassword,
-                tr("Could not open the key file. The password is probably wrong."),
-            ));
+            return Err(Error::WrongPassword);
         }
     }
     Ok(auth_safe)
@@ -216,8 +198,8 @@ fn check_mac(mac: &MacData, data: &[u8], password: &str) -> Result<bool> {
                 Pkcs12KeyType::Mac,
                 <$h as digest::OutputSizeUser>::output_size(),
             )?;
-            let mut h =
-                <hmac::Hmac<$h>>::new_from_slice(&key).map_err(|_| Error::new("MAC key"))?;
+            let mut h = <hmac::Hmac<$h>>::new_from_slice(&key)
+                .map_err(|_| Error::BadEncryptionParameters)?;
             h.update(data);
             Ok(h.verify_slice(expected).is_ok())
         }};
@@ -228,12 +210,12 @@ fn check_mac(mac: &MacData, data: &[u8], password: &str) -> Result<bool> {
         crate::gost::H_SHA384 => mac_with!(sha2::Sha384),
         crate::gost::H_SHA512 => mac_with!(sha2::Sha512),
         crate::gost::H_SHA224 => mac_with!(sha2::Sha224),
-        o => Err(Error::new(format!("unsupported MAC algorithm {o}"))),
+        o => Err(Error::UnsupportedAlgorithm(o.into())),
     }
 }
 
 fn asn1(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
+    Error::Asn1(format!("{e}"))
 }
 
 fn read_contents(
@@ -250,12 +232,10 @@ fn read_contents(
                 let enc = ci.content.to_der().map_err(asn1)?;
                 let ed: EncryptedData = ber(&enc).map_err(asn1)?;
                 let eci = ed.enc_content_info;
-                let data = eci
-                    .encrypted_content
-                    .ok_or_else(|| Error::new("encrypted data without content"))?;
+                let data = eci.encrypted_content.ok_or(Error::NoContent)?;
                 decrypt(&eci.content_enc_alg, data.as_bytes(), password)?
             }
-            o => return Err(Error::new(format!("unsupported PKCS#12 content type {o}"))),
+            o => return Err(Error::UnsupportedAlgorithm(o.into())),
         };
         let bags: SafeContents = ber(&safe_contents).map_err(asn1)?;
         for bag in &bags {
@@ -363,7 +343,7 @@ fn bmp_password(p: &str) -> Vec<u8> {
 fn iterations(n: i64) -> Result<u32> {
     match n {
         1..=10_000_000 => Ok(n as u32),
-        n => Err(Error::new(format!("unsupported iteration count {n}"))),
+        n => Err(Error::BadIterationCount(n)),
     }
 }
 
@@ -376,24 +356,24 @@ fn kdf<D: Digest + FixedOutputReset + BlockSizeUser>(
     n: usize,
 ) -> Result<Vec<u8>> {
     derive_key::<D>(pw, salt, id, iterations.clamp(1, i32::MAX as u32) as i32, n)
-        .map_err(|e| Error::new(format!("key derivation: {e}")))
+        .map_err(|_| Error::BadEncryptionParameters)
 }
 
 /// CBC decryption with PKCS#7 padding (RustCrypto's cbc crate).
 fn cbc_decrypt<C: BlockCipherDecrypt>(c: C, iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
-    let d =
-        cbc::Decryptor::<C>::inner_iv_slice_init(c, iv).map_err(|_| Error::new("bad IV length"))?;
+    let d = cbc::Decryptor::<C>::inner_iv_slice_init(c, iv)
+        .map_err(|_| Error::BadEncryptionParameters)?;
     let mut buf = data.to_vec();
     let n = d
         .decrypt_padded::<Pkcs7>(&mut buf)
-        .map_err(|_| Error::new("bad padding (wrong password?)"))?
+        .map_err(|_| Error::DecryptionFailed)?
         .len();
     buf.truncate(n);
     Ok(buf)
 }
 
 fn new_cipher<C: KeyInit>(key: &[u8]) -> Result<C> {
-    C::new_from_slice(key).map_err(|_| Error::new("bad key length"))
+    C::new_from_slice(key).map_err(|_| Error::BadEncryptionParameters)
 }
 
 /// Decrypts with a PKCS#12 PBE algorithm or PBES2.
@@ -402,7 +382,7 @@ fn decrypt(alg: &AlgorithmIdentifierOwned, data: &[u8], password: &str) -> Resul
     let params = alg
         .parameters
         .as_ref()
-        .ok_or_else(|| Error::new("encryption without parameters"))?
+        .ok_or(Error::BadEncryptionParameters)?
         .to_der()
         .map_err(asn1)?;
     if oid == "1.2.840.113549.1.5.13" {
@@ -429,7 +409,7 @@ fn decrypt(alg: &AlgorithmIdentifierOwned, data: &[u8], password: &str) -> Resul
         "1.2.840.113549.1.12.1.6" => {
             cbc_decrypt(rc2::Rc2::new_with_eff_key_len(&key(5)?, 40), &iv(8)?, data)
         }
-        o => Err(Error::new(format!("unsupported key file encryption {o}"))),
+        o => Err(Error::UnsupportedAlgorithm(o.into())),
     }
 }
 
@@ -449,13 +429,13 @@ fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
     let p: Pbes2Params = ber(params).map_err(asn1)?;
     let kdf_oid = p.kdf.oid.to_string();
     if kdf_oid != "1.2.840.113549.1.5.12" {
-        return Err(Error::new(format!("unsupported key derivation {kdf_oid}")));
+        return Err(Error::UnsupportedAlgorithm(kdf_oid));
     }
     let kp: Pbkdf2Params = p
         .kdf
         .parameters
         .as_ref()
-        .ok_or_else(|| Error::new("PBKDF2 without parameters"))?
+        .ok_or(Error::BadEncryptionParameters)?
         .decode_as()
         .map_err(asn1)?;
     let salt = kp.salt.as_bytes();
@@ -468,7 +448,7 @@ fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
         .encryption
         .parameters
         .as_ref()
-        .ok_or_else(|| Error::new("cipher without IV"))?
+        .ok_or(Error::BadEncryptionParameters)?
         .decode_as::<OctetString>()
         .map_err(asn1)?;
     let iv = iv.as_bytes();
@@ -477,7 +457,7 @@ fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
         "2.16.840.1.101.3.4.1.22" => 24,
         "2.16.840.1.101.3.4.1.42" => 32,
         "1.2.840.113549.3.7" => 24,
-        o => return Err(Error::new(format!("unsupported cipher {o}"))),
+        o => return Err(Error::UnsupportedAlgorithm(o.into())),
     };
     let mut key = zeroize::Zeroizing::new(vec![0u8; key_len]);
     let pw = password.as_bytes();
@@ -487,7 +467,7 @@ fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
         "1.2.840.113549.2.9" => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(pw, salt, iter, &mut key),
         "1.2.840.113549.2.10" => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(pw, salt, iter, &mut key),
         "1.2.840.113549.2.11" => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(pw, salt, iter, &mut key),
-        o => return Err(Error::new(format!("unsupported PBKDF2 function {o}"))),
+        o => return Err(Error::UnsupportedAlgorithm(o.into())),
     }
     match key_len {
         16 => cbc_decrypt(new_cipher::<aes::Aes128>(&key)?, iv, data),

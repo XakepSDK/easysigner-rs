@@ -408,12 +408,7 @@ fn tsa_hint(o: &Opts) -> impl Fn(kzsigner::Error) -> Fail + '_ {
 /// (kzcrypto refuses them too).
 fn refuse_gost2004(k: &kzsigner::p12::Key) -> R<()> {
     if k.cert.key_alg() == kzsigner::gost::KEY_GOST2004 {
-        return Err(
-            kzsigner::Error::from(kzsigner::kzcrypto::Error::unsupported(
-                "GOST 34.310-2004 keys can no longer sign; they only check old signatures",
-            ))
-            .into(),
-        );
+        return Err(kzsigner::Error::from(kzsigner::kzcrypto::Error::Gost2004CannotSign).into());
     }
     Ok(())
 }

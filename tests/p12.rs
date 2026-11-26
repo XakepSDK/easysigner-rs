@@ -55,7 +55,10 @@ fn wrong_password() {
     )
     .err()
     .unwrap();
-    assert!(e.to_string().contains("password is probably wrong"), "{e}");
+    assert!(
+        kzsigner::i18n::text(&e).contains("password is probably wrong"),
+        "{e}"
+    );
 }
 
 fn read(p: &str) -> Vec<u8> {
@@ -103,7 +106,7 @@ fn other_pkcs12_forms() {
             .err()
             .unwrap();
         assert!(
-            e.to_string().contains("password is probably wrong"),
+            kzsigner::i18n::text(&e).contains("password is probably wrong"),
             "{f}: {e}"
         );
     }
@@ -126,7 +129,7 @@ fn bad_mac() {
         d[at] ^= 1;
         let e = p12::open(&d, "Qwerty12", None).err().unwrap();
         assert_eq!(
-            e.to_string(),
+            kzsigner::i18n::text(&e),
             "Could not open the key file. The password is probably wrong.",
             "{f}"
         );
@@ -150,7 +153,8 @@ fn not_pkcs12() {
     ] {
         let e = p12::open(&d, "Qwerty12", None).err().unwrap();
         assert!(
-            e.to_string().contains("not a PKCS#12") && e.to_string().contains(why),
+            kzsigner::i18n::text(&e).contains("not a PKCS#12")
+                && kzsigner::i18n::text(&e).contains(why),
             "{e}"
         );
     }
@@ -162,7 +166,7 @@ fn not_pkcs12() {
     )
     .err()
     .unwrap();
-    assert!(e.to_string().contains("no private key"), "{e}");
+    assert!(kzsigner::i18n::text(&e).contains("no private key"), "{e}");
 }
 
 #[test]

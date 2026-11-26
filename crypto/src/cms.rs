@@ -9,7 +9,7 @@ use crate::asn1::{self, any, ber};
 use crate::cert::{self, Cert};
 use crate::keys::PrivateKey;
 use crate::prelude::*;
-use crate::{Error, ErrorKind, Result, Rng, gost, time};
+use crate::{Error, Result, Rng, gost, time};
 
 pub const SIGNED_DATA: &str = "1.2.840.113549.1.7.2";
 pub const ID_DATA: &str = "1.2.840.113549.1.7.1";
@@ -160,12 +160,7 @@ impl SignedData {
     }
 
     pub fn parse(raw: &[u8]) -> Result<SignedData> {
-        Self::parse_inner(&normalize(raw)).map_err(|e| {
-            Error::of(
-                ErrorKind::Malformed,
-                crate::text::trf("This file is not a CMS/PKCS#7 signed file ({}).", &[&e]),
-            )
-        })
+        Self::parse_inner(&normalize(raw)).map_err(|e| Error::NotCms(Box::new(e)))
     }
 
     /// A ContentInfo with SignedData (also used for timestamp tokens), read by RustCrypto's
@@ -295,7 +290,7 @@ mod rc {
     pub fn signed_data(data: &[u8]) -> Result<SignedData> {
         let ci: ContentInfo = ber(data).map_err(asn1)?;
         if ci.content_type.to_string() != SIGNED_DATA {
-            return Err(Error::new("not SignedData"));
+            return Err(Error::NotSignedData);
         }
         let sd: Sd = ber(&der(&ci.content)?).map_err(asn1)?;
         let content = match &sd.encap_content_info.econtent {
@@ -655,7 +650,7 @@ mod tests {
         .to_der()
         .unwrap();
         let e = SignedData::parse_inner(&data).err().unwrap();
-        assert_eq!(e.to_string(), "not SignedData");
+        assert_eq!(e, Error::NotSignedData);
         let mut bare = vec![0x30, 11];
         bare.extend(asn1::oid(SIGNED_DATA).unwrap().to_der().unwrap());
         assert!(SignedData::parse_inner(&bare).is_err());

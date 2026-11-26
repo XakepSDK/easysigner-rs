@@ -130,6 +130,97 @@ impl Words for kzcrypto::Text {
     }
 }
 
+/// A technical detail in English: kept out of the translation table, as developers read it.
+fn en(template: &'static str, args: &[&dyn kzcrypto::text::ToArg]) -> kzcrypto::Text {
+    kzcrypto::trf(template, args)
+}
+
+impl Words for kzcrypto::Error {
+    fn words(&self) -> kzcrypto::Text {
+        use kzcrypto::Error as E;
+        use kzcrypto::{tr, trf};
+        let detail = |d: &Option<String>| d.as_ref().map(|d| format!(": {d}")).unwrap_or_default();
+        match self {
+            E::Asn1(d) => en("malformed ASN.1: {}", &[d]),
+            E::BadTime => en("malformed ASN.1: bad time", &[]),
+            E::NotOid(s) => trf("'{}' is not an object identifier", &[s]),
+            E::BadCertificate => en("Unreadable certificate: malformed ASN.1", &[]),
+            E::BadPublicKey(d) => en("malformed public key{}", &[&detail(d)]),
+            E::BadPrivateKey(d) => en("malformed private key{}", &[&detail(d)]),
+            E::NoCurveParameters => en("GOST key without curve parameters", &[]),
+            E::BadCrl => tr("Unreadable revocation list (CRL)"),
+            E::NotCms(e) => trf(
+                "This file is not a CMS/PKCS#7 signed file ({}).",
+                &[&e.words()],
+            ),
+            E::NotSignedData => en("not SignedData", &[]),
+            E::NoContent => en("the signed content is missing", &[]),
+            E::NoContentTypeAttr => en(
+                "The content-type attribute type MUST be present whenever signed attributes are present in signed-data",
+                &[],
+            ),
+            E::ContentTypeMismatch => en(
+                "content-type attribute value does not match eContentType",
+                &[],
+            ),
+            E::NoMessageDigestAttr => en(
+                "the message-digest signed attribute type MUST be present when there are any signed attributes present",
+                &[],
+            ),
+            E::OcspNotBasic => en("not a basic OCSP response", &[]),
+            E::KeyFileUnreadable(e) => trf(
+                "Could not open the key file. The password is probably wrong, or the file uses an unsupported format ({})",
+                &[&e.words()],
+            ),
+            E::NotPkcs12(e) => trf(
+                "Could not open the key file: it is not a PKCS#12 (.p12) key ({})",
+                &[&e.words()],
+            ),
+            E::WrongPassword => tr("Could not open the key file. The password is probably wrong."),
+            E::DecryptionFailed => en("bad padding (wrong password?)", &[]),
+            E::BadEncryptionParameters => en("bad encryption parameters", &[]),
+            E::BadIterationCount(n) => en("unsupported iteration count {}", &[&n.to_string()]),
+            E::NoPrivateKey => tr("The key file contains no private key."),
+            E::NoSuchAlias { alias, available } => trf(
+                "No key with alias '{}'. Available: [{}]",
+                &[alias, &available.join(", ")],
+            ),
+            E::NoCertificateForKey => tr("The key file has no certificate for its key."),
+            E::UnsupportedAlgorithm(o) => en("Unsupported algorithm {}", &[o]),
+            E::UnsupportedKey(o) => en("Unsupported key algorithm {}", &[o]),
+            E::UnsupportedCurve(o) => en("Unsupported GOST curve parameter set {}", &[o]),
+            E::UnsupportedPfxMode => en("unsupported PFX content (public-key integrity mode)", &[]),
+            E::KeyAlgorithmMismatch(o) => en("Key does not match {}", &[o]),
+            E::Gost2004CannotSign => {
+                tr("GOST 34.310-2004 keys can no longer sign; they only check old signatures")
+            }
+            E::SigningFailed(d) => en("signing failed{}", &[&detail(d)]),
+            E::TimestampUnreadable(d) => {
+                trf("The timestamp server's answer is unreadable ({})", &[d])
+            }
+            E::TimestampRefused(t) => {
+                trf("The timestamp server refused the request{}", &[&detail(t)])
+            }
+            E::TimestampMismatch(e) => trf(
+                "The timestamp server's answer does not match the request: {}",
+                &[&e.words()],
+            ),
+            E::WrongNonce => en("response contains wrong nonce value.", &[]),
+            E::WrongPolicy => en("TSA policy wrong for request.", &[]),
+            E::WrongImprint => en("response for different message imprint digest.", &[]),
+            E::NoTsaCertificate => en("Certificate requested but not present in response.", &[]),
+            E::MultipleSigners => en("time-stamp token signed by multiple signers.", &[]),
+            E::NotTstInfo => en("ContentInfo object not for a time stamp.", &[]),
+            E::NoSigningCertAttr => en(
+                "no signing certificate attribute found, time stamp invalid.",
+                &[],
+            ),
+            E::Random(d) => en("no random numbers from the system: {}", &[d]),
+            _ => tr("unknown problem"),
+        }
+    }
+}
+
 impl Words for kzcrypto::trust::PathStatus {
     fn words(&self) -> kzcrypto::Text {
         use kzcrypto::text::Time;

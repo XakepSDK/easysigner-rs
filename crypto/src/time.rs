@@ -5,12 +5,12 @@
 use ::der::Tag;
 
 use crate::prelude::*;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 const DAY_MS: i64 = 86_400_000;
 
 fn bad_time() -> Error {
-    Error::of(ErrorKind::Malformed, "malformed ASN.1: bad time")
+    Error::BadTime
 }
 
 /// Days since 1970-01-01 of a valid date (H. Hinnant's days_from_civil).

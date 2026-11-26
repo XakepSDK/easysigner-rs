@@ -4,7 +4,7 @@ use ::der::asn1::{Any, Int, ObjectIdentifier};
 use ::der::{Decode, Encode};
 
 use crate::prelude::*;
-use crate::{Error, Result, trf};
+use crate::{Error, Result};
 
 /// `T` from DER, or from BER (Kalkan writes BER: indefinite lengths, constructed strings).
 pub fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
@@ -13,7 +13,7 @@ pub fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Resul
 
 /// A decoding or encoding failure, as [`ErrorKind::Malformed`](crate::ErrorKind).
 pub fn err(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
+    Error::Asn1(format!("{e}"))
 }
 
 /// `t` as DER.
@@ -28,8 +28,7 @@ pub fn any(b: &[u8]) -> Result<Any> {
 
 /// The OID `s` (dotted), or [`ErrorKind::Malformed`](crate::ErrorKind).
 pub fn oid(s: &str) -> Result<ObjectIdentifier> {
-    ObjectIdentifier::new(s)
-        .map_err(|_| Error::malformed(trf("'{}' is not an object identifier", &[&s])))
+    ObjectIdentifier::new(s).map_err(|_| Error::NotOid(s.into()))
 }
 
 /// An INTEGER's content without leading zero bytes (one zero for zero), as

@@ -146,8 +146,7 @@ struct Basic {
 }
 
 fn ms(t: &x509_ocsp::OcspGeneralizedTime) -> Result<i64> {
-    i64::try_from(t.0.to_unix_duration().as_millis())
-        .map_err(|_| Error::malformed("OCSP time out of range"))
+    i64::try_from(t.0.to_unix_duration().as_millis()).map_err(|_| Error::BadTime)
 }
 
 /// The hash NCALayer uses in OCSP certificate IDs for this issuer's key type.
@@ -251,11 +250,9 @@ fn evaluate(
             body,
         ));
     }
-    let rb = resp
-        .response_bytes
-        .ok_or_else(|| Error::new("OCSP response without content"))?;
+    let rb = resp.response_bytes.ok_or(Error::OcspNotBasic)?;
     if rb.response_type.to_string() != BASIC {
-        return Err(Error::new("not a basic OCSP response"));
+        return Err(Error::OcspNotBasic);
     }
     let basic_der = rb.response.as_bytes().to_vec();
     let basic = Basic::from_der(&basic_der).map_err(asn1)?;
@@ -265,7 +262,7 @@ fn evaluate(
     let sig = basic
         .signature
         .as_bytes()
-        .ok_or_else(|| Error::malformed("OCSP signature is not whole bytes"))?;
+        .ok_or_else(|| Error::Asn1("signature BIT STRING with unused bits".into()))?;
     let certs: Vec<Cert> = basic
         .certs
         .iter()
@@ -414,7 +411,7 @@ pub mod testkit {
 
     impl crate::Rng for Os {
         fn fill(&mut self, buf: &mut [u8]) -> Result<()> {
-            getrandom::fill(buf).map_err(|_| Error::new("no random numbers"))
+            getrandom::fill(buf).map_err(|e| Error::Random(format!("{e}")))
         }
     }
 

@@ -75,12 +75,6 @@ impl ToArg for Text {
     }
 }
 
-impl ToArg for crate::Error {
-    fn to_arg(&self) -> Arg {
-        self.text.to_arg()
-    }
-}
-
 impl ToArg for Time {
     fn to_arg(&self) -> Arg {
         Arg::Time(self.0)

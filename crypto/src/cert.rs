@@ -67,14 +67,13 @@ impl Cert {
     /// exactly as encoded.
     fn from_der(data: &[u8]) -> Result<Cert> {
         use x509_cert::der::{Decode, Encode};
-        let f = |_| Error::malformed("Unreadable certificate: malformed ASN.1");
+        let f = |_| Error::BadCertificate;
         let c =
             x509_cert::certificate::CertificateInner::<x509_cert::certificate::Raw>::from_der(data)
                 .map_err(f)?;
         let tbs = c.tbs_certificate();
         let ms = |t: &x509_cert::time::Time| -> Result<i64> {
-            i64::try_from(t.to_unix_duration().as_millis())
-                .map_err(|_| Error::malformed("Unreadable certificate: malformed ASN.1"))
+            i64::try_from(t.to_unix_duration().as_millis()).map_err(|_| Error::BadCertificate)
         };
         let mut extensions = Vec::new();
         for e in tbs.extensions().into_iter().flatten() {
@@ -93,7 +92,7 @@ impl Cert {
             signature: c
                 .signature()
                 .as_bytes()
-                .ok_or_else(|| Error::malformed("Unreadable certificate: malformed ASN.1"))?
+                .ok_or(Error::BadCertificate)?
                 .to_vec(),
             extensions,
         })
@@ -117,7 +116,7 @@ impl Cert {
     pub fn public_key_bits(&self) -> Result<Vec<u8>> {
         self.spki()
             .and_then(|k| k.subject_public_key.as_bytes().map(<[u8]>::to_vec))
-            .ok_or_else(|| Error::malformed("malformed SubjectPublicKeyInfo"))
+            .ok_or(Error::BadPublicKey(None))
     }
 
     pub fn valid_on(&self, ms: i64) -> bool {
@@ -179,7 +178,7 @@ impl Cert {
                         .map(|i| i.policy_identifier.to_string())
                         .collect()
                 })
-                .map_err(|e| Error::malformed(format!("malformed ASN.1: {e}"))),
+                .map_err(crate::asn1::err),
         )
     }
 

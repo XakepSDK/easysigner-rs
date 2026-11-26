@@ -9,8 +9,7 @@
 use crate::cert::{self, Cert};
 pub use crate::ocsp::CertStatus;
 use crate::prelude::*;
-use crate::text::tr;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 const CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
 const FRESHEST_CRL: &str = "2.5.29.46";
@@ -74,7 +73,7 @@ impl Crl {
     /// A list in DER, read by `x509-cert` (its `Raw` profile: serial numbers as CAs issue them).
     pub fn parse(data: &[u8]) -> Result<Crl> {
         use ::der::{Decode, Encode};
-        let bad = || Error::of(ErrorKind::Malformed, tr("Unreadable revocation list (CRL)"));
+        let bad = || Error::BadCrl;
         let l = CertificateList::from_der(data).map_err(|_| bad())?;
         let t = &l.tbs_cert_list;
         let ms = |t: &x509_cert::time::Time| {

@@ -10,7 +10,7 @@ use crate::prelude::*;
 use crate::{Error, Result, gost};
 
 fn asn1(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
+    Error::Asn1(format!("{e}"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -30,17 +30,15 @@ pub fn check_signer(
     content_type: &str,
 ) -> Result<Outcome> {
     if si.signed_attrs.is_some() {
-        let ct = si.signed_attr(cms::ATTR_CONTENT_TYPE).ok_or_else(|| {
-            Error::new("The content-type attribute type MUST be present whenever signed attributes are present in signed-data")
-        })?;
+        let ct = si
+            .signed_attr(cms::ATTR_CONTENT_TYPE)
+            .ok_or(Error::NoContentTypeAttr)?;
         if <ObjectIdentifier>::from_der(&ct).map_err(asn1)?.to_string() != content_type {
-            return Err(Error::new(
-                "content-type attribute value does not match eContentType",
-            ));
+            return Err(Error::ContentTypeMismatch);
         }
-        let md = si.signed_attr(cms::ATTR_MESSAGE_DIGEST).ok_or_else(|| {
-            Error::new("the message-digest signed attribute type MUST be present when there are any signed attributes present")
-        })?;
+        let md = si
+            .signed_attr(cms::ATTR_MESSAGE_DIGEST)
+            .ok_or(Error::NoMessageDigestAttr)?;
         let signed = OctetString::from_der(&md).map_err(asn1)?;
         if gost::hash(&si.digest_alg, content)? != signed.as_bytes() {
             return Ok(Outcome::DigestMismatch);
@@ -89,7 +87,7 @@ pub fn signing_certificate_matches(si: &SignerInfo, c: &Cert) -> Result<bool> {
         (false, _) => (gost::H_SHA1.to_string(), f.first()),
     };
     let hash = hash
-        .ok_or_else(|| Error::new("ESS certificate id without hash"))?
+        .ok_or_else(|| Error::Asn1("ESSCertID without hash".into()))?
         .decode_as::<OctetString>()
         .map_err(asn1)?;
     let hash = hash.as_bytes();
