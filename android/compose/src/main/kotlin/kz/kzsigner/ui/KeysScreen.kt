@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.launch
-import kz.kzsigner.KeysModel
+import kz.kzsigner.AppModel
 import kz.kzsigner.R
 import kz.kzsigner.core.CantSign
 import kz.kzsigner.core.ChipPrompt
@@ -55,7 +55,7 @@ private const val WARN_DAYS = 31
 /** Screen 7 (and 7b, the removal sheet): the keys on this phone, the language, About. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun KeysScreen(model: KeysModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbout: () -> Unit, onEmpty: () -> Unit) {
+fun KeysScreen(model: AppModel, onBack: (() -> Unit)?, onAdd: () -> Unit, onAbout: () -> Unit, onEmpty: () -> Unit) {
     val keys = model.keys ?: return
     val scope = rememberCoroutineScope()
     var removing by remember { mutableStateOf<KeyInfo?>(null) }

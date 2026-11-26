@@ -57,9 +57,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kz.kzsigner.AppModel
 import kz.kzsigner.DocFile
 import kz.kzsigner.Files
-import kz.kzsigner.KeysModel
 import kz.kzsigner.R
 import kz.kzsigner.core.CantSign
 import kz.kzsigner.core.Checked
@@ -87,8 +87,8 @@ class Reading(val name: String, val bytes: ByteArray)
  * can't sign goes to [onCantSign].
  */
 @Composable
-fun SignScreen(model: KeysModel, onBack: () -> Unit, onRead: (Reading) -> Unit, onSigned: () -> Unit, onCantSign: (Refusal) -> Unit) {
-    val doc = model.document ?: return
+fun SignScreen(model: AppModel, onBack: () -> Unit, onRead: (Reading) -> Unit, onSigned: () -> Unit, onCantSign: (Refusal) -> Unit) {
+    val doc = model.signing.document ?: return
     val keys = model.keys?.keys.orEmpty()
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -121,7 +121,7 @@ fun SignScreen(model: KeysModel, onBack: () -> Unit, onRead: (Reading) -> Unit, 
         wrong = false
         scope.launch {
             try {
-                model.sign(key.id, if (needsPassword) password else null, prompt, lang)
+                model.signing.sign(key.id, if (needsPassword) password else null, prompt, lang)
                 password = ""
                 noAnswer = null
                 onSigned()
@@ -222,7 +222,7 @@ fun SignScreen(model: KeysModel, onBack: () -> Unit, onRead: (Reading) -> Unit, 
         val checked by produceState<Checked?>(null, doc) {
             // another document: forget the last one's check first
             value = null
-            if (info.signers.isNotEmpty()) value = model.checkQuietly(doc.name, doc.bytes, lang)
+            if (info.signers.isNotEmpty()) value = model.checking.quietly(doc.name, doc.bytes, lang)
         }
         val rows = checked?.signers?.takeIf { it.isNotEmpty() }
         if (rows != null) {

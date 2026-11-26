@@ -20,7 +20,7 @@ import kz.kzsigner.ui.KzsignerTheme
  * have it built in); the screens are Compose.
  */
 class MainActivity : AppCompatActivity() {
-    private val model: KeysModel by viewModels()
+    private val model: AppModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

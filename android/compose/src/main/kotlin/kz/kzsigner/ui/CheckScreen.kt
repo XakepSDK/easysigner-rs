@@ -38,8 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kz.kzsigner.AppModel
 import kz.kzsigner.Files
-import kz.kzsigner.KeysModel
 import kz.kzsigner.Opened
 import kz.kzsigner.R
 import kz.kzsigner.core.Checked
@@ -76,13 +76,13 @@ private fun reasonNext(r: Reason?): Int = when (r) {
  * was valid; until it answers, a spinner.
  */
 @Composable
-fun CheckScreen(model: KeysModel, onBack: () -> Unit, onDetails: () -> Unit, onRead: (Reading) -> Unit, onAnother: () -> Unit) {
-    val file = model.checking ?: return
+fun CheckScreen(model: AppModel, onBack: () -> Unit, onDetails: () -> Unit, onRead: (Reading) -> Unit, onAnother: () -> Unit) {
+    val file = model.checking.file ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lang = LocalConfiguration.current.locales[0].language
-    LaunchedEffect(file) { if (model.checked == null) model.check(lang) }
-    val c = model.checked
+    LaunchedEffect(file) { if (model.checking.result == null) model.checking.check(lang) }
+    val c = model.checking.result
     if (c == null) {
         Screen(onBack) {
             Column(
@@ -108,7 +108,7 @@ fun CheckScreen(model: KeysModel, onBack: () -> Unit, onDetails: () -> Unit, onR
     }
     val signIt: () -> Unit = {
         // the app then goes to Sign with it (App.kt)
-        scope.launch { model.signThis(file.name, file.bytes) }
+        scope.launch { model.signing.open(file.name, file.bytes) }
     }
     val pickOriginal = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -198,7 +198,7 @@ fun CheckScreen(model: KeysModel, onBack: () -> Unit, onDetails: () -> Unit, onR
 
         Verdict.UNKNOWN -> Screen(
             onBack,
-            buttons = { MainButton(stringResource(R.string.check_again), { scope.launch { model.check(lang) } }) }
+            buttons = { MainButton(stringResource(R.string.check_again), { scope.launch { model.checking.check(lang) } }) }
         ) {
             Outcome(R.drawable.ic_clock, stringResource(R.string.unknown_title), stringResource(R.string.unknown_body), Tone.WARN)
             Grey(stringResource(R.string.unknown_next))
@@ -372,8 +372,8 @@ private fun DetailsLink(onClick: () -> Unit) {
 
 /** Screen 5d: the details, for checking by hand or by a specialist; Copy details. */
 @Composable
-fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
-    val c = model.checked ?: return
+fun CheckDetailsScreen(model: AppModel, onBack: () -> Unit) {
+    val c = model.checking.result ?: return
     val context = LocalContext.current
     val copied = stringResource(R.string.copied)
     val rows = mutableListOf<Pair<String, String>>()

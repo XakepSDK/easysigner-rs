@@ -36,7 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import kz.kzsigner.KeysModel
+import kz.kzsigner.AppModel
 import kz.kzsigner.Opened
 import kz.kzsigner.R
 import kz.kzsigner.core.Unlock
@@ -44,7 +44,7 @@ import kz.kzsigner.hasFingerprint
 
 /** Screen 1: Sign a document, Check a signature, the key chip (to Your keys), and Share. */
 @Composable
-fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
+fun HomeScreen(model: AppModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tooBig = stringResource(R.string.too_big)
@@ -78,9 +78,9 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
     val keys = model.keys?.keys.orEmpty()
     val noKey = keys.isEmpty() && model.keys?.hidden != true
     // back from Add key with the key that signing needed: on to the document
-    LaunchedEffect(model.pickDocument) {
-        if (model.pickDocument) {
-            model.pickDocument = false
+    LaunchedEffect(model.signing.pickDocument) {
+        if (model.signing.pickDocument) {
+            model.signing.pickDocument = false
             pick.launch(arrayOf("*/*"))
         }
     }
@@ -114,7 +114,7 @@ fun HomeScreen(model: KeysModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
             onClick = {
                 if (noKey) {
                     // two different files to pick: the key comes first, and Add key says so
-                    model.signAfterAdd = true
+                    model.signing.signAfterAdd = true
                     onAddKey()
                 } else {
                     pick.launch(arrayOf("*/*"))

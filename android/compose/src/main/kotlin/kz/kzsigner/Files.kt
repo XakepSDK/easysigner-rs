@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 
 /**
  * Files handed to other apps: a document to read in the app that opens it, the signed file
@@ -22,6 +24,21 @@ object Files {
         val f = File(dir, safe(name))
         f.writeBytes(bytes)
         return f
+    }
+
+    /**
+     * Reads [input] whole when it holds at most [max] bytes; null when it holds more (only
+     * [max] + 1 bytes are read to tell). InputStream.readNBytes is Android 13+.
+     */
+    fun readAtMost(input: InputStream, max: Int): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        while (out.size() <= max) {
+            val n = input.read(buf, 0, minOf(buf.size, max + 1 - out.size()))
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return if (out.size() > max) null else out.toByteArray()
     }
 
     /** A file name with nothing that could leave the folder. */

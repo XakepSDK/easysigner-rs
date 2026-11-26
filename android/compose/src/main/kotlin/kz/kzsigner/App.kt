@@ -52,7 +52,7 @@ private fun NavHostController.restart(route: String) = navigate(route) {
  * (2c) and on to Sign once one is added; a key file goes to Add key.
  */
 @Composable
-fun App(model: KeysModel, finish: () -> Unit) {
+fun App(model: AppModel, finish: () -> Unit) {
     if (model.broken) {
         Center { Text(stringResource(R.string.cant_read_keys), style = MaterialTheme.typography.titleMedium) }
         return
@@ -72,8 +72,8 @@ fun App(model: KeysModel, finish: () -> Unit) {
         }
     }
     // a document goes to Sign; without a key, to Add key first
-    LaunchedEffect(model.document) {
-        if (model.document == null || model.signed != null) return@LaunchedEffect
+    LaunchedEffect(model.signing.document) {
+        if (model.signing.document == null || model.signing.signed != null) return@LaunchedEffect
         val here = nav.currentDestination?.route
         if (model.keys?.keys?.isNotEmpty() == true) {
             if (here != Route.SIGN) nav.navigate(Route.SIGN) { popUpTo(Route.HOME) }
@@ -83,9 +83,9 @@ fun App(model: KeysModel, finish: () -> Unit) {
     }
 
     // a file to check goes to Check
-    LaunchedEffect(model.checking) {
+    LaunchedEffect(model.checking.file) {
         val here = nav.currentDestination?.route
-        if (model.checking != null && here != Route.CHECK && here != Route.DETAILS) {
+        if (model.checking.file != null && here != Route.CHECK && here != Route.DETAILS) {
             nav.navigate(Route.CHECK)
         }
     }
@@ -95,7 +95,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
 
     /** Home, with nothing behind it. */
     val home: () -> Unit = {
-        model.closeDocument()
+        model.signing.close()
         nav.restart(Route.HOME)
     }
 
@@ -104,7 +104,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
             HomeScreen(
                 model,
                 onKeys = {
-                    model.signAfterAdd = false
+                    model.signing.signAfterAdd = false
                     nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD)
                 },
                 onAddKey = { nav.navigate(Route.ADD) }
@@ -112,7 +112,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
         }
         composable(Route.SIGN) {
             val leave: () -> Unit = {
-                model.closeDocument()
+                model.signing.close()
                 if (!nav.popBackStack()) nav.restart(Route.HOME)
             }
             BackHandler(onBack = leave)
@@ -149,7 +149,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
         }
         composable(Route.ADD) {
             val leave: () -> Unit = {
-                model.signAfterAdd = false
+                model.signing.signAfterAdd = false
                 back()
             }
             BackHandler(onBack = leave)
@@ -159,14 +159,14 @@ fun App(model: KeysModel, finish: () -> Unit) {
                 onAdded = {
                     when {
                         // "Sign a document" with no key: Home, and its document picker
-                        model.signAfterAdd && model.document == null -> {
-                            model.signAfterAdd = false
-                            model.pickDocument = true
+                        model.signing.signAfterAdd && model.signing.document == null -> {
+                            model.signing.signAfterAdd = false
+                            model.signing.pickDocument = true
                             nav.restart(Route.HOME)
                         }
 
                         // 2c: straight back to the document
-                        model.document != null && model.signed == null -> {
+                        model.signing.document != null && model.signing.signed == null -> {
                             nav.restart(Route.HOME)
                             nav.navigate(Route.SIGN)
                         }
@@ -200,8 +200,7 @@ fun App(model: KeysModel, finish: () -> Unit) {
         composable(Route.ABOUT) { AboutScreen(onBack = back) }
         composable(Route.CHECK) {
             val leave: () -> Unit = {
-                model.checking = null
-                model.checked = null
+                model.checking.close()
                 if (!nav.popBackStack()) nav.restart(Route.HOME)
             }
             BackHandler(onBack = leave)

@@ -39,8 +39,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kz.kzsigner.AppModel
 import kz.kzsigner.Files
-import kz.kzsigner.KeysModel
 import kz.kzsigner.R
 
 /**
@@ -48,8 +48,8 @@ import kz.kzsigner.R
  * save dialog), Done (back to Home).
  */
 @Composable
-fun SignedScreen(model: KeysModel, onDone: () -> Unit) {
-    val s = model.signed ?: return
+fun SignedScreen(model: AppModel, onDone: () -> Unit) {
+    val s = model.signing.signed ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val savedText = stringResource(R.string.saved)

@@ -42,8 +42,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kz.kzsigner.Added
+import kz.kzsigner.AppModel
 import kz.kzsigner.KeyFile
-import kz.kzsigner.KeysModel
 import kz.kzsigner.R
 import kz.kzsigner.core.AddKeyException
 import kz.kzsigner.core.ChipPrompt
@@ -57,7 +57,7 @@ private enum class Problem { WRONG_PASSWORD, NOT_A_KEY, FAILED }
  * the phone (one fingerprint/PIN prompt). A key that can't sign goes to [onCantSign].
  */
 @Composable
-fun AddKeyScreen(model: KeysModel, onBack: (() -> Unit)?, onAdded: () -> Unit, onCantSign: (AddKeyException.KeyCantSign) -> Unit) {
+fun AddKeyScreen(model: AppModel, onBack: (() -> Unit)?, onAdded: () -> Unit, onCantSign: (AddKeyException.KeyCantSign) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var file by remember { mutableStateOf<KeyFile?>(null) }
@@ -134,9 +134,9 @@ fun AddKeyScreen(model: KeysModel, onBack: (() -> Unit)?, onAdded: () -> Unit, o
     if (f == null) {
         Screen(onBack, buttons = { MainButton(stringResource(R.string.choose_key_file), choose) }) {
             // 2c: a document shared before any key: it waits
-            model.document?.let { InfoNotice(stringResource(R.string.shared_needs_key, it.name), R.drawable.ic_file) }
+            model.signing.document?.let { InfoNotice(stringResource(R.string.shared_needs_key, it.name), R.drawable.ic_file) }
             // "Sign a document" with no key: the key first, then the document
-            if (model.document == null && model.signAfterAdd) {
+            if (model.signing.document == null && model.signing.signAfterAdd) {
                 InfoNotice(stringResource(R.string.sign_needs_key), R.drawable.ic_pen)
             }
             Title(stringResource(R.string.add_key_title))
