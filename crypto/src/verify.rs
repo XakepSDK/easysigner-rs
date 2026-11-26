@@ -1,12 +1,17 @@
 //! Checking one signer of a CMS SignedData: its signature, its signed attributes, and the
 //! signed reference to its certificate (CAdES signingCertificate / signingCertificateV2).
 
+use ::der::asn1::{Any, ObjectIdentifier, OctetString};
+use ::der::{Decode, Tag, Tagged};
+
 use crate::cert::Cert;
 use crate::cms::{self, SignerInfo};
-use crate::der;
-use crate::keys::alg_id;
 use crate::prelude::*;
 use crate::{Error, Result, gost};
+
+fn asn1(e: ::der::Error) -> Error {
+    Error::malformed(format!("malformed ASN.1: {e}"))
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -28,7 +33,7 @@ pub fn check_signer(
         let ct = si.signed_attr(cms::ATTR_CONTENT_TYPE).ok_or_else(|| {
             Error::new("The content-type attribute type MUST be present whenever signed attributes are present in signed-data")
         })?;
-        if der::parse(&ct)?.oid()? != content_type {
+        if <ObjectIdentifier>::from_der(&ct).map_err(asn1)?.to_string() != content_type {
             return Err(Error::new(
                 "content-type attribute value does not match eContentType",
             ));
@@ -36,8 +41,8 @@ pub fn check_signer(
         let md = si.signed_attr(cms::ATTR_MESSAGE_DIGEST).ok_or_else(|| {
             Error::new("the message-digest signed attribute type MUST be present when there are any signed attributes present")
         })?;
-        let signed = der::parse(&md)?.expect(der::OCTET_STRING)?.octets()?;
-        if gost::hash(&si.digest_alg, content)? != signed {
+        let signed = OctetString::from_der(&md).map_err(asn1)?;
+        if gost::hash(&si.digest_alg, content)? != signed.as_bytes() {
             return Ok(Outcome::DigestMismatch);
         }
     }
@@ -60,23 +65,34 @@ pub fn signing_certificate_matches(si: &SignerInfo, c: &Cert) -> Result<bool> {
             None => return Ok(true),
         },
     };
-    let k = der::parse(&v)?.items(der::SEQUENCE)?;
+    // SigningCertificate(V2) ::= SEQUENCE { certs SEQUENCE OF ESSCertID(v2), policies? }
+    let k: Vec<Any> = Vec::from_der(&v).map_err(asn1)?;
     let Some(ids) = k.first() else {
         return Ok(true);
     };
-    let ids = ids.items(der::SEQUENCE)?;
+    let ids: Vec<Any> = ids.decode_as().map_err(asn1)?;
     let Some(id) = ids.first() else {
         return Ok(true);
     };
-    let f = id.items(der::SEQUENCE)?;
+    // ESSCertIDv2 ::= SEQUENCE { hashAlgorithm DEFAULT sha256, certHash, issuerSerial? };
+    // ESSCertID ::= SEQUENCE { certHash (SHA-1), issuerSerial? }
+    let f: Vec<Any> = id.decode_as().map_err(asn1)?;
     let (alg, hash) = match (v2, f.first()) {
-        (true, Some(a)) if a.tag == der::SEQUENCE => (alg_id(a)?.0, f.get(1)),
+        (true, Some(a)) if a.tag() == Tag::Sequence => (
+            a.decode_as::<spki::AlgorithmIdentifierOwned>()
+                .map_err(asn1)?
+                .oid
+                .to_string(),
+            f.get(1),
+        ),
         (true, _) => (gost::H_SHA256.to_string(), f.first()),
         (false, _) => (gost::H_SHA1.to_string(), f.first()),
     };
     let hash = hash
         .ok_or_else(|| Error::new("ESS certificate id without hash"))?
-        .octets()?;
+        .decode_as::<OctetString>()
+        .map_err(asn1)?;
+    let hash = hash.as_bytes();
     Ok(gost::hash(&alg, &c.der)? == hash)
 }
 
