@@ -6,6 +6,9 @@ use rsa::Pkcs1v15Sign;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
 use rsa::traits::PublicKeyParts;
 
+use ::der::asn1::{ObjectIdentifier, OctetString};
+use ::der::{Decode, Tagged};
+
 use crate::der::{self, Tlv};
 use crate::gost::{self, Scheme};
 use crate::prelude::*;
@@ -156,13 +159,19 @@ fn field_len(curve: GostCurveId) -> usize {
     }
 }
 
-fn param_set(params: Option<&Tlv>) -> Result<String> {
-    let p = params.ok_or_else(|| Error::new("GOST key without curve parameters"))?;
-    let items = p.items(der::SEQUENCE)?;
-    items
-        .first()
-        .ok_or_else(|| Error::new("GOST key without curve parameters"))?
-        .oid()
+fn asn1(e: ::der::Error) -> Error {
+    Error::malformed(format!("malformed ASN.1: {e}"))
+}
+
+/// The curve's parameter set: the first OID in a GOST key's algorithm parameters.
+fn param_set(params: Option<&::der::Any>) -> Result<String> {
+    let none = || Error::new("GOST key without curve parameters");
+    let items: Vec<::der::Any> = params.ok_or_else(none)?.decode_as().map_err(asn1)?;
+    let first = items.first().ok_or_else(none)?;
+    Ok(first
+        .decode_as::<ObjectIdentifier>()
+        .map_err(asn1)?
+        .to_string())
 }
 
 /// AlgorithmIdentifier: (OID, parameters).
@@ -178,16 +187,19 @@ pub fn alg_id<'a>(t: &Tlv<'a>) -> Result<(String, Option<Tlv<'a>>)> {
 impl PublicKey {
     /// From a SubjectPublicKeyInfo.
     pub fn from_spki(spki: &[u8]) -> Result<PublicKey> {
-        let k = der::parse(spki)?.items(der::SEQUENCE)?;
-        if k.len() < 2 {
-            return Err(Error::malformed("malformed ASN.1: SubjectPublicKeyInfo"));
-        }
-        let (oid, params) = alg_id(&k[0])?;
-        let bits = k[1].bits()?;
+        let k = spki::SubjectPublicKeyInfoOwned::from_der(spki).map_err(asn1)?;
+        let oid = k.algorithm.oid.to_string();
+        let bits = k
+            .subject_public_key
+            .as_bytes()
+            .ok_or_else(|| Error::malformed("malformed ASN.1: SubjectPublicKeyInfo"))?;
         if gost::by_key(&oid).is_some() {
-            let curve = curve_id(&param_set(params.as_ref())?)?;
-            let xy = der::parse(bits)?.expect(der::OCTET_STRING)?.content;
-            return Ok(PublicKey::Gost(GostPublic::from_nca_bytes(curve, xy)?));
+            let curve = curve_id(&param_set(k.algorithm.parameters.as_ref())?)?;
+            let xy = OctetString::from_der(bits).map_err(asn1)?;
+            return Ok(PublicKey::Gost(GostPublic::from_nca_bytes(
+                curve,
+                xy.as_bytes(),
+            )?));
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PublicKey::from_pkcs1_der(bits)
@@ -264,24 +276,34 @@ fn digest_info(digest_oid: &str, h: &[u8]) -> Vec<u8> {
 impl PrivateKey {
     /// From a PKCS#8 PrivateKeyInfo.
     pub fn from_pkcs8(pki: &[u8]) -> Result<PrivateKey> {
-        let k = der::parse(pki)?.items(der::SEQUENCE)?;
-        if k.len() < 3 {
+        // version, algorithm, key, and whatever follows (attributes, a v2 public key)
+        let k: Vec<::der::Any> = Vec::from_der(pki).map_err(asn1)?;
+        let (Some(alg), Some(key)) = (k.get(1), k.get(2)) else {
             return Err(Error::malformed("malformed PrivateKeyInfo"));
-        }
-        let (oid, params) = alg_id(&k[1])?;
-        let key = k[2].expect(der::OCTET_STRING)?.octets()?;
+        };
+        let alg: spki::AlgorithmIdentifierOwned = alg.decode_as().map_err(asn1)?;
+        let key = zeroize::Zeroizing::new(
+            key.decode_as::<OctetString>()
+                .map_err(asn1)?
+                .into_bytes()
+                .into_vec(),
+        );
+        let oid = alg.oid.to_string();
         if let Some(scheme) = gost::by_key(&oid) {
-            let curve = curve_id(&param_set(params.as_ref())?)?;
-            let v = der::parse(&key)?;
+            let curve = curve_id(&param_set(alg.parameters.as_ref())?)?;
+            let v = ::der::AnyRef::from_der(&key).map_err(asn1)?;
             // d little-endian, as long as the field: 2004 keys are a (big-endian) INTEGER,
             // 2015 keys a little-endian OCTET STRING, either maybe shorter
-            let mut d = zeroize::Zeroizing::new(match v.tag {
-                der::INTEGER => {
-                    let mut be = v.uint()?.to_vec();
+            let mut d = zeroize::Zeroizing::new(match v.tag() {
+                ::der::Tag::Integer => {
+                    let mut be = v.value().to_vec();
+                    while be.len() > 1 && be[0] == 0 {
+                        be.remove(0);
+                    }
                     be.reverse();
                     be
                 }
-                der::OCTET_STRING => v.octets()?.to_vec(),
+                ::der::Tag::OctetString => v.value().to_vec(),
                 _ => return Err(Error::new("unexpected GOST private key encoding")),
             });
             let n = field_len(curve);
