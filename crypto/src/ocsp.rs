@@ -2,8 +2,11 @@
 //! responder, nonce, freshness). The caller sends the request and passes the answer back.
 
 use crate::cert::{self, Cert};
-use crate::der::{self, Tlv};
-use crate::keys::alg_id;
+use ::der::asn1::{Any, BitString};
+use ::der::{Decode, Encode, Sequence};
+use x509_ocsp::{CertStatus as Status, OcspResponse, OcspResponseStatus, ResponseData};
+
+use crate::der;
 use crate::prelude::*;
 use crate::text::{Text, Time, tr, trf};
 use crate::trust::TrustStore;
@@ -83,15 +86,43 @@ pub fn wrap_basic(basic: &[u8]) -> Vec<u8> {
 
 /// The BasicOCSPResponse inside a successful OCSPResponse.
 pub fn basic_of(raw: &[u8]) -> Option<Vec<u8>> {
-    let resp = der::parse(raw).ok()?.items(der::SEQUENCE).ok()?;
-    if resp.first()?.small_int().ok()? != 0 {
-        return None;
+    let r = OcspResponse::from_der(raw).ok()?;
+    let rb = r.response_bytes?;
+    (r.response_status == OcspResponseStatus::Successful && rb.response_type.to_string() == BASIC)
+        .then(|| rb.response.as_bytes().to_vec())
+}
+
+/// BasicOCSPResponse (RFC 6960 4.2.1) from x509-ocsp's parts, with the certificates left as
+/// they are: x509-ocsp's own type refuses some serial numbers CAs issue, and [`Cert`] reads
+/// them.
+#[derive(Sequence)]
+struct Basic {
+    /// Kept as encoded: the signature covers these bytes, and some responders write the
+    /// default version out, which DER re-encoding would drop.
+    tbs_response_data: Any,
+    signature_algorithm: spki::AlgorithmIdentifierOwned,
+    signature: BitString,
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+    certs: Option<Vec<Any>>,
+}
+
+fn asn1(e: ::der::Error) -> Error {
+    Error::malformed(format!("malformed ASN.1: {e}"))
+}
+
+fn ms(t: &x509_ocsp::OcspGeneralizedTime) -> Result<i64> {
+    i64::try_from(t.0.to_unix_duration().as_millis())
+        .map_err(|_| Error::malformed("OCSP time out of range"))
+}
+
+/// An INTEGER's content without leading zero bytes (one zero for zero), as [`Cert::serial`].
+fn strip_zeros(mut b: &[u8]) -> &[u8] {
+    while let [0, rest @ ..] = b
+        && !rest.is_empty()
+    {
+        b = rest;
     }
-    let rb = resp.get(1)?.inner().ok()?.items(der::SEQUENCE).ok()?;
-    if rb.first()?.oid().ok()? != BASIC {
-        return None;
-    }
-    rb.get(1)?.octets().ok()
+    b
 }
 
 /// The hash NCALayer uses in OCSP certificate IDs for this issuer's key type.
@@ -156,14 +187,6 @@ pub fn read_embedded(raw: &[u8], c: &Cert, issuer: &Cert, trust: &TrustStore) ->
     evaluate(raw, c, issuer, None, trust)
 }
 
-/// Element `n` of a DER sequence, or an error for a short one.
-fn at<'a>(items: &[Tlv<'a>], n: usize) -> Result<Tlv<'a>> {
-    items
-        .get(n)
-        .copied()
-        .ok_or_else(|| Error::new("OCSP response is incomplete"))
-}
-
 /// `fresh`: the nonce sent and the time now, for a fresh answer; None for a stored one.
 fn evaluate(
     body: &[u8],
@@ -173,75 +196,61 @@ fn evaluate(
     trust: &TrustStore,
 ) -> Result<Answer> {
     let nonce = fresh.map(|f| f.0);
-    let resp = der::parse(body)?.items(der::SEQUENCE)?;
-    let status = resp
-        .first()
-        .ok_or_else(|| Error::new("empty OCSP response"))?
-        .small_int()?;
-    if status != 0 {
+    let resp = OcspResponse::from_der(body).map_err(asn1)?;
+    if resp.response_status != OcspResponseStatus::Successful {
         return Ok(Answer::error(
-            trf("ERROR: OCSP server answered status {}", &[&status]),
+            trf(
+                "ERROR: OCSP server answered status {}",
+                &[&(resp.response_status as u8 as i64)],
+            ),
             body,
         ));
     }
     let rb = resp
-        .get(1)
-        .ok_or_else(|| Error::new("OCSP response without content"))?
-        .inner()?
-        .items(der::SEQUENCE)?;
-    if at(&rb, 0)?.oid()? != BASIC {
+        .response_bytes
+        .ok_or_else(|| Error::new("OCSP response without content"))?;
+    if rb.response_type.to_string() != BASIC {
         return Err(Error::new("not a basic OCSP response"));
     }
-    let basic_raw = at(&rb, 1)?.octets()?;
-    let basic_der = basic_raw.clone();
-    let basic = der::parse(&basic_raw)?.items(der::SEQUENCE)?;
-    let tbs_t = at(&basic, 0)?;
-    let sig_alg = alg_id(&at(&basic, 1)?)?.0;
-    let sig = at(&basic, 2)?.bits()?;
-    let certs: Vec<Cert> = match basic.get(3) {
-        Some(t) if t.tag == der::ctx(0) => t
-            .inner()?
-            .children()?
-            .iter()
-            .filter_map(|c| Cert::from_tlv(c).ok())
-            .collect(),
-        _ => vec![],
-    };
-    let rd = tbs_t.items(der::SEQUENCE)?;
-    let mut i = 0;
-    if at(&rd, 0)?.tag == der::ctx(0) {
-        i = 1; // version
-    }
+    let basic_der = rb.response.as_bytes().to_vec();
+    let basic = Basic::from_der(&basic_der).map_err(asn1)?;
+    let tbs = basic.tbs_response_data.to_der().map_err(asn1)?;
+    let rd = &ResponseData::from_der(&tbs).map_err(asn1)?;
+    let sig_alg = basic.signature_algorithm.oid.to_string();
+    let sig = basic
+        .signature
+        .as_bytes()
+        .ok_or_else(|| Error::malformed("OCSP signature is not whole bytes"))?;
+    let certs: Vec<Cert> = basic
+        .certs
+        .iter()
+        .flatten()
+        .filter_map(|a| a.to_der().ok())
+        .filter_map(|d| Cert::parse(&d).ok())
+        .collect();
     // a fresh answer's responder must be valid now; a kept one's when it answered (producedAt)
     let responder_at = match fresh {
         Some((_, now)) => now,
-        None => at(&rd, i + 1)?.time()?,
+        None => ms(&rd.produced_at)?,
     };
-    let responder = match check_responder(
-        tbs_t.raw,
-        &sig_alg,
-        sig,
-        &certs,
-        issuer,
-        trust,
-        responder_at,
-    ) {
+    let responder = match check_responder(&tbs, &sig_alg, sig, &certs, issuer, trust, responder_at)
+    {
         Ok(r) => r,
         Err(problem) => return Ok(Answer::error(trf("ERROR: {}", &[&problem]), body)),
     };
 
-    let responses = at(&rd, i + 2)?.items(der::SEQUENCE)?;
     let mut nonce_ok = false;
     if let Some(nonce) = nonce
-        && let Some(ext) = rd.get(i + 3).filter(|t| t.tag == der::ctx(1))
-        && let Some(echoed) = extension(ext, NONCE)?
+        && let Some(echoed) = rd
+            .response_extensions
+            .iter()
+            .flatten()
+            .find(|e| e.extn_id.to_string() == NONCE)
     {
+        let echoed = echoed.extn_value.as_bytes();
         // accept the RFC form (nested OCTET STRING) and the bare nonce some responders echo
-        let nested = der::parse(&echoed)
-            .ok()
-            .and_then(|t| t.expect(der::OCTET_STRING).ok())
-            .map(|t| t.content.to_vec());
-        if echoed != nonce && nested.as_deref() != Some(nonce) {
+        let nested = ::der::asn1::OctetString::from_der(echoed).ok();
+        if echoed != nonce && nested.as_ref().map(|n| n.as_bytes()) != Some(nonce) {
             return Ok(Answer::error(
                 tr("ERROR: OCSP response is not for this request (nonce mismatch)"),
                 body,
@@ -249,26 +258,19 @@ fn evaluate(
         }
         nonce_ok = true;
     }
-    for s in responses {
-        let k = s.items(der::SEQUENCE)?;
-        let id = at(&k, 0)?.items(der::SEQUENCE)?;
-        let id_alg = alg_id(&at(&id, 0)?)?.0;
-        if at(&id, 3)?.uint()? != c.serial.as_slice() {
+    for s in &rd.responses {
+        let id = &s.cert_id;
+        if strip_zeros(id.serial_number.as_bytes()) != c.serial.as_slice() {
             continue;
         }
-        let Ok((nh, kh)) = issuer_hashes(issuer, &id_alg) else {
+        let Ok((nh, kh)) = issuer_hashes(issuer, &id.hash_algorithm.oid.to_string()) else {
             continue;
         };
-        if at(&id, 1)?.octets()? != nh || at(&id, 2)?.octets()? != kh {
+        if id.issuer_name_hash.as_bytes() != nh || id.issuer_key_hash.as_bytes() != kh {
             continue;
         }
-        let next_update = k
-            .iter()
-            .skip(3)
-            .find(|t| t.tag == der::ctx(0))
-            .map(|t| t.inner().and_then(|x| x.time()))
-            .transpose()?;
-        let this_update = k.get(2).map(|t| t.time()).transpose()?;
+        let next_update = s.next_update.as_ref().map(ms).transpose()?;
+        let this_update = Some(ms(&s.this_update)?);
         if let Some((_, now)) = fresh {
             // Without our nonce echoed back, only freshness shows that the answer is not an old
             // one replayed: it must be within its validity period (nextUpdate), or, without one,
@@ -287,20 +289,19 @@ fn evaluate(
             None => this_update,
         };
         let (mut revoked_at, mut untrusted_from) = (None, None);
-        let (good, cert_status, status) = match at(&k, 1)?.tag {
-            0x80 => (
+        let (good, cert_status, status) = match &s.cert_status {
+            Status::Good(_) => (
                 true,
                 CertStatus::Good,
                 trf("GOOD (not revoked, checked {})", &[&Time(checked)]),
             ),
-            0xa1 => {
-                let info = at(&k, 1)?.children()?;
-                let when = info.first().map(|t| t.time()).transpose()?;
-                let compromised = info
-                    .iter()
-                    .find(|t| t.tag == der::ctx(0))
-                    .and_then(|t| t.inner().ok())
-                    .is_some_and(|r| crate::crl::is_compromise(&r));
+            Status::Revoked(info) => {
+                use x509_cert::ext::pkix::CrlReason as R;
+                let when = Some(ms(&info.revocation_time)?);
+                let compromised = matches!(
+                    info.revocation_reason,
+                    Some(R::KeyCompromise | R::CaCompromise | R::AaCompromise)
+                );
                 revoked_at = when;
                 untrusted_from = if compromised { Some(i64::MIN) } else { when };
                 (
@@ -309,7 +310,7 @@ fn evaluate(
                     trf("REVOKED on {}", &[&Time(when)]),
                 )
             }
-            _ => (
+            Status::Unknown(_) => (
                 false,
                 CertStatus::Unknown,
                 tr("UNKNOWN (the OCSP server does not know this certificate)"),
@@ -331,20 +332,6 @@ fn evaluate(
         tr("UNKNOWN (no answer for this certificate)"),
         body,
     ))
-}
-
-fn extension(exts: &Tlv, oid: &str) -> Result<Option<Vec<u8>>> {
-    for e in exts.inner()?.items(der::SEQUENCE)? {
-        let k = e.items(der::SEQUENCE)?;
-        if k[0].oid()? == oid {
-            return Ok(Some(
-                k.last()
-                    .ok_or_else(|| Error::new("bad extension"))?
-                    .octets()?,
-            ));
-        }
-    }
-    Ok(None)
 }
 
 /// The response must be signed by the issuing CA itself, or by a responder certificate that the

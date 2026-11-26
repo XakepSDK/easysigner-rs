@@ -725,6 +725,7 @@ dependencies = [
  "spki",
  "streebog",
  "x509-cert",
+ "x509-ocsp",
  "x509-tsp",
  "zeroize",
 ]
@@ -1541,6 +1542,18 @@ dependencies = [
  "const-oid",
  "der",
  "spki",
+]
+
+[[package]]
+name = "x509-ocsp"
+version = "0.3.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9adad5e5ba07625d8c85ded0fcbc2bc20a7fc4d9f5db6fbde3141065e67befc"
+dependencies = [
+ "const-oid",
+ "der",
+ "spki",
+ "x509-cert",
 ]
 
 [[package]]
