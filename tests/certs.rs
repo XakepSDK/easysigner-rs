@@ -4,10 +4,11 @@
 
 use std::path::PathBuf;
 
+use der_testkit as der;
+use der_testkit::Tlv;
 use kzsigner::cert::{self, Cert};
-use kzsigner::der::Tlv;
 use kzsigner::trust::TrustStore;
-use kzsigner::{Engine, cms, der, p12};
+use kzsigner::{Engine, cms, p12};
 
 fn fixture(p: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

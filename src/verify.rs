@@ -5,7 +5,6 @@ pub use kzcrypto::verify::*;
 
 use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData, SignerInfo};
-use crate::der;
 use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
@@ -374,7 +373,7 @@ pub fn revocation(
 fn check_signed_attributes(sr: &mut SignerReport, si: &SignerInfo, c: &Cert) {
     let md = si
         .signed_attr(cms::ATTR_MESSAGE_DIGEST)
-        .and_then(|v| der::parse(&v).ok()?.octets().ok());
+        .and_then(|v| crate::asn1::octets(&v));
     let ok = signed_attributes_valid(si, c);
     match md {
         Some(md) if ok => {

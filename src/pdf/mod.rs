@@ -17,7 +17,6 @@ use lopdf::{Dictionary, Document, IncrementalDocument, Object, ObjectId, Stream,
 
 use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData};
-use crate::der;
 use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
 use crate::p12::Key;
@@ -607,10 +606,7 @@ fn subfilter(f: &SigField) -> Option<String> {
 /// A signature field's value (CMS or timestamp token), without the zero padding after it.
 fn field_value(f: &SigField) -> Option<&[u8]> {
     let contents = f.v.get(b"Contents").and_then(Object::as_str).ok()?;
-    Some(match der::read(contents) {
-        Ok((t, _)) => t.raw,
-        Err(_) => contents,
-    })
+    Some(crate::asn1::first_element(contents).unwrap_or(contents))
 }
 
 /// The certification signature's permission level (/Perms /DocMDP: 1 = no changes, 2 = forms

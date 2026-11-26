@@ -388,9 +388,9 @@ mod tests {
             "/tests/fixtures/nca-live/sha256-policy-6.2/tsr.der"
         ))
         .unwrap();
-        let k = crate::der::parse(&resp)
+        let k = der_testkit::parse(&resp)
             .unwrap()
-            .items(crate::der::SEQUENCE)
+            .items(der_testkit::SEQUENCE)
             .unwrap();
         k[1].raw.to_vec()
     }

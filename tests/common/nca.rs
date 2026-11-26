@@ -6,8 +6,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
+use der_testkit as der;
 use kzsigner::cms;
-use kzsigner::der;
 use kzsigner::tsp::{Request, TST_INFO};
 
 const PASSWORD: &str = "Qwerty12";

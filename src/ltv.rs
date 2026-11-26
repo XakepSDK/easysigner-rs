@@ -2,6 +2,7 @@
 //! certificates and revocation answers needed to check a signature years later, kept inside
 //! it, and archive timestamps over all of it.
 
+use crate::asn1::ber;
 use crate::cert::Cert;
 use crate::cms::{SignedData, SignerInfo};
 use ::der::asn1::{Any, ObjectIdentifier, OctetString};
@@ -443,11 +444,6 @@ struct AtsHashIndex {
     unsigned_attrs_hash_index: Vec<OctetString>,
 }
 
-/// `T` from DER, or else from BER.
-fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
-    T::from_der(b).or_else(|_| T::from_ber(b))
-}
-
 /// The elements of a SEQUENCE OF, each as encoded (none when `v` is not one).
 fn items(v: &[u8]) -> Vec<Vec<u8>> {
     ber::<Vec<Any>>(v)
@@ -737,11 +733,11 @@ fn check_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::der;
     use crate::env::Env;
     use crate::report::Answer;
     use crate::time::encode_generalized;
     use crate::trust::TrustStore;
+    use der_testkit as der;
     use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
 
     const DAY: i64 = 86_400_000;

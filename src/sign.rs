@@ -4,7 +4,6 @@
 use crate::cert;
 use crate::cert::Cert;
 use crate::cms::{self, SignedData};
-use crate::der;
 use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
@@ -305,7 +304,8 @@ fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
             continue;
         };
         let check = || -> Result<bool> {
-            let signed = der::parse(&md)?.expect(der::OCTET_STRING)?.octets()?;
+            let signed = crate::asn1::octets(&md)
+                .ok_or_else(|| Error::new("malformed message digest attribute"))?;
             Ok(signed == gost::hash(&si.digest_alg, original)?)
         };
         match check() {

@@ -50,6 +50,8 @@ egui_kittest = { version = "0.37", features = ["snapshot"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # the end-to-end tests look inside signed PDFs
 lopdf = { version = "0.47", default-features = false }
+# hand-made DER for the tests
+der-testkit = { path = "../crates/der-testkit" }
 
 [build-dependencies]
 winresource = { version = "0.1", default-features = false }

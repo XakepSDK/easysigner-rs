@@ -457,15 +457,11 @@ fn pdf_and_card() {
     sd.crls = None;
     // the BasicOCSPResponse inside an OCSPResponse
     let basic = |raw: &[u8]| -> Vec<u8> {
-        let r = kzsigner::der::parse(raw)
+        let r = der_testkit::parse(raw)
             .unwrap()
-            .items(kzsigner::der::SEQUENCE)
+            .items(der_testkit::SEQUENCE)
             .unwrap();
-        let b = r[1]
-            .inner()
-            .unwrap()
-            .items(kzsigner::der::SEQUENCE)
-            .unwrap();
+        let b = r[1].inner().unwrap().items(der_testkit::SEQUENCE).unwrap();
         b[1].octets().unwrap()
     };
     let has_certs = sd.signers[0]

@@ -5,8 +5,8 @@
 
 use std::path::PathBuf;
 
+use der_testkit as der;
 use kzsigner::crl::{self, CertStatus, Crl};
-use kzsigner::der;
 use kzsigner::p12::{self, Key};
 use kzsigner::time::{encode_generalized, now_ms};
 use kzsigner::verify::revocation;

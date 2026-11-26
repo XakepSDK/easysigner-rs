@@ -1133,6 +1133,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "der-testkit"
+version = "0.0.0"
+dependencies = [
+ "der",
+ "kzcrypto",
+]
+
+[[package]]
 name = "der_derive"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2301,6 +2309,7 @@ dependencies = [
  "chrono",
  "cipher",
  "der",
+ "der-testkit",
  "des",
  "digest",
  "flate2",
@@ -2333,6 +2342,7 @@ version = "0.1.0-dev"
 dependencies = [
  "aes-gcm",
  "chrono",
+ "der-testkit",
  "eframe",
  "egui_kittest",
  "getrandom 0.4.3",
@@ -2355,6 +2365,7 @@ dependencies = [
 name = "kzsigner-ffi"
 version = "0.1.0-dev"
 dependencies = [
+ "der-testkit",
  "kzsigner",
  "uniffi",
  "zeroize",

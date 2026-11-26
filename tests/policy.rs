@@ -3,8 +3,8 @@
 
 use std::path::PathBuf;
 
+use der_testkit as der;
 use kzsigner::cert::{self, Cert};
-use kzsigner::der;
 use kzsigner::trust::BUNDLED_CA;
 
 fn bundled(name: &str) -> Cert {

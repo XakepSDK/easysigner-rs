@@ -102,15 +102,15 @@ fn deep_nesting_and_bad_oids_are_errors() {
         n.extend([0, 0]);
         d = n;
     }
-    assert!(kzsigner::der::parse(&d).and_then(|t| t.octets()).is_err());
+    assert!(der_testkit::parse(&d).and_then(|t| t.octets()).is_err());
     // an OID whose last byte says "more follows"
     assert!(
-        kzsigner::der::parse(b"\x06\x01\x80")
+        der_testkit::parse(b"\x06\x01\x80")
             .and_then(|t| t.oid())
             .is_err()
     );
     assert!(
-        kzsigner::der::parse(b"\x06\x0b\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01")
+        der_testkit::parse(b"\x06\x0b\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01")
             .and_then(|t| t.oid())
             .is_err()
     );

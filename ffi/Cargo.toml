@@ -23,3 +23,7 @@ bindgen = ["uniffi/cli"]
 kzsigner = { path = "..", default-features = false }
 uniffi = "0.32.2"
 zeroize = "1"
+
+[dev-dependencies]
+# hand-made DER for the tests (tests/common/nca.rs)
+der-testkit = { path = "../crates/der-testkit" }

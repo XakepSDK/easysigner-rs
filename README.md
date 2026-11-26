@@ -227,7 +227,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   * `text.rs`: messages for people (an English template and its arguments).
 * `src/` (crate `kzsigner`, the core) keeps the module names above as re-exports and adds what
   is not cryptography: sending the requests (`http.rs`), caching revocation lists, the clock,
-  reports and their texts.
+  reports and their texts. Its own formats (the key store, CAdES long-term data) are written
+  with RustCrypto's `der` too.
+* `crates/der-testkit`: a small hand-made ASN.1 reader and writer for the tests only (they
+  build certificates, lists and answers, malformed ones included). Never in a release build.
 * `sign.rs`, `verify.rs`: signing and checking whole files, with timestamps, trust and
   revocation, into reports.
 * `vault.rs`: keys kept by kzsigner itself (the phone app, later perhaps the desktop): the private key

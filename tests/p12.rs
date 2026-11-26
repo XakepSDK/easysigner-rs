@@ -114,12 +114,12 @@ fn other_pkcs12_forms() {
 fn bad_mac() {
     for f in ["keys/alice_gost2015.p12", "p12/plain.p12"] {
         let mut d = read(f);
-        let pfx = kzsigner::der::parse(&d)
+        let pfx = der_testkit::parse(&d)
             .unwrap()
-            .items(kzsigner::der::SEQUENCE)
+            .items(der_testkit::SEQUENCE)
             .unwrap();
-        let mac = pfx[2].items(kzsigner::der::SEQUENCE).unwrap();
-        let digest = mac[0].items(kzsigner::der::SEQUENCE).unwrap()[1]
+        let mac = pfx[2].items(der_testkit::SEQUENCE).unwrap();
+        let digest = mac[0].items(der_testkit::SEQUENCE).unwrap()[1]
             .octets()
             .unwrap();
         let at = d.windows(digest.len()).position(|w| w == digest).unwrap();
@@ -135,10 +135,10 @@ fn bad_mac() {
 
 #[test]
 fn not_pkcs12() {
-    use kzsigner::der::{oid, seq, small_int, tlv};
+    use der_testkit::{oid, seq, small_int, tlv};
     let data = oid("1.2.840.113549.1.7.1");
     let signed = oid("1.2.840.113549.1.7.2");
-    let content = tlv(0xa0, &kzsigner::der::octets(&seq(&[])));
+    let content = tlv(0xa0, &der_testkit::octets(&seq(&[])));
     for (d, why) in [
         // too few fields: the ASN.1 library's own words
         (seq(&[&small_int(3)]), ""),

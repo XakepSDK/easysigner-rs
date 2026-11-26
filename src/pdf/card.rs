@@ -15,7 +15,6 @@ use super::layout::{A4, MM, Page, Writer, leading};
 use super::qr;
 use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData};
-use crate::der;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
@@ -192,7 +191,7 @@ pub fn sign_for_card(
     let trust = &env.trust;
     let mime = cms::attribute(
         ATTR_MIME_TYPE,
-        &der::tlv(der::UTF8_STRING, mime_type(file_name).as_bytes()),
+        &::der::Encode::to_der(&::der::asn1::Utf8StringRef::new(mime_type(file_name))?)?,
     )?;
     let mut sd = cms::sign_once_with(
         doc,

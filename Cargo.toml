@@ -44,7 +44,7 @@ zeroize = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["crypto", "ffi", "desktop", "crates/gost3410"]
+members = ["crypto", "ffi", "desktop", "crates/gost3410", "crates/der-testkit"]
 default-members = [".", "crypto", "desktop"]
 # vendored crates: dependencies, not ours to lint
 exclude = ["third_party"]
@@ -70,6 +70,8 @@ opt-level = 3
 [dev-dependencies]
 # test keys and OCSP answers made to order (ltv tests)
 kzcrypto = { path = "crypto", features = ["testkit"] }
+# hand-made DER for the tests
+der-testkit = { path = "crates/der-testkit" }
 
 # Local test runs (cargo test without --release): the crypto in the dependencies optimized,
 # as for mutants, so the GOST and RSA tests don't take minutes.

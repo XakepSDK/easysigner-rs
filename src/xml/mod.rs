@@ -13,7 +13,7 @@ use crate::cert::{self, Cert};
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
-use crate::{Error, Result, der, gost, tsp, verify};
+use crate::{Error, Result, gost, tsp, verify};
 use c14n::Method;
 
 pub const DS: &str = "http://www.w3.org/2000/09/xmldsig#";
@@ -207,10 +207,7 @@ pub fn sign(input: &[u8], key: &Key, tsa_url: Option<&str>, env: &Env) -> Result
     crate::random(&mut idb)?;
     let id = format!("kzsig-{}", crate::hex(&idb));
     let c = &key.cert;
-    let issuer_serial = der::seq(&[
-        &der::seq(&[&der::tlv(der::ctx(4), &c.issuer)]),
-        &der::uint(&c.serial),
-    ]);
+    let issuer_serial = issuer_serial(c)?;
     let signed_props = format!(
         "<xades:SignedProperties Id=\"{id}-sp\"><xades:SignedSignatureProperties>\
          <xades:SigningTime>{}</xades:SigningTime><xades:SigningCertificateV2><xades:Cert>\
@@ -767,4 +764,24 @@ fn signing_certificate_matches(ssp: Node, c: &Cert) -> bool {
             _ => false,
         }
     })
+}
+
+/// IssuerSerial (RFC 5035): the issuer as a directoryName, and the serial number.
+fn issuer_serial(c: &crate::cert::Cert) -> Result<Vec<u8>> {
+    use ::der::Encode;
+    use ::der::asn1::{Any, Uint};
+    #[derive(::der::Sequence)]
+    struct IssuerSerial {
+        issuer: Vec<Any>,
+        serial: Uint,
+    }
+    let directory_name = ::der::Tag::ContextSpecific {
+        constructed: true,
+        number: ::der::TagNumber(4),
+    };
+    Ok(IssuerSerial {
+        issuer: vec![Any::new(directory_name, c.issuer.as_slice())?],
+        serial: Uint::new(&c.serial)?,
+    }
+    .to_der()?)
 }

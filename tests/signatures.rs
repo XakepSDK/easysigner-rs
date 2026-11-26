@@ -3,12 +3,13 @@
 
 use std::path::PathBuf;
 
+use der_testkit as der;
 use kzsigner::cert::Cert;
 use kzsigner::cms::{self, SignedData};
 use kzsigner::env::Env;
 use kzsigner::trust::TrustStore;
 use kzsigner::verify::{signing_certificate_matches, verify, verify_with};
-use kzsigner::{Engine, der, gost, p12};
+use kzsigner::{Engine, gost, p12};
 
 fn fixture(p: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

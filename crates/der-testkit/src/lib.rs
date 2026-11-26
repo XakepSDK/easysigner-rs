@@ -1,9 +1,7 @@
 //! A small ASN.1 reader (DER and the BER that Kalkan and NCALayer write: indefinite lengths,
-//! constructed strings) and a DER writer. Elements keep their raw bytes, so signed structures
-//! can be re-hashed and copied exactly as they were.
-//!
-//! The application's own helper: kzcrypto uses RustCrypto's `der` instead, and this module is
-//! to follow it there.
+//! constructed strings) and a DER writer, for tests only: they build certificates, lists and
+//! answers by hand, malformed ones included, and look inside what the code wrote. The code
+//! itself uses RustCrypto's `der`.
 
 use kzcrypto::{Error, Result, trf};
 

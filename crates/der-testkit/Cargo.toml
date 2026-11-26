@@ -1,0 +1,10 @@
+[package]
+name = "der-testkit"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "A small ASN.1 reader and writer for tests: builds well-formed and deliberately malformed DER/BER by hand. Never in a release build."
+
+[dependencies]
+kzcrypto = { path = "../../crypto" }
+der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid"] }
