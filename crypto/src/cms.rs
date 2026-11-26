@@ -2,8 +2,8 @@
 //! signers the way NCALayer makes them, and merging signers (co-signing).
 
 use crate::cert::{self, Cert};
-use crate::der::{self, Tlv};
-use crate::keys::{PrivateKey, alg_id};
+use crate::der;
+use crate::keys::PrivateKey;
 use crate::prelude::*;
 use crate::{Error, ErrorKind, Result, Rng, gost, time};
 
@@ -102,58 +102,10 @@ impl SignedData {
         })
     }
 
-    /// A ContentInfo with SignedData (also used for timestamp tokens).
+    /// A ContentInfo with SignedData (also used for timestamp tokens), read by RustCrypto's
+    /// `cms` (BER or DER). Each part is kept as its DER encoding.
     pub fn parse_inner(data: &[u8]) -> Result<SignedData> {
-        let (ci, _) = der::read(data)?;
-        let ci = ci.items(der::SEQUENCE)?;
-        if ci.len() < 2 || ci[0].oid()? != SIGNED_DATA {
-            return Err(Error::new("not SignedData"));
-        }
-        let sd = ci[1]
-            .expect(der::ctx(0))?
-            .inner_any()?
-            .items(der::SEQUENCE)?;
-        if sd.len() < 4 {
-            return Err(Error::new("SignedData too short"));
-        }
-        let digest_algs = sd[1]
-            .items(der::SET)?
-            .iter()
-            .map(|a| a.raw.to_vec())
-            .collect();
-        let encap = sd[2].items(der::SEQUENCE)?;
-        let content_type = encap
-            .first()
-            .ok_or_else(|| Error::new("no content type"))?
-            .oid()?;
-        let content = match encap.get(1) {
-            Some(c) => Some(c.expect(der::ctx(0))?.inner_any()?.octets()?),
-            None => None,
-        };
-        let (mut certs, mut crls, mut signers) = (Vec::new(), None, None);
-        for t in &sd[3..] {
-            match t.tag {
-                0xa0 => certs = t.children()?.iter().map(|c| c.raw.to_vec()).collect(),
-                0xa1 => crls = Some(t.raw.to_vec()),
-                der::SET => {
-                    signers = Some(
-                        t.children()?
-                            .iter()
-                            .map(SignerInfo::parse)
-                            .collect::<Result<Vec<_>>>()?,
-                    )
-                }
-                _ => {}
-            }
-        }
-        Ok(SignedData {
-            digest_algs,
-            content_type,
-            content,
-            certs,
-            crls,
-            signers: signers.ok_or_else(|| Error::new("no signerInfos"))?,
-        })
+        rc::signed_data(data)
     }
 
     /// The certificates that parse.
@@ -248,41 +200,102 @@ impl SignedData {
     }
 }
 
-impl SignerInfo {
-    fn parse(t: &Tlv) -> Result<SignerInfo> {
-        let k = t.items(der::SEQUENCE)?;
-        if k.len() < 5 {
-            return Err(Error::new("SignerInfo too short"));
+/// Reading with RustCrypto's `cms`.
+mod rc {
+    use ::cms::content_info::ContentInfo;
+    use ::cms::signed_data::{SignedData as Sd, SignerInfo as Si};
+    use ::der::asn1::OctetString;
+    use ::der::{Decode, Encode};
+
+    use super::{SIGNED_DATA, SignedData, SignerInfo};
+    use crate::prelude::*;
+    use crate::{Error, Result};
+
+    fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
+        T::from_der(b).or_else(|_| T::from_ber(b))
+    }
+
+    fn asn1(e: ::der::Error) -> Error {
+        Error::malformed(format!("malformed ASN.1: {e}"))
+    }
+
+    fn der<T: Encode>(t: &T) -> Result<Vec<u8>> {
+        t.to_der().map_err(asn1)
+    }
+
+    /// `content` as `[n] IMPLICIT`: the DER of a SET with its tag replaced.
+    fn implicit(n: u8, mut set: Vec<u8>) -> Vec<u8> {
+        if let Some(t) = set.first_mut() {
+            *t = 0xa0 | n;
         }
-        let mut i = 3;
-        let signed_attrs = if k[3].tag == der::ctx(0) {
-            i = 4;
-            Some(k[3].raw.to_vec())
-        } else {
-            None
+        set
+    }
+
+    pub fn signed_data(data: &[u8]) -> Result<SignedData> {
+        let ci: ContentInfo = ber(data).map_err(asn1)?;
+        if ci.content_type.to_string() != SIGNED_DATA {
+            return Err(Error::new("not SignedData"));
+        }
+        let sd: Sd = ber(&der(&ci.content)?).map_err(asn1)?;
+        let content = match &sd.encap_content_info.econtent {
+            Some(c) => Some(
+                ber::<OctetString>(&der(c)?)
+                    .map_err(asn1)?
+                    .into_bytes()
+                    .into_vec(),
+            ),
+            None => None,
         };
-        let short = || Error::new("SignerInfo too short");
-        let sig_alg_t = k.get(i).ok_or_else(short)?;
-        let sig = k.get(i + 1).ok_or_else(short)?;
-        let unsigned_attrs = match k.get(i + 2) {
-            Some(u) if u.tag == der::ctx(1) => {
-                u.children()?.iter().map(|a| a.raw.to_vec()).collect()
-            }
-            _ => vec![],
+        let mut certs = Vec::new();
+        for c in sd.certificates.iter().flat_map(|s| s.0.iter()) {
+            certs.push(der(c)?);
+        }
+        let crls = match &sd.crls {
+            Some(c) => Some(implicit(1, der(&c.0)?)),
+            None => None,
         };
-        Ok(SignerInfo {
-            version: k[0].raw.to_vec(),
-            sid: k[1].raw.to_vec(),
-            digest_alg_raw: k[2].raw.to_vec(),
-            digest_alg: alg_id(&k[2])?.0,
-            signed_attrs,
-            sig_alg_raw: sig_alg_t.raw.to_vec(),
-            sig_alg: alg_id(sig_alg_t)?.0,
-            signature: sig.expect(der::OCTET_STRING)?.octets()?,
-            unsigned_attrs,
+        let mut signers = Vec::new();
+        for s in sd.signer_infos.0.iter() {
+            signers.push(signer(s)?);
+        }
+        Ok(SignedData {
+            digest_algs: sd
+                .digest_algorithms
+                .iter()
+                .map(der)
+                .collect::<Result<_>>()?,
+            content_type: sd.encap_content_info.econtent_type.to_string(),
+            content,
+            certs,
+            crls,
+            signers,
         })
     }
 
+    fn signer(s: &Si) -> Result<SignerInfo> {
+        Ok(SignerInfo {
+            version: der(&s.version)?,
+            sid: der(&s.sid)?,
+            digest_alg_raw: der(&s.digest_alg)?,
+            digest_alg: s.digest_alg.oid.to_string(),
+            signed_attrs: match &s.signed_attrs {
+                Some(a) => Some(implicit(0, der(a)?)),
+                None => None,
+            },
+            sig_alg_raw: der(&s.signature_algorithm)?,
+            sig_alg: s.signature_algorithm.oid.to_string(),
+            signature: s.signature.as_bytes().to_vec(),
+            unsigned_attrs: s
+                .unsigned_attrs
+                .iter()
+                .flat_map(|a| a.iter())
+                .map(der)
+                .collect::<Result<_>>()?,
+        })
+    }
+}
+
+impl SignerInfo {
     pub fn encode(&self) -> Vec<u8> {
         let mut b = der::cat(&[&self.version, &self.sid, &self.digest_alg_raw]);
         if let Some(a) = &self.signed_attrs {
@@ -563,10 +576,7 @@ mod tests {
         let e = SignedData::parse_inner(&data).err().unwrap();
         assert_eq!(e.to_string(), "not SignedData");
         let bare = der::seq(&[&der::oid(SIGNED_DATA)]);
-        assert_eq!(
-            SignedData::parse_inner(&bare).err().unwrap().to_string(),
-            "not SignedData"
-        );
+        assert!(SignedData::parse_inner(&bare).is_err());
 
         // unsigned attribute values, by type
         let mut d = signed(ID_DATA);

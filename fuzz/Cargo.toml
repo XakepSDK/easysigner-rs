@@ -41,3 +41,7 @@ path = "fuzz_targets/extract.rs"
 test = false
 doc = false
 bench = false
+
+# the same patched cms as the main workspace (third_party/cms/PATCHED.md)
+[patch.crates-io]
+cms = { path = "../third_party/cms" }

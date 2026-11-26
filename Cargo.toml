@@ -44,6 +44,8 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Glo
 [workspace]
 members = ["crypto", "ffi", "desktop", "crates/gost3410"]
 default-members = [".", "crypto", "desktop"]
+# vendored crates: dependencies, not ours to lint
+exclude = ["third_party"]
 
 [profile.release]
 opt-level = "z"
@@ -71,3 +73,7 @@ kzcrypto = { path = "crypto", features = ["testkit"] }
 # as for mutants, so the GOST and RSA tests don't take minutes.
 [profile.dev.package."*"]
 opt-level = 3
+
+# RustCrypto cms with the OtherRevocationInfoFormat fix (third_party/cms/PATCHED.md)
+[patch.crates-io]
+cms = { path = "third_party/cms" }
