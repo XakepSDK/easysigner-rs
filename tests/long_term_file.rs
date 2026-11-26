@@ -65,7 +65,7 @@ fn an_older_lta_file_verifies() {
     // without the document the timestamps are not checked, but their times are known
     let sd = kzsigner::cms::SignedData::parse(&data).unwrap();
     let si = &sd.signers[0];
-    let trust = kzsigner::trust::TrustStore::new(vec![]);
+    let trust = kzsigner::env::Env::new(kzsigner::trust::TrustStore::new(vec![]));
     let stamps = kzsigner::ltv::check_archives(&sd, si, None, &trust);
     assert_eq!(stamps.len(), 3);
     for a in &stamps {

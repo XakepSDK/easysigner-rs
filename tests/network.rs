@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use kzsigner::cert::Cert;
 use kzsigner::cms::SignedData;
+use kzsigner::env::Env;
 use kzsigner::trust::TrustStore;
 use kzsigner::{gost, ltv, ocsp, p12, tsp};
 
@@ -20,12 +21,12 @@ fn fixture(p: &str) -> Vec<u8> {
     .unwrap()
 }
 
-fn carol() -> (Cert, Cert, TrustStore) {
+fn carol() -> (Cert, Cert, Env) {
     let ca = Cert::parse(&fixture("ocsp/ca.cer")).unwrap();
     let carol = p12::open(&fixture("ocsp/carol.p12"), "Qwerty12", None)
         .unwrap()
         .cert;
-    (carol, ca.clone(), TrustStore::only(vec![ca]))
+    (carol, ca.clone(), Env::new(TrustStore::only(vec![ca])))
 }
 
 fn tsa() -> Cert {
@@ -65,7 +66,8 @@ fn timestamp_request() {
     let data = b"stamp me";
     let (alg, policy) = tsp::hash_and_policy(None);
     let hash = gost::hash(alg, data).unwrap();
-    let token = tsp::request(&nca::fake_tsa(), alg, &hash, policy).unwrap();
+    let env = Env::new(TrustStore::empty());
+    let token = tsp::request(&nca::fake_tsa(), alg, &hash, policy, &env).unwrap();
     let check =
         kzsigner::kzcrypto::tsp::check_token(data, &token, &TrustStore::only(vec![tsa()])).unwrap();
     assert!(check.imprint_ok && check.signature_ok && check.trusted());
@@ -75,7 +77,7 @@ fn timestamp_request() {
             .unwrap_or(true)
     );
 
-    assert!(tsp::request(&down(), alg, &hash, policy).is_err());
+    assert!(tsp::request(&down(), alg, &hash, policy, &env).is_err());
 }
 
 /// A revoked answer refuses the certificate; it does not fall back to a revocation list.
@@ -108,10 +110,11 @@ fn new_archive_timestamp() {
         &content,
         &nca::fake_tsa(),
         &ltv::Kept::default(),
+        &Env::new(TrustStore::empty()),
     )
     .unwrap();
     let (_, ca, _) = carol();
-    let trust = TrustStore::only(vec![ca, tsa()]);
+    let trust = Env::new(TrustStore::only(vec![ca, tsa()]));
     let sd = SignedData::parse(&sd.encode()).unwrap();
     let stamps = ltv::check_archives(&sd, &sd.signers[0], Some(&content), &trust);
     assert_eq!(stamps.len(), 4);

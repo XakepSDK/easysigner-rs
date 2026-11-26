@@ -10,7 +10,6 @@ use kzsigner::cert::{self, Cert, get, rdns};
 use kzsigner::i18n::Lang;
 use kzsigner::pdf::whosigned::WhoSigned;
 use kzsigner::report::{SignResult, SignerReport};
-use kzsigner::trust::TrustStore;
 use kzsigner::vault::VaultError;
 use kzsigner::{Engine, ltv};
 use zeroize::Zeroizing;
@@ -23,7 +22,6 @@ pub struct Nca {
     pub(crate) tsa: String,
     pub(crate) ocsp: String,
     pub(crate) engine: Engine,
-    pub(crate) trust: TrustStore,
 }
 
 #[uniffi::export]
@@ -52,7 +50,8 @@ impl Nca {
     /// NotRecognized when `c` is not from NCA or another CA recognized in Kazakhstan, or not a
     /// key for signing documents; checked offline.
     pub(crate) fn unrecognized(&self, c: &Cert) -> Option<CantSign> {
-        let chain = self.trust.check(c, now());
+        let env = self.engine.env();
+        let chain = env.trust.check(c, env.now_ms());
         (!chain.ok || cert::usage_problem(c, chain.issuer.as_ref()).is_some())
             .then_some(CantSign::NotRecognized)
     }
@@ -62,8 +61,7 @@ impl Nca {
         Nca {
             tsa: tsa.into(),
             ocsp: ocsp.into(),
-            engine: Engine::new(extra_trust.clone()),
-            trust: TrustStore::new(extra_trust),
+            engine: Engine::new(extra_trust),
         }
     }
 }
@@ -308,12 +306,13 @@ fn check(nca: &Nca, c: &Cert) -> Result<(), SignError> {
     if let Some(r) = cant_sign(c, now()) {
         return Err(refuse(r));
     }
-    let chain = nca.trust.check(c, now());
+    let env = nca.engine.env();
+    let chain = env.trust.check(c, env.now_ms());
     if !chain.ok || cert::usage_problem(c, chain.issuer.as_ref()).is_some() {
         return Err(refuse(CantSign::NotRecognized));
     }
     let (_, _, answer, _) =
-        kzsigner::verify::revocation(c, chain.issuer.as_ref(), &nca.ocsp, &nca.trust, None);
+        kzsigner::verify::revocation(c, chain.issuer.as_ref(), &nca.ocsp, env, None);
     match answer {
         "good" => Ok(()),
         "revoked" => Err(refuse(CantSign::Revoked)),

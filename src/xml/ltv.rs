@@ -3,6 +3,7 @@
 //! TimeStampValidationData), and archive timestamps over all of it (B-LTA), renewed by adding
 //! another.
 
+use crate::env::Env;
 use roxmltree::{Document, Node, NodeId};
 
 use super::c14n::{self, Method};
@@ -14,9 +15,8 @@ use crate::cert::{self, Cert};
 use crate::i18n::{tr, trf};
 use crate::ltv::{self as cades_ltv, Kept};
 use crate::report::{ArchiveStamp, SignResult, SignerReport};
-use crate::trust::TrustStore;
 use crate::tsp::{self, TstInfo};
-use crate::{Error, Result, cms, gost, time};
+use crate::{Error, Result, cms, gost};
 
 pub const XADES141: &str = "http://uri.etsi.org/01903/v1.4.1#";
 
@@ -118,12 +118,7 @@ fn archive_input(
 }
 
 /// Checks the archive timestamps of `sig`.
-pub fn check_archives(
-    text: &str,
-    doc: &Document,
-    sig: Node,
-    trust: &TrustStore,
-) -> Vec<ArchiveStamp> {
+pub fn check_archives(text: &str, doc: &Document, sig: Node, env: &Env) -> Vec<ArchiveStamp> {
     let Some(usp) = unsigned_props(sig) else {
         return vec![];
     };
@@ -137,7 +132,7 @@ pub fn check_archives(
                     .unwrap_or_else(Method::inclusive);
                 let input = archive_input(text, doc, sig, Some(a.id()), &method)?;
                 let mut r = SignerReport::default();
-                tsp::check_token(&mut r, &input, &token, trust)?;
+                tsp::check_token(&mut r, &input, &token, env)?;
                 let valid = r.timestamp_ok == Some(true);
                 Ok(ArchiveStamp {
                     checked: true,
@@ -233,7 +228,7 @@ pub fn extend(
     archive: bool,
     tsa_url: &str,
     ocsp_url: &str,
-    trust: &TrustStore,
+    env: &Env,
     only: Option<&[u8]>,
 ) -> Result<SignResult> {
     let (text, enc, bom) = encoding::decode(input)?;
@@ -243,7 +238,7 @@ pub fn extend(
         signer_count: count,
         ..Default::default()
     };
-    let now = time::now_ms();
+    let now = env.now_ms();
     let mut done = 0;
     for i in 0..count {
         // what to add, worked out on the document as it is now
@@ -296,7 +291,7 @@ pub fn extend(
                     .filter_map(|t| tsp::token_cert(t))
                     .map(|t| (t, false)),
             );
-            let g = cades_ltv::gather(&targets, ocsp_url, trust, now);
+            let g = cades_ltv::gather(&targets, ocsp_url, env, now);
             r.warnings.extend(g.warnings);
             if !archived && !g.refused.is_empty() {
                 r.warnings.push(trf(
@@ -331,9 +326,15 @@ pub fn extend(
                 archive_input(&out, &doc, signatures(&doc)[i], None, &Method::inclusive())?
             };
             let (hash_oid, policy) = tsp::hash_and_policy_for(&key_alg);
-            let token = tsp::request(tsa_url, hash_oid, &gost::hash(hash_oid, &input)?, policy)?;
+            let token = tsp::request(
+                tsa_url,
+                hash_oid,
+                &gost::hash(hash_oid, &input)?,
+                policy,
+                env,
+            )?;
             let mut check = SignerReport::default();
-            tsp::check_token(&mut check, &input, &token, trust)?;
+            tsp::check_token(&mut check, &input, &token, env)?;
             if check.timestamp_ok != Some(true) {
                 return Err(Error::new(trf(
                     "The timestamp server's answer does not match the request: {}",
@@ -367,6 +368,8 @@ pub fn extend(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::Env;
+    use crate::trust::TrustStore;
 
     /// A signature element whose unsigned signature properties are `usp`.
     fn signature(usp: &str) -> String {
@@ -462,8 +465,8 @@ mod tests {
         assert_eq!(gen_time(b"junk"), None);
 
         // a real token over something else: checked, not valid
-        let trust = TrustStore::new(vec![]);
-        let a = &check_archives(&text, &doc, sig, &trust)[0];
+        let env = Env::new(TrustStore::new(vec![]));
+        let a = &check_archives(&text, &doc, sig, &env)[0];
         assert!(
             a.checked && !a.valid && a.time == Some(when) && a.tsa.is_some(),
             "{a:?}"
@@ -477,7 +480,7 @@ mod tests {
             "<x141:ArchiveTimeStamp><xades:EncapsulatedTimeStamp>{other}</xades:EncapsulatedTimeStamp></x141:ArchiveTimeStamp>"
         ));
         let doc = parse(&text).unwrap();
-        let a = &check_archives(&text, &doc, doc.root_element(), &trust)[0];
+        let a = &check_archives(&text, &doc, doc.root_element(), &env)[0];
         assert!(a.checked && !a.valid && a.time == Some(when), "{a:?}");
         assert_eq!(a.tsa, tsp::token_cert(&token).map(|c| c.cn()));
         assert!(

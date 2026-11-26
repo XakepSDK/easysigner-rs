@@ -6,11 +6,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::env::Env;
+
 pub use kzcrypto::crl::*;
 
 use crate::cert::Cert;
 use crate::i18n::{self, tr, trf};
-use crate::{Error, Result, http, time};
+use crate::{Error, Result};
 
 /// NCA's full lists are large (tens of MB); refuse anything beyond this.
 const MAX_CRL: u64 = 256 << 20;
@@ -32,35 +34,37 @@ pub fn evaluate(
 /// A parsed list kept until a time, or a failure not retried until a time.
 type Cached = (std::result::Result<Arc<Crl>, Error>, i64);
 
-/// Lists fetched in this run, by address.
-static CACHE: Mutex<Option<HashMap<String, Cached>>> = Mutex::new(None);
+/// Lists fetched through one [`Env`], by address.
+#[derive(Default)]
+pub struct Cache(Mutex<HashMap<String, Cached>>);
 
-fn fetch(url: &str, now: i64) -> Result<Arc<Crl>> {
-    if let Ok(c) = CACHE.lock()
-        && let Some((r, until)) = c.as_ref().and_then(|c| c.get(url))
+fn fetch(url: &str, now: i64, env: &Env) -> Result<Arc<Crl>> {
+    if let Ok(c) = env.crls.0.lock()
+        && let Some((r, until)) = c.get(url)
         && *until >= now
     {
         return r.clone();
     }
-    let r = http::get(url, MAX_CRL, crate::Server::RevocationList)
+    let r = env
+        .net
+        .get(crate::Server::RevocationList, url, MAX_CRL)
         .and_then(|d| Ok(Crl::parse(&d)?))
         .map(Arc::new);
     let until = match &r {
         Ok(crl) => crl.next_update.unwrap_or(now).min(now + 60 * MINUTE),
         Err(_) => now + 5 * MINUTE,
     };
-    if let Ok(mut c) = CACHE.lock() {
-        c.get_or_insert_with(HashMap::new)
-            .insert(url.to_string(), (r.clone(), until));
+    if let Ok(mut c) = env.crls.0.lock() {
+        c.insert(url.to_string(), (r.clone(), until));
     }
     r
 }
 
 /// The first list that could be read from `urls`, or the last error.
-fn first(urls: &[String], now: i64) -> Result<Arc<Crl>> {
+fn first(urls: &[String], now: i64, env: &Env) -> Result<Arc<Crl>> {
     let mut last = Error::new(tr("the certificate names no revocation list"));
     for u in urls {
-        match fetch(u, now) {
+        match fetch(u, now, env) {
             Ok(c) => return Ok(c),
             Err(e) => last = e,
         }
@@ -70,16 +74,16 @@ fn first(urls: &[String], now: i64) -> Result<Arc<Crl>> {
 
 /// The current lists for `c`: the full list its distribution points name, a delta list when one
 /// could be read, and whether a delta list is due (named by the certificate or the full list).
-pub fn lists(c: &Cert, now: i64) -> Result<(Arc<Crl>, Option<Arc<Crl>>, bool)> {
-    let base = first(&urls(c), now)?;
+pub fn lists(c: &Cert, now: i64, env: &Env) -> Result<(Arc<Crl>, Option<Arc<Crl>>, bool)> {
+    let base = first(&urls(c), now, env)?;
     let delta_urls = delta_urls(c, &base);
     let delta_due = !delta_urls.is_empty();
-    let delta = first(&delta_urls, now).ok();
+    let delta = first(&delta_urls, now, env).ok();
     Ok((base, delta, delta_due))
 }
 
 /// Checks `c` against the CRLs its distribution points name (and their delta lists).
-pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
+pub fn check(c: &Cert, issuer: Option<&Cert>, env: &Env) -> (bool, String, &'static str) {
     let Some(issuer) = issuer else {
         return (
             false,
@@ -87,8 +91,8 @@ pub fn check(c: &Cert, issuer: Option<&Cert>) -> (bool, String, &'static str) {
             "",
         );
     };
-    let now = time::now_ms();
-    match lists(c, now) {
+    let now = env.now_ms();
+    match lists(c, now, env) {
         Ok((base, delta, due)) => evaluate(&base, delta.as_deref(), due, c, issuer, now),
         Err(e) => (
             false,

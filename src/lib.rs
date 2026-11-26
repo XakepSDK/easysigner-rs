@@ -4,6 +4,7 @@ pub mod cert;
 pub mod cms;
 pub mod crl;
 pub mod der;
+pub mod env;
 pub mod gost;
 pub mod http;
 pub mod i18n;
@@ -44,15 +45,24 @@ pub fn crypto_version() -> &'static str {
 
 /// What the command line and the window use: open a key, sign, verify, extract.
 pub struct Engine {
-    trust: TrustStore,
+    env: env::Env,
 }
 
 impl Engine {
     /// `extra_trust`: CA certificates to trust on top of the bundled NCA RK ones.
     pub fn new(extra_trust: Vec<Cert>) -> Engine {
         Engine {
-            trust: TrustStore::new(extra_trust),
+            env: env::Env::new(TrustStore::new(extra_trust)),
         }
+    }
+
+    /// An engine over `env`: its trusted CAs, network and clock (tests use fakes).
+    pub fn with_env(env: env::Env) -> Engine {
+        Engine { env }
+    }
+
+    pub fn env(&self) -> &env::Env {
+        &self.env
     }
 
     pub fn open_key(&self, p12: &[u8], password: &str, alias: Option<&str>) -> Result<Key> {
@@ -60,12 +70,12 @@ impl Engine {
     }
 
     pub fn key_warnings(&self, c: &Cert) -> Vec<String> {
-        cert::key_warnings(c)
+        cert::key_warnings(c, self.env.now_ms())
     }
 
     /// Checks the signer's own key before signing; see [`sign::check_key`].
     pub fn check_key(&self, c: &Cert, ocsp_url: Option<&str>) -> Result<Vec<String>> {
-        sign::check_key(c, ocsp_url, &self.trust)
+        sign::check_key(c, ocsp_url, &self.env)
     }
 
     /// See [`sign::sign`]. The key is checked first ([`Engine::check_key`]; revocation with
@@ -89,7 +99,7 @@ impl Engine {
             tsa_url,
             cosign_if_cms,
             detached_original,
-            &self.trust,
+            &self.env,
         )?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
@@ -117,7 +127,7 @@ impl Engine {
         stamp: Option<&pdf::stamp::Stamp>,
     ) -> Result<SignResult> {
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = pdf::sign(input, key, tsa_url, &self.trust, stamp)?;
+        let mut r = pdf::sign(input, key, tsa_url, &self.env, stamp)?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
@@ -135,7 +145,7 @@ impl Engine {
         page: &pdf::whosigned::WhoSigned,
     ) -> Result<SignResult> {
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = pdf::sign_with(input, key, tsa_url, &self.trust, pdf::Look::WhoSigned(page))?;
+        let mut r = pdf::sign_with(input, key, tsa_url, &self.env, pdf::Look::WhoSigned(page))?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
@@ -152,7 +162,7 @@ impl Engine {
     ) -> Result<SignResult> {
         sign::check_hash_length(hash, key)?;
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = sign::sign_hash(hash, key, tsa_url, &self.trust)?;
+        let mut r = sign::sign_hash(hash, key, tsa_url, &self.env)?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
@@ -168,7 +178,7 @@ impl Engine {
         ocsp_url: Option<&str>,
     ) -> Result<SignResult> {
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = xml::sign(input, key, tsa_url, &self.trust)?;
+        let mut r = xml::sign(input, key, tsa_url, &self.env)?;
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
@@ -218,8 +228,7 @@ impl Engine {
             .or(made_with.map(|m| m.0))
             .unwrap_or(pdf::card::CardLang::Ru);
         let qr = qr.or(made_with.map(|m| m.1)).unwrap_or(false);
-        let cms =
-            pdf::card::sign_for_card(&doc, &name, key, tsa_url, ocsp_url, &self.trust, &mut r)?;
+        let cms = pdf::card::sign_for_card(&doc, &name, key, tsa_url, ocsp_url, &self.env, &mut r)?;
         let mut n = signatures.len() + 1;
         while signatures
             .iter()
@@ -235,7 +244,7 @@ impl Engine {
             lang,
             qr,
         };
-        r.cms = pdf::card::build(&input, &self.trust)?;
+        r.cms = pdf::card::build(&input, &self.env)?;
         r.signer_count = input.signatures.len();
         Ok(r)
     }
@@ -258,7 +267,7 @@ impl Engine {
             )));
         }
         if pdf::is_pdf(input) {
-            return pdf::extend(input, archive, tsa_url, ocsp_url, &self.trust);
+            return pdf::extend(input, archive, tsa_url, ocsp_url, &self.env);
         }
         if xml::is_xml(input) {
             if original.is_some() {
@@ -266,17 +275,9 @@ impl Engine {
                     "An XML document's signatures are inside it: extend the signed XML file alone, without --data.",
                 )));
             }
-            return xml::ltv::extend(input, archive, tsa_url, ocsp_url, &self.trust, None);
+            return xml::ltv::extend(input, archive, tsa_url, ocsp_url, &self.env, None);
         }
-        sign::extend(
-            input,
-            original,
-            archive,
-            tsa_url,
-            ocsp_url,
-            &self.trust,
-            None,
-        )
+        sign::extend(input, original, archive, tsa_url, ocsp_url, &self.env, None)
     }
 
     /// [`Engine::extend`] after signing: in a .cms, only the new signature (`r.signature`);
@@ -298,7 +299,7 @@ impl Engine {
                 level == ltv::Level::Lta,
                 tsa_url,
                 ocsp_url,
-                &self.trust,
+                &self.env,
                 Some(&r.signature),
             )
         } else {
@@ -308,7 +309,7 @@ impl Engine {
                 level == ltv::Level::Lta,
                 tsa_url,
                 ocsp_url,
-                &self.trust,
+                &self.env,
                 Some(&r.signature),
             )
         };
@@ -357,7 +358,7 @@ impl Engine {
                 .collect(),
             made_with: None,
         };
-        let mut rep = pdf::card::verify(&card, &self.trust, ocsp_url);
+        let mut rep = pdf::card::verify(&card, &self.env, ocsp_url);
         rep.card_document = None;
         rep.has_content = false;
         rep.detached_provided = true;
@@ -376,10 +377,10 @@ impl Engine {
         ocsp_url: Option<&str>,
     ) -> Result<VerifyReport> {
         if let Some(card) = pdf::card::read(cms) {
-            return Ok(pdf::card::verify(&card, &self.trust, ocsp_url));
+            return Ok(pdf::card::verify(&card, &self.env, ocsp_url));
         }
         if pdf::is_pdf(cms) {
-            return pdf::verify(cms, &self.trust, ocsp_url);
+            return pdf::verify(cms, &self.env, ocsp_url);
         }
         if xml::is_xml(cms) {
             if detached_original.is_some() {
@@ -387,9 +388,9 @@ impl Engine {
                     "An XML signature is inside the document it signs: check the signed XML file alone.",
                 )));
             }
-            return xml::verify(cms, &self.trust, ocsp_url);
+            return xml::verify(cms, &self.env, ocsp_url);
         }
-        verify::verify(cms, detached_original, &self.trust, ocsp_url)
+        verify::verify(cms, detached_original, &self.env, ocsp_url)
     }
 
     /// Whether `data` is a PDF.
@@ -412,7 +413,7 @@ impl Engine {
     pub fn describe(&self, c: &Cert) -> SignerReport {
         let mut sr = SignerReport::default();
         cert::describe(&mut sr, c);
-        let chain = self.trust.check(c, time::now_ms());
+        let chain = self.env.trust.check(c, self.env.now_ms());
         sr.chain_ok = chain.ok;
         sr.chain_status = Some(i18n::text(&chain.status));
         sr.chain = chain.path;

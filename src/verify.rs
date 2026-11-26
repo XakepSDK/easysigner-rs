@@ -6,30 +6,30 @@ pub use kzcrypto::verify::*;
 use crate::cert::{self, Cert};
 use crate::cms::{self, SignedData, SignerInfo};
 use crate::der;
+use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
 use crate::report::{SignerReport, VerifyReport};
-use crate::trust::TrustStore;
 use crate::{Error, Result, gost, ocsp, time, tsp};
 
 pub fn verify(
     raw: &[u8],
     detached_original: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
 ) -> Result<VerifyReport> {
-    verify_with(raw, detached_original, trust, ocsp_url, false, None)
+    verify_with(raw, detached_original, env, ocsp_url, false, None)
 }
 
 /// [`verify`], with validation data kept outside the CMS (a PDF's DSS).
 pub fn verify_kept(
     raw: &[u8],
     detached_original: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
     kept: &Kept,
 ) -> Result<VerifyReport> {
-    verify_with(raw, detached_original, trust, ocsp_url, false, Some(kept))
+    verify_with(raw, detached_original, env, ocsp_url, false, Some(kept))
 }
 
 /// [`verify`]; `signature_only`: without the document, still check each signature over its
@@ -38,7 +38,7 @@ pub fn verify_kept(
 pub fn verify_with(
     raw: &[u8],
     detached_original: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
     signature_only: bool,
     kept: Option<&Kept>,
@@ -73,7 +73,7 @@ pub fn verify_with(
             &d,
             si,
             content.as_deref(),
-            trust,
+            env,
             ocsp_url,
             signature_only,
             kept,
@@ -100,7 +100,7 @@ fn check_one(
     d: &SignedData,
     si: &SignerInfo,
     content: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
     signature_only: bool,
     extra: Option<&Kept>,
@@ -125,8 +125,8 @@ fn check_one(
         }
     }
 
-    let tsa_ca = tsp::check(&mut sr, si, trust);
-    let cert_check = check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
+    let tsa_ca = tsp::check(&mut sr, si, env);
+    let cert_check = check_certificate(&mut sr, &c, tsa_ca, env, ocsp_url);
     let (valid_at, mut ocsp_good) = (cert_check.valid_at, cert_check.ocsp_good);
 
     let mut kept = Kept::from_cms(d, Some(si));
@@ -137,12 +137,12 @@ fn check_one(
         &mut sr,
         &c,
         &kept,
-        trust,
+        env,
         &cert_check,
         ocsp_url,
         &mut ocsp_good,
     );
-    sr.archive_timestamps = ltv::check_archives(d, si, content, trust);
+    sr.archive_timestamps = ltv::check_archives(d, si, content, env);
     let archives_ok = report_archives(&mut sr);
     sr.level = Some(level(&sr, kept_found));
     sr.valid = sr.signature_ok
@@ -175,14 +175,15 @@ pub fn check_certificate(
     sr: &mut SignerReport,
     c: &Cert,
     tsa_ca: Option<Cert>,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
 ) -> CertCheck {
+    let trust = &env.trust;
     // only a valid timestamp from a trusted TSA may set the reference time; otherwise a
     // self-made "timestamp" could make an expired or revoked certificate look fine.
     // Order 500/НҚ p.13-14: with one, the certificates are checked at its time, without one at
     // the moment of checking (the signing time the signer's computer wrote in is only a claim)
-    let (at, trusted_time) = reference_time(sr, time::now_ms());
+    let (at, trusted_time) = reference_time(sr, env.now_ms());
     let valid_at = c.valid_on(at);
     sr.cert_valid_at_signing = Some(valid_at);
     sr.checked_at = Some(at);
@@ -201,7 +202,7 @@ pub fn check_certificate(
     sr.chain = chain.path;
     sr.usage_error = cert::usage_problem(c, chain.issuer.as_ref());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(sr, t, i, trust);
+        tsp::same_ca(sr, t, i, env);
     }
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
@@ -209,7 +210,7 @@ pub fn check_certificate(
             c,
             chain.issuer.as_ref(),
             url,
-            trust,
+            env,
             trusted_time.then_some(at),
         );
         sr.revocation_source = source;
@@ -233,7 +234,7 @@ pub fn apply_kept(
     sr: &mut SignerReport,
     c: &Cert,
     kept: &Kept,
-    trust: &TrustStore,
+    env: &Env,
     check: &CertCheck,
     ocsp_url: Option<&str>,
     ocsp_good: &mut bool,
@@ -241,7 +242,7 @@ pub fn apply_kept(
     let kept_status = check
         .issuer
         .as_ref()
-        .and_then(|i| kept.status(c, i, trust, check.at));
+        .and_then(|i| kept.status(c, i, env, check.at));
     if let Some(k) = &kept_status
         && sr.ocsp_answer.is_none_or(str::is_empty)
     {
@@ -316,15 +317,15 @@ pub fn revocation(
     c: &Cert,
     issuer: Option<&Cert>,
     url: &str,
-    trust: &TrustStore,
+    env: &Env,
     trusted_at: Option<i64>,
 ) -> (bool, String, &'static str, Option<&'static str>) {
     let Some(issuer) = issuer else {
         // the revocation list can't be checked without the CA either: say it once
-        let (good, status, answer) = ocsp::check(c, None, url, trust);
+        let (good, status, answer) = ocsp::check(c, None, url, env);
         return (good, status, answer, None);
     };
-    let (good, status, answer, revoked) = match ocsp::fetch(c, issuer, url, trust) {
+    let (good, status, answer, revoked) = match ocsp::fetch(c, issuer, url, env) {
         Ok(a) => (
             a.good,
             crate::i18n::text(&a.status),
@@ -341,8 +342,8 @@ pub fn revocation(
     let (good, status, answer, source, revoked) = if !answer.is_empty() {
         (good, status, answer, Some("ocsp"), revoked)
     } else {
-        let now = time::now_ms();
-        let (good, crl_status, answer, revoked) = match crate::crl::lists(c, now) {
+        let now = env.now_ms();
+        let (good, crl_status, answer, revoked) = match crate::crl::lists(c, now, env) {
             Ok((base, delta, due)) => {
                 let (good, s, a) =
                     crate::crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);

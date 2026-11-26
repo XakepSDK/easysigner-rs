@@ -10,6 +10,7 @@ pub mod qr;
 pub mod stamp;
 pub mod whosigned;
 
+use crate::env::Env;
 use std::collections::{BTreeMap, HashSet};
 
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, ObjectId, Stream, StringFormat};
@@ -21,7 +22,6 @@ use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
 use crate::p12::Key;
 use crate::report::{ArchiveStamp, SignResult, SignerReport, VerifyReport};
-use crate::trust::TrustStore;
 use crate::tsp;
 use crate::{Error, Result, gost, sign, time, verify};
 
@@ -74,14 +74,14 @@ pub fn sign(
     input: &[u8],
     key: &Key,
     tsa_url: Option<&str>,
-    trust: &TrustStore,
+    env: &Env,
     stamp: Option<&stamp::Stamp>,
 ) -> Result<SignResult> {
     sign_with(
         input,
         key,
         tsa_url,
-        trust,
+        env,
         stamp.map_or(Look::Invisible, Look::Stamp),
     )
 }
@@ -91,11 +91,11 @@ pub fn sign_with(
     input: &[u8],
     key: &Key,
     tsa_url: Option<&str>,
-    trust: &TrustStore,
+    env: &Env,
     look: Look,
 ) -> Result<SignResult> {
     let doc = open(input)?;
-    let now = time::now_ms();
+    let now = env.now_ms();
     if docmdp_level(&doc) == Some(1) {
         return Err(Error::new(tr(
             "This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.",
@@ -103,7 +103,7 @@ pub fn sign_with(
     }
     let existing = signature_fields(&doc).len();
     let mut r = SignResult {
-        warnings: cert::key_warnings(&key.cert),
+        warnings: cert::key_warnings(&key.cert, env.now_ms()),
         cosigned: existing > 0,
         ..Default::default()
     };
@@ -185,7 +185,7 @@ pub fn sign_with(
             )
             .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
             if let Some(url) = tsa_url {
-                sign::timestamp(&mut sd, url, key, trust, &mut r)?;
+                sign::timestamp(&mut sd, url, key, env, &mut r)?;
             }
             Ok(sd.encode())
         },
@@ -420,7 +420,7 @@ pub fn extend(
     archive: bool,
     tsa_url: &str,
     ocsp_url: &str,
-    trust: &TrustStore,
+    env: &Env,
 ) -> Result<SignResult> {
     let doc = open(input)?;
     let mut r = SignResult::default();
@@ -459,7 +459,7 @@ pub fn extend(
     if r.signer_count == 0 {
         return Err(Error::new(tr("This PDF has no signatures.")));
     }
-    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms());
+    let g = ltv::gather(&targets, ocsp_url, env, env.now_ms());
     r.warnings.extend(g.warnings);
     r.warnings.extend(g.refused);
     let mut out = add_dss(input, &g.kept)?;
@@ -479,7 +479,7 @@ pub fn extend(
             ROOM_DOC_TIMESTAMP,
             &mut |_, _, _| Ok(None),
             false,
-            |signed| tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy),
+            |signed| tsp::request(tsa_url, alg, &gost::hash(alg, signed)?, policy, env),
         )?;
         r.timestamped = true;
     }
@@ -830,7 +830,7 @@ fn revisions(data: &[u8]) -> Vec<usize> {
 }
 
 /// Checks every signature in a PDF's signature fields, and its document timestamps.
-pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result<VerifyReport> {
+pub fn verify(data: &[u8], env: &Env, ocsp_url: Option<&str>) -> Result<VerifyReport> {
     let doc = open(data)?;
     let mut rep = VerifyReport {
         has_content: true,
@@ -844,10 +844,10 @@ pub fn verify(data: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result
     let mut stamps: Vec<(ArchiveStamp, usize)> = Vec::new();
     for f in signature_fields(&doc) {
         if subfilter(&f).as_deref() == Some("ETSI.RFC3161") {
-            stamps.push(check_doc_timestamp(data, &doc, &f, trust));
+            stamps.push(check_doc_timestamp(data, &doc, &f, env));
             continue;
         }
-        let (mut s, end) = check_field(data, &doc, &f, trust, ocsp_url, &kept);
+        let (mut s, end) = check_field(data, &doc, &f, env, ocsp_url, &kept);
         s.kind = Some(trf("PDF signature \"{}\"", &[&text_from(&f.name)]));
         if s.signing_time.is_none() {
             s.signing_time =
@@ -977,7 +977,7 @@ fn check_field(
     data: &[u8],
     doc: &Document,
     f: &SigField,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
     kept: &Kept,
 ) -> (SignerReport, usize) {
@@ -996,7 +996,7 @@ fn check_field(
         Ok(c) => c,
         Err(e) => return (failed(&e), 0),
     };
-    let mut s = match verify::verify_kept(c.value, Some(&c.signed), trust, ocsp_url, kept) {
+    let mut s = match verify::verify_kept(c.value, Some(&c.signed), env, ocsp_url, kept) {
         Ok(rep) if rep.signers.len() == 1 => rep.signers.into_iter().next().unwrap_or_default(),
         Ok(_) => failed(tr("A PDF signature must hold exactly one signer.")),
         Err(e) => failed(&e.to_string()),
@@ -1026,7 +1026,7 @@ fn check_doc_timestamp(
     data: &[u8],
     doc: &Document,
     f: &SigField,
-    trust: &TrustStore,
+    env: &Env,
 ) -> (ArchiveStamp, usize) {
     let bad = |e: String| ArchiveStamp {
         checked: true,
@@ -1038,7 +1038,7 @@ fn check_doc_timestamp(
         Err(e) => return (bad(e), 0),
     };
     let mut r = SignerReport::default();
-    if let Err(e) = tsp::check_token(&mut r, &c.signed, c.value, trust) {
+    if let Err(e) = tsp::check_token(&mut r, &c.signed, c.value, env) {
         return (bad(trf("unreadable timestamp: {}", &[&e])), c.end);
     }
     let mut a = ArchiveStamp {

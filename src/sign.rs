@@ -5,19 +5,20 @@ use crate::cert;
 use crate::cert::Cert;
 use crate::cms::{self, SignedData};
 use crate::der;
+use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport};
-use crate::trust::TrustStore;
 use crate::{Error, Result, gost, ltv, tsp};
 
 /// Checks the signer's own certificate before signing (Order 500/НҚ p.4): issued by a trusted
 /// CA, valid now, allowed to sign under its CA's policy, and, with `ocsp_url`, not revoked
 /// (OCSP, or the CA's revocation list when OCSP gives no answer). Any failure refuses signing;
 /// a revocation check that got no answer is a warning, returned.
-pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result<Vec<String>> {
+pub fn check_key(c: &Cert, ocsp_url: Option<&str>, env: &Env) -> Result<Vec<String>> {
+    let trust = &env.trust;
     let refuse = |why: String| Err(Error::new(trf("Your key cannot sign: {}", &[&why])));
-    let now = crate::time::now_ms();
+    let now = env.now_ms();
     if now > c.not_after {
         return refuse(trf(
             "the certificate expired on {}.",
@@ -43,7 +44,7 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, trust: &TrustStore) -> Result
     let mut warnings = Vec::new();
     if let Some(url) = ocsp_url {
         let (_, status, answer, _) =
-            crate::verify::revocation(c, chain.issuer.as_ref(), url, trust, None);
+            crate::verify::revocation(c, chain.issuer.as_ref(), url, env, None);
         match answer {
             "good" => {}
             "" => warnings.push(trf(
@@ -65,7 +66,7 @@ pub fn sign(
     tsa_url: Option<&str>,
     cosign_if_cms: bool,
     detached_original: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
 ) -> Result<SignResult> {
     let existing = if cosign_if_cms {
         SignedData::try_parse(input)
@@ -73,7 +74,7 @@ pub fn sign(
         None
     };
     let mut r = SignResult {
-        warnings: cert::key_warnings(&key.cert),
+        warnings: cert::key_warnings(&key.cert, env.now_ms()),
         ..Default::default()
     };
     let (content, attach): (&[u8], bool) = match &existing {
@@ -103,12 +104,12 @@ pub fn sign(
         attach,
         &key.private_key,
         &key.cert,
-        crate::time::now_ms(),
+        env.now_ms(),
         &mut crate::OsRng,
     )
     .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
     if let Some(url) = tsa_url {
-        timestamp(&mut out, url, key, trust, &mut r)?;
+        timestamp(&mut out, url, key, env, &mut r)?;
     }
     r.signature = out.signers[0].signature.clone();
     if let Some(e) = &existing {
@@ -136,15 +137,10 @@ pub fn check_hash_length(hash: &[u8], key: &Key) -> Result<()> {
 /// Signs a document known only by its hash `hash` (made with the key's digest algorithm: GOST
 /// 34.11-2015 for 2015 keys, GOST 34.311-95 for 2004 keys, SHA-256 for RSA) into a detached .cms,
 /// as NCALayer's createCAdESFromBase64Hash does; checking it needs the document itself.
-pub fn sign_hash(
-    hash: &[u8],
-    key: &Key,
-    tsa_url: Option<&str>,
-    trust: &TrustStore,
-) -> Result<SignResult> {
+pub fn sign_hash(hash: &[u8], key: &Key, tsa_url: Option<&str>, env: &Env) -> Result<SignResult> {
     check_hash_length(hash, key)?;
     let mut r = SignResult {
-        warnings: cert::key_warnings(&key.cert),
+        warnings: cert::key_warnings(&key.cert, env.now_ms()),
         signer_count: 1,
         ..Default::default()
     };
@@ -153,13 +149,13 @@ pub fn sign_hash(
         cms::ID_DATA,
         &key.private_key,
         &key.cert,
-        Some(crate::time::now_ms()),
+        Some(env.now_ms()),
         &[],
         &mut crate::OsRng,
     )
     .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
     if let Some(url) = tsa_url {
-        timestamp(&mut out, url, key, trust, &mut r)?;
+        timestamp(&mut out, url, key, env, &mut r)?;
     }
     r.signature = out.signers[0].signature.clone();
     r.cms = out.encode();
@@ -171,16 +167,17 @@ pub fn timestamp(
     out: &mut SignedData,
     url: &str,
     key: &Key,
-    trust: &TrustStore,
+    env: &Env,
     r: &mut SignResult,
 ) -> Result<()> {
-    tsp::stamp(out, url, key.private_key.scheme())?;
+    let trust = &env.trust;
+    tsp::stamp(out, url, key.private_key.scheme(), env)?;
     // the token's signature must hold; an untrusted TSA is reported, as verify would
     let mut check = SignerReport::default();
-    let tsa_ca = tsp::check(&mut check, &out.signers[0], trust);
-    let chain = trust.check(&key.cert, crate::time::now_ms());
+    let tsa_ca = tsp::check(&mut check, &out.signers[0], env);
+    let chain = trust.check(&key.cert, env.now_ms());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(&mut check, t, i, trust);
+        tsp::same_ca(&mut check, t, i, env);
     }
     if check.timestamp_ok != Some(true) {
         return Err(Error::new(trf(
@@ -209,7 +206,7 @@ pub fn extend(
     archive: bool,
     tsa_url: &str,
     ocsp_url: &str,
-    trust: &TrustStore,
+    env: &Env,
     only: Option<&[u8]>,
 ) -> Result<SignResult> {
     let mut sd = SignedData::parse(raw)?;
@@ -230,7 +227,7 @@ pub fn extend(
         signer_count: sd.signers.len(),
         ..Default::default()
     };
-    let now = crate::time::now_ms();
+    let now = env.now_ms();
     let mut todo: Vec<(usize, bool, ltv::Kept)> = Vec::new();
     for (idx, si) in sd.signers.iter().enumerate() {
         if only.is_some_and(|o| o != si.signature) {
@@ -260,7 +257,7 @@ pub fn extend(
         // revocation must not stop the renewal
         let mut targets = if archived { vec![] } else { vec![(c, true)] };
         targets.extend(tsas.into_iter().map(|t| (t, false)));
-        let g = ltv::gather(&targets, ocsp_url, trust, now);
+        let g = ltv::gather(&targets, ocsp_url, env, now);
         r.warnings.extend(g.warnings);
         if !archived && !g.refused.is_empty() {
             r.warnings.push(trf(
@@ -292,7 +289,7 @@ pub fn extend(
             } else {
                 ltv::Kept::default()
             };
-            ltv::archive(&mut sd, *idx, content, tsa_url, &extra)?;
+            ltv::archive(&mut sd, *idx, content, tsa_url, &extra, env)?;
         }
         r.timestamped = true;
     }

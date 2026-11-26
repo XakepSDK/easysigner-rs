@@ -340,17 +340,18 @@ fn fetched_lists() {
     let c = naming(&carol, &url);
     assert_eq!(crl::urls(&c), std::slice::from_ref(&url));
     assert!(crl::urls(&carol.cert).iter().all(|u| *u != url));
+    let env = kzsigner::env::Env::new(kzsigner::trust::TrustStore::new(vec![]));
 
-    let (base, delta, due) = crl::lists(&c, now).unwrap();
+    let (base, delta, due) = crl::lists(&c, now, &env).unwrap();
     assert!(base.next_update.is_some() && delta.is_none() && !due);
     // (check reads the clock itself, a little after `now`: the list is still kept)
-    let (good, status, answer) = crl::check(&c, Some(&ca.cert));
+    let (good, status, answer) = crl::check(&c, Some(&ca.cert), &env);
     assert!(good && answer == "good", "{status}");
-    assert_eq!(crl::check(&c, None).2, "");
+    assert_eq!(crl::check(&c, None, &env).2, "");
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept");
-    crl::lists(&c, now + 59 * MINUTE).unwrap();
+    crl::lists(&c, now + 59 * MINUTE, &env).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept for the hour");
-    crl::lists(&c, now + 61 * MINUTE).unwrap();
+    crl::lists(&c, now + 61 * MINUTE, &env).unwrap();
     assert_eq!(
         hits.load(Ordering::SeqCst),
         2,
@@ -361,19 +362,19 @@ fn fetched_lists() {
     let soon = make(&ca, &[], now - DAY, now + 10 * MINUTE);
     let (url, hits) = serve(move || Some(soon.clone()));
     let c = naming(&carol, &url);
-    crl::lists(&c, now).unwrap();
-    crl::lists(&c, now + 9 * MINUTE).unwrap();
+    crl::lists(&c, now, &env).unwrap();
+    crl::lists(&c, now + 9 * MINUTE, &env).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1);
-    crl::lists(&c, now + 11 * MINUTE).unwrap();
+    crl::lists(&c, now + 11 * MINUTE, &env).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 2);
 
     // a server that fails: not asked again for five minutes
     let (url, hits) = serve(|| None);
     let c = naming(&carol, &url);
-    assert!(crl::lists(&c, now).is_err());
-    assert!(crl::lists(&c, now + 4 * MINUTE).is_err());
+    assert!(crl::lists(&c, now, &env).is_err());
+    assert!(crl::lists(&c, now + 4 * MINUTE, &env).is_err());
     assert_eq!(hits.load(Ordering::SeqCst), 1);
-    assert!(crl::lists(&c, now + 6 * MINUTE).is_err());
+    assert!(crl::lists(&c, now + 6 * MINUTE, &env).is_err());
     assert_eq!(hits.load(Ordering::SeqCst), 2);
 }
 

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use kzsigner::cert::Cert;
 use kzsigner::cms::{self, SignedData};
+use kzsigner::env::Env;
 use kzsigner::trust::TrustStore;
 use kzsigner::verify::{signing_certificate_matches, verify, verify_with};
 use kzsigner::{Engine, der, gost, p12};
@@ -124,7 +125,13 @@ fn signing_certificate_reference() {
     // in a file: the signature checks, but its reference names another certificate
     let mut sd = SignedData::parse(&signed(b"hello")).unwrap();
     sd.certs = vec![forged(&alice).der];
-    let rep = verify(&sd.encode(), Some(b"hello"), &TrustStore::new(vec![]), None).unwrap();
+    let rep = verify(
+        &sd.encode(),
+        Some(b"hello"),
+        &Env::new(TrustStore::new(vec![])),
+        None,
+    )
+    .unwrap();
     let s = &rep.signers[0];
     assert!(!s.signature_ok && !rep.valid);
     assert!(
@@ -140,7 +147,7 @@ fn signing_certificate_reference() {
 /// Without the document, a signature can still be checked over its signed attributes.
 #[test]
 fn signature_without_its_document() {
-    let trust = TrustStore::new(vec![ca("keys/ca_gost2015.cer")]);
+    let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
     let good = signed(b"hello");
     let rep = verify_with(&good, None, &trust, None, true, None).unwrap();
     let s = &rep.signers[0];
@@ -194,7 +201,7 @@ fn signature_without_its_document() {
 
 #[test]
 fn what_a_report_says() {
-    let trust = TrustStore::new(vec![ca("keys/ca_gost2015.cer")]);
+    let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
     let before = kzsigner::time::now_ms() / 1000 * 1000;
     let rep = verify(&signed(b"hello"), Some(b"hello"), &trust, None).unwrap();
     assert!(rep.valid);
@@ -248,7 +255,7 @@ fn signing_without_a_revocation_answer() {
 /// the parsed certificate: only its end date is moved, the signature still carries the real one.
 #[test]
 fn warnings_and_counts_from_signing() {
-    let trust = TrustStore::new(vec![ca("keys/ca_gost2015.cer")]);
+    let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
     let mut k = key("keys/alice_gost2015.p12");
     k.cert.not_after = 0;
     let expired = |w: &[String]| w.iter().any(|w| w.contains("expired"));

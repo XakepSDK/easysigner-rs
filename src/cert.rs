@@ -68,9 +68,8 @@ pub fn types(c: &Cert) -> Vec<String> {
 }
 
 /// Warnings about a key that is unsuitable for signing documents (e.g. an AUTH key).
-pub fn key_warnings(c: &Cert) -> Vec<String> {
+pub fn key_warnings(c: &Cert, now: i64) -> Vec<String> {
     let mut w = Vec::new();
-    let now = time::now_ms();
     if now > c.not_after {
         w.push(trf(
             "The certificate expired on {}.",

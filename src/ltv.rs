@@ -5,10 +5,10 @@
 use crate::cert::Cert;
 use crate::cms::{SignedData, SignerInfo};
 use crate::der;
+use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
 use crate::report::{ArchiveStamp, SignerReport};
-use crate::trust::TrustStore;
 use crate::tsp::{self, TstInfo};
 use crate::{Error, Result, crl, gost, ocsp};
 
@@ -170,13 +170,8 @@ impl Kept {
     /// checked at: a kept OCSP answer made no earlier than `at` (Order 500/НҚ p.19.6), or a kept
     /// CRL current at `at`. An older OCSP answer is returned, marked not fresh, only when
     /// nothing better is kept.
-    pub fn status(
-        &self,
-        c: &Cert,
-        issuer: &Cert,
-        trust: &TrustStore,
-        at: i64,
-    ) -> Option<KeptStatus> {
+    pub fn status(&self, c: &Cert, issuer: &Cert, env: &Env, at: i64) -> Option<KeptStatus> {
+        let trust = &env.trust;
         let mut stale = None;
         for raw in &self.ocsps {
             let Ok(a) = ocsp::read_embedded(raw, c, issuer, trust) else {
@@ -296,7 +291,8 @@ pub struct Gathered {
 /// their CA paths up to the root, an OCSP answer for each target (or else its CA's CRL), and
 /// each CA certificate's CRL from the CA above it. A revoked or unknown certificate goes in
 /// `refused`; data that cannot be fetched is a warning.
-pub fn gather(targets: &[(Cert, bool)], ocsp_url: &str, trust: &TrustStore, now: i64) -> Gathered {
+pub fn gather(targets: &[(Cert, bool)], ocsp_url: &str, env: &Env, now: i64) -> Gathered {
+    let trust = &env.trust;
     let mut g = Gathered::default();
     let mut done: Vec<Cert> = Vec::new();
     // (certificate, an end certificate (asked about by OCSP), warn when untrusted)
@@ -327,7 +323,7 @@ pub fn gather(targets: &[(Cert, bool)], ocsp_url: &str, trust: &TrustStore, now:
         for i in &chain.issuers {
             add(&mut g.kept.certs, &i.der);
         }
-        revocation(&mut g, &c, &issuer, leaf.then_some(ocsp_url), trust, now);
+        revocation(&mut g, &c, &issuer, leaf.then_some(ocsp_url), env, now);
         queue.push_back((issuer, false, false));
     }
     g
@@ -338,7 +334,7 @@ fn revocation(
     c: &Cert,
     issuer: &Cert,
     ocsp_url: Option<&str>,
-    trust: &TrustStore,
+    env: &Env,
     now: i64,
 ) {
     let refuse = |g: &mut Gathered, status: &str| {
@@ -349,7 +345,7 @@ fn revocation(
     };
     let mut why = Vec::new();
     if let Some(url) = ocsp_url {
-        match ocsp::fetch(c, issuer, url, trust) {
+        match ocsp::fetch(c, issuer, url, env) {
             Ok(a) if a.cert_status == "good" => {
                 add(&mut g.kept.ocsps, &a.raw);
                 if let Some(r) = &a.responder {
@@ -365,7 +361,7 @@ fn revocation(
             Err(e) => why.push(trf("ERROR: could not check OCSP ({})", &[&e])),
         }
     }
-    match crl::lists(c, now) {
+    match crl::lists(c, now, env) {
         Ok((base, delta, due)) => {
             let (_, status, answer) = crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);
             match answer {
@@ -500,13 +496,14 @@ pub fn archive(
     content: &[u8],
     url: &str,
     extra: &Kept,
+    env: &Env,
 ) -> Result<()> {
     let si = &sd.signers[idx];
     let key_alg = sd.signer_cert(si).map(|c| c.key_alg()).unwrap_or_default();
     let (alg, policy) = tsp::hash_and_policy_for(&key_alg);
     let index = hash_index(sd, si, alg)?;
     let input = imprint_input(sd, si, content, alg, &index)?;
-    let token = tsp::request(url, alg, &gost::hash(alg, &input)?, policy)?;
+    let token = tsp::request(url, alg, &gost::hash(alg, &input)?, policy, env)?;
     let mut t = SignedData::parse_inner(&token)?;
     if t.signers.len() != 1 {
         return Err(Error::new("time-stamp token signed by multiple signers."));
@@ -526,14 +523,14 @@ pub fn check_archives(
     sd: &SignedData,
     si: &SignerInfo,
     content: Option<&[u8]>,
-    trust: &TrustStore,
+    env: &Env,
 ) -> Vec<ArchiveStamp> {
     let ats = der::oid(ATTR_ARCHIVE_TIMESTAMP_V3);
     si.unsigned_values()
         .into_iter()
         .filter(|(t, _)| *t == ats)
         .map(
-            |(_, token)| match check_archive(sd, si, content, &token, trust) {
+            |(_, token)| match check_archive(sd, si, content, &token, env) {
                 Ok(s) => s,
                 Err(e) => {
                     // say when and by whom, if the token can be read at all
@@ -560,7 +557,7 @@ fn check_archive(
     si: &SignerInfo,
     content: Option<&[u8]>,
     token: &[u8],
-    trust: &TrustStore,
+    env: &Env,
 ) -> Result<ArchiveStamp> {
     let t = SignedData::parse_inner(token)?;
     let tsi = t
@@ -629,7 +626,7 @@ fn check_archive(
     };
     let input = imprint_input(sd, si, content, &alg, index)?;
     let mut r = SignerReport::default();
-    tsp::check_token(&mut r, &input, token, trust)?;
+    tsp::check_token(&mut r, &input, token, env)?;
     let valid = r.timestamp_ok == Some(true);
     Ok(ArchiveStamp {
         checked: true,
@@ -647,7 +644,9 @@ fn check_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::Env;
     use crate::time::encode_generalized;
+    use crate::trust::TrustStore;
     use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
 
     const DAY: i64 = 86_400_000;
@@ -655,14 +654,14 @@ mod tests {
     struct Fx {
         ca: crate::p12::Key,
         carol: Cert,
-        trust: TrustStore,
+        env: Env,
     }
 
     fn fx() -> Fx {
         let ca = key("ocsp/ca.p12");
         let carol = key("ocsp/carol.p12").cert;
-        let trust = TrustStore::new(vec![ca.cert.clone()]);
-        Fx { ca, carol, trust }
+        let env = Env::new(TrustStore::new(vec![ca.cert.clone()]));
+        Fx { ca, carol, env }
     }
 
     impl Fx {
@@ -727,7 +726,7 @@ mod tests {
         }
 
         fn status(&self, k: &Kept, at: i64) -> Option<KeptStatus> {
-            k.status(&self.carol, &self.ca.cert, &self.trust, at)
+            k.status(&self.carol, &self.ca.cert, &self.env, at)
         }
     }
 
@@ -1065,7 +1064,7 @@ mod tests {
         let refusing = serve(Some(der::seq(&[&der::tlv(der::ENUMERATED, &[3])])));
         for ocsp_url in [&failing, &refusing] {
             let c = with_list(Some(good_list.clone()));
-            let g = gather(&[(c.clone(), true)], ocsp_url, &f.trust, now);
+            let g = gather(&[(c.clone(), true)], ocsp_url, &f.env, now);
             assert!(
                 g.refused.is_empty() && g.warnings.is_empty(),
                 "{:?} {:?}",
@@ -1076,14 +1075,14 @@ mod tests {
             assert!(g.kept.certs.contains(&c.der) && g.kept.certs.contains(&f.ca.cert.der));
 
             let c = with_list(Some(revoked_list.clone()));
-            let g = gather(&[(c, true)], ocsp_url, &f.trust, now);
+            let g = gather(&[(c, true)], ocsp_url, &f.env, now);
             assert_eq!(g.refused.len(), 1, "{:?}", g.warnings);
             assert!(g.refused[0].contains("not usable"), "{:?}", g.refused);
             assert!(g.kept.crls.is_empty());
 
             // neither answers
             let c = with_list(None);
-            let g = gather(&[(c, true)], ocsp_url, &f.trust, now);
+            let g = gather(&[(c, true)], ocsp_url, &f.env, now);
             assert!(g.refused.is_empty());
             assert!(
                 g.warnings
@@ -1120,7 +1119,7 @@ mod tests {
                 &mut sr,
                 &f.carol,
                 k,
-                &f.trust,
+                &f.env,
                 &check(trusted),
                 online.map(|_| "http://ocsp"),
                 &mut good,
@@ -1229,18 +1228,16 @@ mod tests {
         let mut c = f.carol.clone();
         c.extensions.push(("2.5.29.31".into(), dp));
         let dead = serve(None);
-        let (good, status, answer, source) =
-            revocation(&c, Some(&f.ca.cert), &dead, &f.trust, None);
+        let (good, status, answer, source) = revocation(&c, Some(&f.ca.cert), &dead, &f.env, None);
         assert!(
             good && answer == "good" && source == Some("crl"),
             "{status}"
         );
         assert!(status.contains("(OCSP: "), "{status}");
         // no list either
-        let (good, _, answer, source) =
-            revocation(&f.carol, Some(&f.ca.cert), &dead, &f.trust, None);
+        let (good, _, answer, source) = revocation(&f.carol, Some(&f.ca.cert), &dead, &f.env, None);
         assert!(!good && answer.is_empty() && source.is_none());
-        let (_, _, _, source) = revocation(&c, None, &dead, &f.trust, None);
+        let (_, _, _, source) = revocation(&c, None, &dead, &f.env, None);
         assert!(source.is_none());
 
         // revoked a day ago: still good as of a trusted timestamp made before that
@@ -1258,7 +1255,7 @@ mod tests {
         )])]);
         let mut c = f.carol.clone();
         c.extensions.push(("2.5.29.31".into(), dp));
-        let check = |at| revocation(&c, Some(&f.ca.cert), &dead, &f.trust, at);
+        let check = |at| revocation(&c, Some(&f.ca.cert), &dead, &f.env, at);
         let (good, status, answer, _) = check(Some(now - 2 * DAY));
         assert!(good && answer == "good", "{status}");
         assert!(
@@ -1269,6 +1266,82 @@ mod tests {
             let (good, status, answer, _) = check(at);
             assert!(!good && answer == "revoked", "{at:?}: {status}");
         }
+    }
+
+    /// The network and the clock come from the Env: a list is fetched once and kept until the
+    /// hour is up, and an OCSP server that can't be reached falls back to it.
+    #[test]
+    fn revocation_through_env() {
+        use crate::env::{Clock, Transport};
+        use crate::verify::revocation;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+
+        struct Net(Vec<u8>, AtomicUsize, AtomicUsize);
+        impl Transport for Net {
+            fn post(&self, server: crate::Server, url: &str, _: &str, _: &[u8]) -> Result<Vec<u8>> {
+                self.1.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(server, crate::Server::Ocsp);
+                Err(crate::Error::Network {
+                    server,
+                    url: url.into(),
+                    problem: crate::NetProblem::Status(500),
+                })
+            }
+            fn get(&self, server: crate::Server, _: &str, limit: u64) -> Result<Vec<u8>> {
+                assert_eq!(server, crate::Server::RevocationList);
+                assert!(limit >= 1 << 20);
+                self.2.fetch_add(1, Ordering::SeqCst);
+                Ok(self.0.clone())
+            }
+        }
+        struct Tick(AtomicI64);
+        impl Clock for Tick {
+            fn now_ms(&self) -> i64 {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+
+        let f = fx();
+        let now = 1_900_000_000_000;
+        let list = f.crl(&f.ca.cert.subject, now - DAY, now + DAY, None, false);
+        let net = Arc::new(Net(list, AtomicUsize::new(0), AtomicUsize::new(0)));
+        let clock = Arc::new(Tick(AtomicI64::new(now)));
+        let env = Env::new(TrustStore::new(vec![f.ca.cert.clone()]))
+            .with_net(net.clone())
+            .with_clock(clock.clone());
+        let uri = der::tlv(der::ctx_prim(6), b"http://crl.test/ca.crl");
+        let dp = der::seq(&[&der::seq(&[&der::tlv(
+            der::ctx(0),
+            &der::tlv(der::ctx(0), &uri),
+        )])]);
+        let mut c = f.carol.clone();
+        c.extensions.push(("2.5.29.31".into(), dp));
+
+        let check = || revocation(&c, Some(&f.ca.cert), "http://ocsp.test", &env, None);
+        let (good, status, answer, source) = check();
+        assert!(
+            good && answer == "good" && source == Some("crl"),
+            "{status}"
+        );
+        assert_eq!(net.1.load(Ordering::SeqCst), 1, "OCSP asked first");
+        assert_eq!(net.2.load(Ordering::SeqCst), 1);
+        clock.0.store(now + 59 * 60_000, Ordering::SeqCst);
+        assert!(check().0);
+        assert_eq!(net.2.load(Ordering::SeqCst), 1, "kept for the hour");
+        clock.0.store(now + 61 * 60_000, Ordering::SeqCst);
+        assert!(check().0);
+        assert_eq!(net.2.load(Ordering::SeqCst), 2, "fetched again after it");
+        // a fresh Env starts with no lists
+        let other = Env::new(TrustStore::new(vec![f.ca.cert.clone()]))
+            .with_net(net.clone())
+            .with_clock(clock.clone());
+        assert!(revocation(&c, Some(&f.ca.cert), "http://ocsp.test", &other, None).0);
+        assert_eq!(net.2.load(Ordering::SeqCst), 3);
+        // past the list's nextUpdate it no longer says good
+        clock.0.store(now + 2 * DAY, Ordering::SeqCst);
+        let (good, status, _, _) = check();
+        assert!(!good, "{status}");
     }
 
     #[test]

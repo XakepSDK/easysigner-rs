@@ -6,14 +6,14 @@ pub mod c14n;
 pub mod encoding;
 pub mod ltv;
 
+use crate::env::Env;
 use roxmltree::{Document, Node, NodeId};
 
 use crate::cert::{self, Cert};
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
-use crate::trust::TrustStore;
-use crate::{Error, Result, der, gost, time, tsp, verify};
+use crate::{Error, Result, der, gost, tsp, verify};
 use c14n::Method;
 
 pub const DS: &str = "http://www.w3.org/2000/09/xmldsig#";
@@ -171,12 +171,7 @@ fn xsd_time(ms: i64) -> String {
 
 /// Signs the XML document `input` with an enveloped XAdES signature (B-B, or B-T with a
 /// timestamp from `tsa_url`), added as the last child of its root element.
-pub fn sign(
-    input: &[u8],
-    key: &Key,
-    tsa_url: Option<&str>,
-    trust: &TrustStore,
-) -> Result<SignResult> {
+pub fn sign(input: &[u8], key: &Key, tsa_url: Option<&str>, env: &Env) -> Result<SignResult> {
     let (text, enc, bom) = encoding::decode(input)?;
     let text = text.as_str();
     let doc = parse(text)?;
@@ -190,7 +185,7 @@ pub fn sign(
         )));
     }
     let mut r = SignResult {
-        warnings: cert::key_warnings(&key.cert),
+        warnings: cert::key_warnings(&key.cert, env.now_ms()),
         signer_count: existing.len() + 1,
         cosigned: !existing.is_empty(),
         ..Default::default()
@@ -222,7 +217,7 @@ pub fn sign(
          <xades:CertDigest><ds:DigestMethod Algorithm=\"{SHA256}\"/><ds:DigestValue>{}</ds:DigestValue>\
          </xades:CertDigest><xades:IssuerSerialV2>{}</xades:IssuerSerialV2></xades:Cert>\
          </xades:SigningCertificateV2></xades:SignedSignatureProperties></xades:SignedProperties>",
-        xsd_time(time::now_ms()),
+        xsd_time(env.now_ms()),
         crate::base64_encode(&gost::sha256(&c.der)),
         crate::base64_encode(&issuer_serial),
     );
@@ -306,7 +301,7 @@ pub fn sign(
                     .ok_or_else(|| Error::new("SignatureValue not found"))?;
                 c14n::canonicalize(&out, sv, &inc, &[])
             };
-            let token = timestamp(&stamped, url, key, trust, &mut r)?;
+            let token = timestamp(&stamped, url, key, env, &mut r)?;
             format!(
                 "<xades:UnsignedProperties><xades:UnsignedSignatureProperties>\
                  <xades:SignatureTimeStamp Id=\"{id}-ts\"><ds:CanonicalizationMethod Algorithm=\"{c14n_uri}\"/>\
@@ -329,16 +324,17 @@ fn timestamp(
     stamped: &[u8],
     url: &str,
     key: &Key,
-    trust: &TrustStore,
+    env: &Env,
     r: &mut SignResult,
 ) -> Result<Vec<u8>> {
+    let trust = &env.trust;
     let (hash_oid, policy) = tsp::hash_and_policy_for(&key.cert.key_alg());
-    let token = tsp::request(url, hash_oid, &gost::hash(hash_oid, stamped)?, policy)?;
+    let token = tsp::request(url, hash_oid, &gost::hash(hash_oid, stamped)?, policy, env)?;
     let mut check = SignerReport::default();
-    let tsa_ca = tsp::check_token(&mut check, stamped, &token, trust)?;
-    let chain = trust.check(&key.cert, time::now_ms());
+    let tsa_ca = tsp::check_token(&mut check, stamped, &token, env)?;
+    let chain = trust.check(&key.cert, env.now_ms());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(&mut check, t, i, trust);
+        tsp::same_ca(&mut check, t, i, env);
     }
     if check.timestamp_ok != Some(true) {
         return Err(Error::new(trf(
@@ -356,7 +352,7 @@ fn timestamp(
 }
 
 /// Checks every XML signature in the document `input`.
-pub fn verify(input: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Result<VerifyReport> {
+pub fn verify(input: &[u8], env: &Env, ocsp_url: Option<&str>) -> Result<VerifyReport> {
     let (text, ..) = encoding::decode(input)?;
     let text = text.as_str();
     let doc = parse(text)?;
@@ -367,7 +363,7 @@ pub fn verify(input: &[u8], trust: &TrustStore, ocsp_url: Option<&str>) -> Resul
         ..Default::default()
     };
     for s in signatures(&doc) {
-        rep.signers.push(check_one(text, &doc, s, trust, ocsp_url));
+        rep.signers.push(check_one(text, &doc, s, env, ocsp_url));
     }
     rep.signers
         .sort_by_key(|s| match s.trusted_time().or(s.signing_time) {
@@ -585,7 +581,7 @@ fn check_one(
     text: &str,
     doc: &Document,
     sig: Node,
-    trust: &TrustStore,
+    env: &Env,
     ocsp_url: Option<&str>,
 ) -> SignerReport {
     let mut sr = SignerReport {
@@ -657,7 +653,7 @@ fn check_one(
             .unwrap_or_default();
         match b64(child(st, XADES, "EncapsulatedTimeStamp"))
             .ok_or_else(|| Error::new("no EncapsulatedTimeStamp"))
-            .and_then(|tok| tsp::check_token(&mut sr, &stamped, &tok, trust))
+            .and_then(|tok| tsp::check_token(&mut sr, &stamped, &tok, env))
         {
             Ok(ca) => tsa_ca = ca,
             Err(e) => {
@@ -667,12 +663,11 @@ fn check_one(
         }
     }
 
-    let check = verify::check_certificate(&mut sr, &c, tsa_ca, trust, ocsp_url);
+    let check = verify::check_certificate(&mut sr, &c, tsa_ca, env, ocsp_url);
     let mut ocsp_good = check.ocsp_good;
     let kept = ltv::kept(sig);
-    let kept_found =
-        verify::apply_kept(&mut sr, &c, &kept, trust, &check, ocsp_url, &mut ocsp_good);
-    sr.archive_timestamps = ltv::check_archives(text, doc, sig, trust);
+    let kept_found = verify::apply_kept(&mut sr, &c, &kept, env, &check, ocsp_url, &mut ocsp_good);
+    sr.archive_timestamps = ltv::check_archives(text, doc, sig, env);
     let archives_ok = verify::report_archives(&mut sr);
     sr.level = Some(verify::level(&sr, kept_found));
     sr.valid = sr.signature_ok

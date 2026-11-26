@@ -197,17 +197,26 @@ fn keys_match_their_certificates() {
 #[test]
 fn warnings_about_a_key() {
     let alice = key("keys/alice_gost2015.p12").cert;
-    assert!(cert::key_warnings(&alice).is_empty());
+    assert!(cert::key_warnings(&alice, kzsigner::time::now_ms()).is_empty());
     let mut old = alice.clone();
     old.not_after = 1_000;
-    let w = cert::key_warnings(&old);
+    let w = cert::key_warnings(&old, kzsigner::time::now_ms());
     assert!(w.len() == 1 && w[0].contains("expired"), "{w:?}");
     let mut early = alice.clone();
     early.not_before = i64::MAX / 2;
     let w = Engine::new(vec![]).key_warnings(&early);
     assert!(w.len() == 1 && w[0].contains("not valid until"), "{w:?}");
+    // the engine asks its clock
+    let at = |ms| {
+        let env = kzsigner::env::Env::new(TrustStore::new(vec![]))
+            .with_clock(std::sync::Arc::new(kzsigner::env::FixedClock(ms)));
+        Engine::with_env(env).key_warnings(&alice)
+    };
+    assert!(at(alice.not_before).is_empty());
+    assert!(at(alice.not_after + 1)[0].contains("expired"));
+    assert!(at(alice.not_before - 1)[0].contains("not valid until"));
     // a CA key has no non-repudiation usage
-    let w = cert::key_warnings(&ca("keys/ca_gost2015.cer"));
+    let w = cert::key_warnings(&ca("keys/ca_gost2015.cer"), kzsigner::time::now_ms());
     assert!(w.len() == 1 && w[0].contains("non-repudiation"), "{w:?}");
 }
 

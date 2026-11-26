@@ -7,6 +7,7 @@
 //! (https://github.com/sigex-kz/ddc, MIT licence), whose Kazakh texts are reused here, so cards
 //! made by kzsigner and by SIGEX look alike and either tool can read the other's.
 
+use crate::env::Env;
 use lopdf::{Dictionary, Document, Object, Stream, StringFormat};
 
 use super::import;
@@ -18,9 +19,8 @@ use crate::der;
 use crate::i18n::{tr, trf};
 use crate::p12::Key;
 use crate::report::{SignResult, SignerReport, VerifyReport};
-use crate::trust::TrustStore;
 use crate::tsp::TstInfo;
-use crate::{Error, Result, gost, ltv, sign, time, verify};
+use crate::{Error, Result, gost, ltv, sign, verify};
 
 // ------------------------------------------------------------------ languages
 
@@ -186,9 +186,10 @@ pub fn sign_for_card(
     key: &Key,
     tsa_url: &str,
     ocsp_url: &str,
-    trust: &TrustStore,
+    env: &Env,
     r: &mut SignResult,
 ) -> Result<Vec<u8>> {
+    let trust = &env.trust;
     let mime = cms::attribute(
         ATTR_MIME_TYPE,
         &der::tlv(der::UTF8_STRING, mime_type(file_name).as_bytes()),
@@ -199,13 +200,13 @@ pub fn sign_for_card(
         false,
         &key.private_key,
         &key.cert,
-        Some(time::now_ms()),
+        Some(env.now_ms()),
         &[mime],
         &mut crate::OsRng,
     )
     .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
-    sign::timestamp(&mut sd, tsa_url, key, trust, r)?;
-    let chain = trust.check(&key.cert, time::now_ms());
+    sign::timestamp(&mut sd, tsa_url, key, env, r)?;
+    let chain = trust.check(&key.cert, env.now_ms());
     for c in &chain.issuers {
         if !sd.certs.contains(&c.der) {
             sd.certs.push(c.der.clone());
@@ -219,7 +220,7 @@ pub fn sign_for_card(
             .into_iter()
             .map(|c| (c, false)),
     );
-    let g = ltv::gather(&targets, ocsp_url, trust, time::now_ms());
+    let g = ltv::gather(&targets, ocsp_url, env, env.now_ms());
     if let Some(why) = g.refused.first() {
         return Err(Error::new(why.clone()));
     }
@@ -230,7 +231,7 @@ pub fn sign_for_card(
         .ok_or_else(|| Error::new(crate::i18n::text(&chain.status)))?;
     let kept_ocsp = g
         .kept
-        .status(&key.cert, issuer, trust, time::now_ms())
+        .status(&key.cert, issuer, env, env.now_ms())
         .is_some_and(|k| k.source == "ocsp");
     if !kept_ocsp {
         r.warnings.push(tr(
@@ -341,7 +342,8 @@ fn usages(c: &Cert) -> Vec<String> {
     out
 }
 
-fn view(cms: &[u8], trust: &TrustStore) -> Result<SigView> {
+fn view(cms: &[u8], env: &Env) -> Result<SigView> {
+    let trust = &env.trust;
     let sd = SignedData::parse(cms)?;
     let si = sd
         .signers
@@ -392,9 +394,9 @@ fn view(cms: &[u8], trust: &TrustStore) -> Result<SigView> {
             tsa.as_ref().map(|c| dn(&c.issuer)).unwrap_or_default(),
         ));
     }
-    let at = v.tsp_ms.unwrap_or_else(time::now_ms);
+    let at = v.tsp_ms.unwrap_or_else(|| env.now_ms());
     if let Some(issuer) = trust.check(&c, at).issuer
-        && let Some(a) = ltv::Kept::from_cms(&sd, Some(si)).status(&c, &issuer, trust, at)
+        && let Some(a) = ltv::Kept::from_cms(&sd, Some(si)).status(&c, &issuer, env, at)
         && a.source == "ocsp"
     {
         let r = a.responder.as_ref();
@@ -454,12 +456,12 @@ struct Checked {
 
 /// Builds the card. Every signature is checked first: a card is only made for signatures that
 /// are valid.
-pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
+pub fn build(input: &CardInput, env: &Env) -> Result<Vec<u8>> {
     let l = input.lang;
-    let sigs = checked_signatures(input, trust)?;
+    let sigs = checked_signatures(input, env)?;
     let mut w = Writer::new();
     let mut out = Document::with_version("1.7");
-    let created = astana(time::now_ms());
+    let created = astana(env.now_ms());
     let builder = format!("kzsigner {}", crate::version());
 
     // the document's own pages
@@ -546,10 +548,10 @@ pub fn build(input: &CardInput, trust: &TrustStore) -> Result<Vec<u8>> {
 }
 
 /// Checks every signature of the card, ordered by their proven time.
-fn checked_signatures(input: &CardInput, trust: &TrustStore) -> Result<Vec<Checked>> {
+fn checked_signatures(input: &CardInput, env: &Env) -> Result<Vec<Checked>> {
     let mut sigs = Vec::new();
     for (name, cms) in &input.signatures {
-        let rep = verify::verify(cms, Some(input.doc), trust, None)?;
+        let rep = verify::verify(cms, Some(input.doc), env, None)?;
         if !rep.valid {
             let why = rep
                 .signers
@@ -567,7 +569,7 @@ fn checked_signatures(input: &CardInput, trust: &TrustStore) -> Result<Vec<Check
                 &[name, &why],
             )));
         }
-        let v = view(cms, trust)?;
+        let v = view(cms, env)?;
         let at = rep.signers[0]
             .trusted_time()
             .or(rep.signers[0].signing_time)
@@ -1262,7 +1264,7 @@ pub fn read(data: &[u8]) -> Option<Card> {
 
 /// Checks every signature in a card against the original document inside it. Without
 /// `ocsp_url`, the OCSP answers embedded in the signatures are reported instead.
-pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> VerifyReport {
+pub fn verify(card: &Card, env: &Env, ocsp_url: Option<&str>) -> VerifyReport {
     let doc = &card.original.1;
     let mut rep = VerifyReport {
         has_content: true,
@@ -1272,7 +1274,7 @@ pub fn verify(card: &Card, trust: &TrustStore, ocsp_url: Option<&str>) -> Verify
         ..Default::default()
     };
     for (name, cms) in &card.signatures {
-        let mut s = match verify::verify(cms, Some(doc), trust, ocsp_url) {
+        let mut s = match verify::verify(cms, Some(doc), env, ocsp_url) {
             Ok(r) if r.signers.len() == 1 => r.signers.into_iter().next().unwrap_or_default(),
             Ok(_) => SignerReport {
                 signature_error: Some(tr("A card signature must hold exactly one signer.").into()),

@@ -3,10 +3,10 @@
 
 pub use kzcrypto::ocsp::*;
 
+use crate::Result;
 use crate::cert::Cert;
+use crate::env::Env;
 use crate::i18n::{self, tr, trf};
-use crate::trust::TrustStore;
-use crate::{Result, http, time};
 
 pub const DEFAULT_URL: &str = "http://ocsp.pki.gov.kz";
 
@@ -17,7 +17,7 @@ pub fn check(
     c: &Cert,
     issuer: Option<&Cert>,
     url: &str,
-    trust: &TrustStore,
+    env: &Env,
 ) -> (bool, String, &'static str) {
     let Some(issuer) = issuer else {
         return (
@@ -26,17 +26,18 @@ pub fn check(
             "",
         );
     };
-    match fetch(c, issuer, url, trust) {
+    match fetch(c, issuer, url, env) {
         Ok(a) => (a.good, i18n::text(&a.status), a.cert_status),
         Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e]), ""),
     }
 }
 
 /// Asks the OCSP server at `url` about `c`, and checks the answer.
-pub fn fetch(c: &Cert, issuer: &Cert, url: &str, trust: &TrustStore) -> Result<Answer> {
+pub fn fetch(c: &Cert, issuer: &Cert, url: &str, env: &Env) -> Result<Answer> {
+    let trust = &env.trust;
     let mut nonce = [0u8; 16];
     crate::random(&mut nonce)?;
     let req = request(c, issuer, &nonce)?;
-    let body = http::post(url, CONTENT_TYPE, &req, crate::Server::Ocsp)?;
-    Ok(read_fresh(&body, c, issuer, &nonce, trust, time::now_ms())?)
+    let body = env.net.post(crate::Server::Ocsp, url, CONTENT_TYPE, &req)?;
+    Ok(read_fresh(&body, c, issuer, &nonce, trust, env.now_ms())?)
 }
