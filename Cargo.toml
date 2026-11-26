@@ -1,53 +1,23 @@
-[package]
-name = "kzsigner"
-version = "0.1.0-dev"
-edition = "2024"
-rust-version = "1.100"
-description = "Sign and verify .cms files with Kazakhstan NCA RK keys, locally, without NCALayer"
-repository = "https://github.com/XakepSDK/easysigner-rs"
-
-[dependencies]
-# the cryptography, on its own (no_std): crypto/
-kzcrypto = { path = "crypto", version = "0.1.0-dev" }
-# NCA RK's CA certificates, TSA policies, signing rules and tolerances
-kzcrypto-nca = { path = "crates/kzcrypto-nca", version = "0.1.0-dev" }
-der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid", "ber", "derive"] }
-spki = { version = "0.8", default-features = false, features = ["alloc"] }
-gost94 = "0.11"
-streebog = "0.11"
-sha1 = "0.11"
-sha2 = "0.11"
-digest = "0.11"
-hmac = "0.13"
-pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
-des = "0.9"
-rc2 = "0.9"
-aes = "0.9"
-cipher = "0.5"
-getrandom = { version = "0.4", features = ["sys_rng"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-ureq = { version = "3.5", default-features = false }
-base64 = "0.23"
-cbc = "0.2.1"
-pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
-rsa = { version = "0.10", default-features = false, features = ["encoding", "std", "pkcs1v15"] }
-lopdf = { version = "0.47", default-features = false }
-ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
-qrcodegen = "1.8"
-flate2 = "1"
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-serde_json = "1"
-roxmltree = "0.21"
-argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
-aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
-zeroize = "1"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
-
+# The workspace: crates under crates/ (gost3410, kzcrypto, kzcrypto-nca, kzsigner, kzsigner-ffi,
+# der-testkit), apps under apps/ (desktop, android), test files in testdata/.
 [workspace]
-members = ["crypto", "ffi", "desktop", "crates/gost3410", "crates/der-testkit", "crates/kzcrypto-nca"]
-default-members = [".", "crypto", "crates/kzcrypto-nca", "desktop"]
+resolver = "3"
+members = [
+    "crates/gost3410",
+    "crates/kzcrypto",
+    "crates/kzcrypto-nca",
+    "crates/kzsigner",
+    "crates/kzsigner-ffi",
+    "crates/der-testkit",
+    "apps/desktop",
+]
+default-members = [
+    "crates/gost3410",
+    "crates/kzcrypto",
+    "crates/kzcrypto-nca",
+    "crates/kzsigner",
+    "apps/desktop",
+]
 # vendored crates: dependencies, not ours to lint
 exclude = ["third_party"]
 
@@ -68,12 +38,6 @@ opt-level = 1
 
 [profile.mutants.package."*"]
 opt-level = 3
-
-[dev-dependencies]
-# test keys and OCSP answers made to order (ltv tests)
-kzcrypto = { path = "crypto", features = ["testkit"] }
-# hand-made DER for the tests
-der-testkit = { path = "crates/der-testkit" }
 
 # Local test runs (cargo test without --release): the crypto in the dependencies optimized,
 # as for mutants, so the GOST and RSA tests don't take minutes.

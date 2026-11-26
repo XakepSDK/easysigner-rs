@@ -1,4 +1,4 @@
-tests/fixtures/** binary
+testdata/** binary
 assets/*.rgba binary
 assets/*.ico binary
-tests/fixtures/**/*.md -binary
+testdata/**/*.md -binary

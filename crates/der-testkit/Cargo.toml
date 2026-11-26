@@ -6,5 +6,5 @@ publish = false
 description = "A small ASN.1 reader and writer for tests: builds well-formed and deliberately malformed DER/BER by hand. Never in a release build."
 
 [dependencies]
-kzcrypto = { path = "../../crypto" }
+kzcrypto = { path = "../kzcrypto" }
 der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid"] }

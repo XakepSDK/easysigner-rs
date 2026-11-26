@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       files:
-        description: 'Only these source files (space-separated, e.g. src/xml/mod.rs); empty: all'
+        description: 'Only these source files (space-separated, e.g. crates/kzsigner/src/xml/mod.rs); empty: all'
         required: false
         default: ''
       shards:
@@ -148,7 +148,7 @@ jobs:
           set +e
           args="--no-shuffle -j 2 --timeout 180"
           if [ "${{ github.event_name }}" = pull_request ]; then
-            git diff "$BASE...HEAD" -- src crypto/src crates/gost3410/src ffi/src desktop/src > pr.diff
+            git diff "$BASE...HEAD" -- crates/kzsigner/src crates/kzcrypto/src crates/kzcrypto-nca/src crates/gost3410/src crates/kzsigner-ffi/src apps/desktop/src > pr.diff
             args="$args --in-diff pr.diff"
           else
             args="$args --shard ${{ matrix.shard }}/$TOTAL"

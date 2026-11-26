@@ -9,4 +9,4 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-kzcrypto = { path = "../../crypto", version = "0.1.0-dev" }
+kzcrypto = { path = "../kzcrypto", version = "0.1.0-dev" }

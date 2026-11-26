@@ -1,0 +1,29 @@
+[package]
+name = "kzsigner-ffi"
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.100"
+description = "The core's calls for the Kotlin app (UniFFI)"
+publish = false
+
+[lib]
+name = "kzsigner_ffi"
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+# generates the Kotlin bindings from the built library (scripts/apk.sh)
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+kzsigner = { path = "../kzsigner", default-features = false }
+uniffi = "0.32.2"
+zeroize = "1"
+
+[dev-dependencies]
+# hand-made DER for the tests (tests/common/nca.rs)
+der-testkit = { path = "../der-testkit" }

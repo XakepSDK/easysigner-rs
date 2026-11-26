@@ -3,7 +3,7 @@
 #
 #   cargo +nightly fuzz run verify -- -max_total_time=60
 #
-# Seeds come from tests/fixtures (fuzz/seed.sh copies them into fuzz/corpus/<target>).
+# Seeds come from testdata (fuzz/seed.sh copies them into fuzz/corpus/<target>).
 [package]
 name = "kzsigner-fuzz"
 version = "0.0.0"
@@ -15,8 +15,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-kzsigner = { path = ".." }
-kzcrypto = { path = "../crypto" }
+kzsigner = { path = "../crates/kzsigner" }
+kzcrypto = { path = "../crates/kzcrypto" }
 kzcrypto-nca = { path = "../crates/kzcrypto-nca" }
 
 # not part of the main workspace: it needs nightly and libFuzzer

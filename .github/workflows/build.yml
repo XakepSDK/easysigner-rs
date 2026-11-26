@@ -1,5 +1,5 @@
-# Builds and tests on Linux and Windows: unit tests, the end-to-end checks (desktop/tests/e2e.rs), the
-# scripted window test (desktop/tests/gui.rs), and a real window start. Release builds are reproducible
+# Builds and tests on Linux and Windows: unit tests, the end-to-end checks (apps/desktop/tests/e2e.rs), the
+# scripted window test (apps/desktop/tests/gui.rs), and a real window start. Release builds are reproducible
 # (scripts/cargo.sh): each commit is built a second time in another folder and the executables
 # must be byte-identical. A push to main whose Cargo.toml
 # version has no pre-release suffix (no "-") publishes the downloads as GitHub release vX.Y.Z,
@@ -36,16 +36,16 @@ jobs:
         env:
           BEFORE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          V=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kzsigner/Cargo.toml | head -1)
           android=true
           case "$V" in *-*)
             if [ "${{ github.event_name }}" != workflow_dispatch ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
               git diff --name-only "$BEFORE" HEAD | tee changed.txt
-              grep -qE '^(android/|ffi/|src/|crypto/|third_party/|assets/|scripts/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
+              grep -qE '^(apps/android/|crates/|third_party/|assets/|scripts/|testdata/|Cargo\.(toml|lock)|rust-toolchain\.toml|\.github/workflows/)' changed.txt || android=false
             fi ;;
           esac
           echo "android=$android" | tee -a "$GITHUB_OUTPUT"
-  # The cryptography on its own (crypto/, crates/gost3410): it must build with no operating
+  # The cryptography on its own (crates/kzcrypto, crates/kzcrypto-nca, crates/gost3410): it must build with no operating
   # system (a bare-metal ARM target proves no_std).
   crypto:
     runs-on: ubuntu-latest
@@ -74,10 +74,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Version from Cargo.toml
+      - name: Version from crates/kzsigner/Cargo.toml
         id: version
         shell: bash
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kzsigner/Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
       - name: Rust (the version pinned in rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -219,11 +219,11 @@ jobs:
             echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
             echo "KZSIGNER_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
           fi
-      - name: Kotlin style (ktlint, pinned; rules in android/.editorconfig)
+      - name: Kotlin style (ktlint, pinned; rules in apps/android/.editorconfig)
         run: |
           curl -sSfL -o "$RUNNER_TEMP/ktlint.jar" https://repo1.maven.org/maven2/com/pinterest/ktlint/ktlint-cli/1.8.0/ktlint-cli-1.8.0-all.jar
           echo "369ad2b789f95a011f807e1fcb690ccef80bd7cd014fd139e73ae82dcc0baeab  $RUNNER_TEMP/ktlint.jar" | sha256sum -c -
-          cd android && java -jar "$RUNNER_TEMP/ktlint.jar" 'compose/src/**/*.kt' '*.kts' 'compose/*.kts' 'uitest/*.kts'
+          cd apps/android && java -jar "$RUNNER_TEMP/ktlint.jar" 'compose/src/**/*.kt' '*.kts' 'compose/*.kts' 'uitest/*.kts'
       - name: Build the APK, and the emulator tests; the app's unit tests, Pitest and Android Lint
         env:
           KZSIGNER_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -232,7 +232,7 @@ jobs:
         run: sh scripts/apk.sh
       - name: The fake NCA servers the emulator tests sign against
         run: |
-          cargo build --release --locked --no-default-features --example fake_nca
+          cargo build --release --locked -p kzsigner --no-default-features --example fake_nca
           cp target/release/examples/fake_nca target/apk-uitest/
       - name: Same APK when built again in another folder
         id: again

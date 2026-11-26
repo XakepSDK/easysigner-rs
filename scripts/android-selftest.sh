@@ -6,9 +6,9 @@
 # APK is the app's test build (kzsigner-test-app.apk): the released app, except that it talks
 # to fake NCA servers on this machine (the emulator's 10.0.2.2) and trusts the test keys' CAs,
 # so the tests can add a test key and sign with it. FAKE_NCA is those servers
-# (examples/fake_nca.rs, built for this machine); this script starts them, from the checkout's
-# root (they read tests/fixtures).
-# The tests are UI Automator tests in android/uitest (UITEST_APK, built by
+# (crates/kzsigner/examples/fake_nca.rs, built for this machine); this script starts them, from the checkout's
+# root (they read testdata/).
+# The tests are UI Automator tests in apps/android/uitest (UITEST_APK, built by
 # KZSIGNER_UITEST=1 sh scripts/apk.sh); they run on the emulator in their own process. This
 # script only installs the APKs, runs the tests (AppFlows), and does the one thing a test on
 # the phone can't: touching the virtual fingerprint sensor, while a test logs "FINGER n".

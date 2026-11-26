@@ -2,15 +2,15 @@
 # window's layout code, and the stamp, Who signed page and document card drawing
 # (coordinates, sizes and text placement), which tests can only look at, not check.
 exclude_globs = [
-    "desktop/src/icons.rs",
-    "ffi/src/bin/**",
-    "desktop/src/gui/**",
-    "src/pdf/card.rs",
-    "src/pdf/stamp.rs",
-    "src/pdf/layout.rs",
-    "src/pdf/whosigned.rs",
+    "apps/desktop/src/icons.rs",
+    "crates/kzsigner-ffi/src/bin/**",
+    "apps/desktop/src/gui/**",
+    "crates/kzsigner/src/pdf/card.rs",
+    "crates/kzsigner/src/pdf/stamp.rs",
+    "crates/kzsigner/src/pdf/layout.rs",
+    "crates/kzsigner/src/pdf/whosigned.rs",
 ]
 profile = "mutants"
-# The cryptography (crypto/) is tested by its own tests and by the core's, which use it
+# The cryptography (crates/kzcrypto) is tested by its own tests and by the core's, which use it
 # throughout; gost3410 by its own known-answer tests.
 test_package = ["kzcrypto", "kzsigner", "gost3410"]
