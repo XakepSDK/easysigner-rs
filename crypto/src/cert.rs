@@ -1,6 +1,12 @@
 //! X.509 certificates: the fields kzsigner reads, names, and whether a certificate may sign.
 
-use crate::der::{self, Tlv};
+use ::der::asn1::Any;
+use ::der::{Decode, Encode, Tag, Tagged};
+use x509_cert::ext::pkix::{
+    BasicConstraints, CertificatePolicies, ExtendedKeyUsage, KeyUsage, SubjectKeyIdentifier,
+};
+
+use crate::der::Tlv;
 use crate::keys::PublicKey;
 use crate::prelude::*;
 use crate::text::{Text, tr, trf};
@@ -103,20 +109,21 @@ impl Cert {
         PublicKey::from_spki(&self.spki)
     }
 
+    fn spki(&self) -> Option<spki::SubjectPublicKeyInfoOwned> {
+        spki::SubjectPublicKeyInfoOwned::from_der(&self.spki).ok()
+    }
+
     pub fn key_alg(&self) -> String {
-        der::parse(&self.spki)
-            .and_then(|t| t.items(der::SEQUENCE))
-            .and_then(|k| crate::keys::alg_id(&k[0]).map(|a| a.0))
+        self.spki()
+            .map(|k| k.algorithm.oid.to_string())
             .unwrap_or_default()
     }
 
     /// The public key BIT STRING contents (for OCSP key hashes).
     pub fn public_key_bits(&self) -> Result<Vec<u8>> {
-        let k = der::parse(&self.spki)?.items(der::SEQUENCE)?;
-        Ok(k.get(1)
-            .ok_or_else(|| Error::malformed("malformed SubjectPublicKeyInfo"))?
-            .bits()?
-            .to_vec())
+        self.spki()
+            .and_then(|k| k.subject_public_key.as_bytes().map(<[u8]>::to_vec))
+            .ok_or_else(|| Error::malformed("malformed SubjectPublicKeyInfo"))
     }
 
     pub fn valid_on(&self, ms: i64) -> bool {
@@ -143,57 +150,42 @@ impl Cert {
             .map(|(_, v)| v.as_slice())
     }
 
+    /// An extension's value, read as `T`.
+    fn ext<'a, T: Decode<'a>>(&'a self, oid: &str) -> Option<core::result::Result<T, T::Error>> {
+        self.extension(oid).map(T::from_der)
+    }
+
     /// The subject key identifier extension's value.
     pub fn subject_key_id(&self) -> Option<Vec<u8>> {
-        let v = self.extension("2.5.29.14")?;
-        der::parse(v)
-            .ok()?
-            .expect(der::OCTET_STRING)
-            .ok()?
-            .octets()
-            .ok()
+        let id: SubjectKeyIdentifier = self.ext("2.5.29.14")?.ok()?;
+        Some(id.0.as_bytes().to_vec())
     }
 
     /// Key usage bits, or None without the extension.
     pub fn key_usage(&self) -> Option<Vec<bool>> {
-        let v = self.extension("2.5.29.15")?;
-        let t = der::parse(v).ok()?;
-        let c = t.expect(der::BIT_STRING).ok()?.content;
-        let bits = c.get(1..)?;
-        Some(
-            (0..9)
-                .map(|i| bits.get(i / 8).is_some_and(|b| b & (0x80 >> (i % 8)) != 0))
-                .collect(),
-        )
+        let ku: KeyUsage = self.ext("2.5.29.15")?.ok()?;
+        let bits = ku.0.bits();
+        Some((0..9).map(|i| bits & (1 << i) != 0).collect())
     }
 
     pub fn extended_key_usage(&self) -> Vec<String> {
-        let Some(v) = self.extension("2.5.29.37") else {
-            return vec![];
-        };
-        der::parse(v)
-            .and_then(|t| t.items(der::SEQUENCE))
-            .map(|k| k.iter().filter_map(|o| o.oid().ok()).collect())
-            .unwrap_or_default()
+        match self.ext::<ExtendedKeyUsage>("2.5.29.37") {
+            Some(Ok(e)) => e.0.iter().map(ToString::to_string).collect(),
+            _ => vec![],
+        }
     }
 
     /// The policy OIDs in the certificate policies extension: None without the extension,
     /// Some(Err) when it can't be read.
     pub fn policies(&self) -> Option<Result<Vec<String>>> {
-        let v = self.extension("2.5.29.32")?;
         Some(
-            der::parse(v)
-                .and_then(|t| t.items(der::SEQUENCE))
-                .and_then(|t| {
-                    t.iter()
-                        .map(|p| {
-                            p.items(der::SEQUENCE)?
-                                .first()
-                                .ok_or_else(|| Error::new("empty PolicyInformation"))?
-                                .oid()
-                        })
+            self.ext::<CertificatePolicies>("2.5.29.32")?
+                .map(|p| {
+                    p.0.iter()
+                        .map(|i| i.policy_identifier.to_string())
                         .collect()
-                }),
+                })
+                .map_err(|e| Error::malformed(format!("malformed ASN.1: {e}"))),
         )
     }
 
@@ -203,16 +195,7 @@ impl Cert {
 
     /// Basic constraints cA flag (false without the extension).
     pub fn is_ca(&self) -> bool {
-        let Some(v) = self.extension("2.5.29.19") else {
-            return false;
-        };
-        der::parse(v)
-            .and_then(|t| t.items(der::SEQUENCE))
-            .map(|k| {
-                k.first()
-                    .is_some_and(|b| b.tag == der::BOOLEAN && b.boolean().unwrap_or(false))
-            })
-            .unwrap_or(false)
+        matches!(self.ext::<BasicConstraints>("2.5.29.19"), Some(Ok(b)) if b.ca)
     }
 
     /// Whether key usage allows signing certificates (true without the extension).
@@ -255,29 +238,49 @@ fn label(oid: &str) -> &str {
     }
 }
 
-fn atvs(name: &[u8]) -> Vec<(String, Tlv<'_>)> {
-    let mut out = Vec::new();
-    let Ok(rdns) = der::parse(name).and_then(|t| t.items(der::SEQUENCE)) else {
-        return out;
+fn atvs(name: &[u8]) -> Vec<(String, Any)> {
+    let Ok(n) = x509_cert::name::Name::from_der(name) else {
+        return vec![];
     };
-    for rdn in rdns {
-        for atv in rdn.children().unwrap_or_default() {
-            if let Ok(k) = atv.items(der::SEQUENCE)
-                && k.len() >= 2
-                && let Ok(oid) = k[0].oid()
-            {
-                out.push((oid, k[1]));
-            }
-        }
-    }
-    out
+    n.iter()
+        .map(|atv| (atv.oid.to_string(), atv.value.clone()))
+        .collect()
 }
 
-fn value_text(v: &Tlv) -> String {
-    v.text().unwrap_or_else(|| {
-        let h: String = v.raw.iter().map(|b| format!("{b:02x}")).collect();
-        format!("#{h}")
-    })
+/// A name attribute's text: any of the ASN.1 string types, else `#` and the encoding in hex.
+fn value_text(v: &Any) -> String {
+    let c = v.value();
+    match v.tag() {
+        Tag::Utf8String
+        | Tag::PrintableString
+        | Tag::Ia5String
+        | Tag::VisibleString
+        | Tag::NumericString => String::from_utf8_lossy(c).into_owned(),
+        Tag::TeletexString => c.iter().map(|&b| b as char).collect(),
+        Tag::BmpString => {
+            let u: Vec<u16> = c
+                .chunks(2)
+                .map(|p| u16::from_be_bytes([p[0], *p.get(1).unwrap_or(&0)]))
+                .collect();
+            String::from_utf16_lossy(&u)
+        }
+        // UniversalString
+        t if t.is_universal() && t.number().value() == 0x1c => c
+            .chunks(4)
+            .filter(|&p| p.len() == 4)
+            .map(|p| u32::from_be_bytes([p[0], p[1], p[2], p[3]]))
+            .map(|u| char::from_u32(u).unwrap_or('\u{fffd}'))
+            .collect(),
+        _ => {
+            let h: String = v
+                .to_der()
+                .unwrap_or_default()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            format!("#{h}")
+        }
+    }
 }
 
 /// Name attributes by short label, in order; repeated attributes (e.g. several OU) are joined.
