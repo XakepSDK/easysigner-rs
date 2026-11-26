@@ -3,16 +3,15 @@
 //! stamp on its last page), an XML document too, a received .cms gets the signature added,
 //! anything else becomes a .cms with the document inside.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use kzsigner::cert::{self, Cert, get, rdns};
 use kzsigner::i18n::Lang;
-use kzsigner::pdf::whosigned::WhoSigned;
+
 use kzsigner::report::CertStatus;
 use kzsigner::report::{SignResult, SignerReport};
 use kzsigner::vault::VaultError;
-use kzsigner::{Engine, ltv};
+use kzsigner::{Engine, file};
 use zeroize::Zeroizing;
 
 use crate::{CantSign, ChipPrompt, Vault, cant_sign, now};
@@ -174,54 +173,58 @@ impl std::fmt::Display for SignError {
 #[uniffi::export]
 pub fn inspect(name: String, bytes: Vec<u8>) -> Doc {
     let e = Engine::new(vec![]);
-    let kind = kind(&e, &bytes);
+    let plan = file::plan(&e, &name, &bytes);
     let mut doc = Doc {
-        kind,
-        inner_name: None,
+        kind: plan.kind.into(),
+        inner_name: plan.inner_name,
         inner_kind: None,
         signers: vec![],
-        output: Output::NewCms,
+        output: plan.output.into(),
         who_signed_page: false,
-        output_name: format!("{name}.cms"),
+        output_name: plan.output_name,
     };
-    match kind {
-        DocKind::Pdf => {
+    match plan.kind {
+        file::Kind::Pdf => {
             doc.signers = signers(&e, &bytes);
-            doc.output = Output::InsidePdf;
             doc.who_signed_page = kzsigner::pdf::whosigned::ends_with_page(&bytes);
-            doc.output_name = signed_name(&name, "pdf");
         }
-        DocKind::Xml => {
+        file::Kind::Xml => doc.signers = signers(&e, &bytes),
+        file::Kind::Cms => {
             doc.signers = signers(&e, &bytes);
-            doc.output = if doc.signers.is_empty() || e.xml_has_room(&bytes) {
-                Output::InsideXml
-            } else {
-                Output::Cannot
-            };
-            doc.output_name = signed_name(&name, "xml");
-        }
-        DocKind::Cms => {
-            doc.signers = signers(&e, &bytes);
-            doc.inner_name = Some(inner_name(&name));
-            match e.extract(&bytes) {
-                Ok(inner) => {
-                    doc.inner_kind = Some(match kind_of(&e, &inner) {
-                        k @ (DocKind::Pdf | DocKind::Xml) => k,
-                        _ => DocKind::Other,
-                    });
-                    doc.output = Output::JoinCms;
-                }
-                Err(_) => doc.output = Output::Cannot,
+            if let Ok(inner) = e.extract(&bytes) {
+                doc.inner_kind = Some(match kind_of(&e, &inner) {
+                    k @ (DocKind::Pdf | DocKind::Xml) => k,
+                    _ => DocKind::Other,
+                });
             }
-            doc.output_name = name;
         }
-        DocKind::Key => {
-            doc.output = Output::Cannot;
-            doc.output_name = name;
-        }
-        DocKind::Other => {}
+        file::Kind::Key | file::Kind::Other => {}
     }
     doc
+}
+
+impl From<file::Kind> for DocKind {
+    fn from(k: file::Kind) -> DocKind {
+        match k {
+            file::Kind::Pdf => DocKind::Pdf,
+            file::Kind::Xml => DocKind::Xml,
+            file::Kind::Cms => DocKind::Cms,
+            file::Kind::Key => DocKind::Key,
+            file::Kind::Other => DocKind::Other,
+        }
+    }
+}
+
+impl From<file::Output> for Output {
+    fn from(o: file::Output) -> Output {
+        match o {
+            file::Output::InsidePdf => Output::InsidePdf,
+            file::Output::InsideXml => Output::InsideXml,
+            file::Output::NewCms => Output::NewCms,
+            file::Output::JoinCms => Output::JoinCms,
+            file::Output::Cannot => Output::Cannot,
+        }
+    }
 }
 
 /// The document inside a .cms, to read it; None for a detached signature.
@@ -230,48 +233,15 @@ pub fn cms_content(bytes: Vec<u8>) -> Option<Vec<u8>> {
     Engine::new(vec![]).extract(&bytes).ok()
 }
 
-fn kind(e: &Engine, bytes: &[u8]) -> DocKind {
-    match kind_of(e, bytes) {
-        DocKind::Other if is_key(bytes) => DocKind::Key,
-        k => k,
-    }
-}
-
+/// What `bytes` is, with a key file read as any other file.
 pub(crate) fn kind_of(e: &Engine, bytes: &[u8]) -> DocKind {
-    if e.is_pdf(bytes) {
-        DocKind::Pdf
-    } else if e.is_xml(bytes) {
-        DocKind::Xml
-    } else if e.is_signed_cms(bytes) {
-        DocKind::Cms
-    } else {
-        DocKind::Other
+    match file::kind(e, bytes) {
+        file::Kind::Key => DocKind::Other,
+        k => k.into(),
     }
 }
 
-/// A .p12 file: it reads as one, only the password is missing.
-fn is_key(bytes: &[u8]) -> bool {
-    kzsigner::p12::open(bytes, "", None).is_ok()
-        || kzsigner::p12::problem(bytes, "") == Some(kzsigner::p12::Problem::WrongPassword)
-}
-
-/// "Dogovor.pdf.cms" holds "Dogovor.pdf".
-pub(crate) fn inner_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    for ext in [".cms", ".p7s", ".p7m", ".sig"] {
-        if lower.ends_with(ext) && name.len() > ext.len() {
-            return name[..name.len() - ext.len()].to_string();
-        }
-    }
-    name.to_string()
-}
-
-/// "Dogovor.pdf" signed is "Dogovor-signed.pdf".
-fn signed_name(name: &str, ext: &str) -> String {
-    kzsigner::signed_name(Path::new(name), ext)
-        .to_string_lossy()
-        .into_owned()
-}
+pub(crate) use kzsigner::file::inner_name;
 
 /// Who signed `bytes`, oldest first, from the file alone.
 pub(crate) fn signers(e: &Engine, bytes: &[u8]) -> Vec<SignedBy> {
@@ -373,29 +343,15 @@ impl Vault {
                 },
             })?;
         let e = &nca.engine;
-        let tsa = Some(nca.tsa.as_str());
-        // revocation was checked above: not twice
-        let r = match doc.output {
-            Output::InsidePdf => {
-                let page = WhoSigned {
-                    document: name.clone(),
-                };
-                e.sign(kzsigner::SignRequest::pdf_page(&bytes, &key, &page).tsa(tsa))
-            }
-            Output::InsideXml => e.sign(kzsigner::SignRequest::xml(&bytes, &key).tsa(tsa)),
-            _ => e.sign(
-                kzsigner::SignRequest::cms(
-                    &bytes,
-                    &key,
-                    kzsigner::Cms {
-                        cosign: true,
-                        ..Default::default()
-                    },
-                )
-                .tsa(tsa),
-            ),
-        }
-        .map_err(|x| {
+        // what every front end makes by default, with this app's NCA servers; revocation
+        // was checked above: not twice
+        let opts = file::FileOptions {
+            tsa_url: Some(&nca.tsa),
+            ocsp_url: &nca.ocsp,
+            check_revocation: false,
+            ..Default::default()
+        };
+        let r = e.sign_file(&name, &bytes, &key, &opts).map_err(|x| {
             // NCA's timestamp server not answering; anything else is a failure to show
             if x.server() == Some(kzsigner::Server::Timestamp) {
                 SignError::NoAnswer
@@ -405,9 +361,7 @@ impl Vault {
                 }
             }
         })?;
-        // long-term, as the desktop app does by default: when that fails, the signature
-        // made stands
-        let r = e.extend_new(r, None, ltv::Level::Lta, &nca.tsa, &nca.ocsp);
+        let r = r.result;
         Ok(Signed {
             nca_time_ms: nca_time(e, &r),
             joined: r.cosigned,

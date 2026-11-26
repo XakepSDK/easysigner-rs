@@ -92,6 +92,14 @@ back. The window is in Kazakh, Russian or English (Your keys › Language; it st
 language, and `KZSIGNER_LANG=kk|ru|en` also sets it). Detached .cms, levels and the
 visible stamp are made with the command line, which stays in English.
 
+**One way to sign.** The command line, the window and the phone app sign through the same
+call (`Engine::sign_file` in `crates/kzsigner/src/file.rs`): with no options, `kzsigner sign`
+makes what the apps make (the file decides: a PDF inside with the Who signed page, XML inside,
+a .cms joined, else a new .cms; NCA's timestamp; long-term B-LTA). Given the same file, key,
+time and NCA answers, they write the same bytes. Two signings are still never identical byte
+for byte: the signing time and NCA's timestamp differ each time, and a GOST signature uses a
+fresh random number.
+
 **On the phone** (Android 11 or newer) kzsigner is its own app, built for one touch per
 signature. A key file is added once and kept in the app, locked by the phone's security chip:
 each signature then needs only a fingerprint or the screen lock (with no screen lock set, the
@@ -113,20 +121,20 @@ applications-menu entry and icon, and offers it in "Open with" for `.cms` and `.
 no root, and works the same on GNOME, KDE Plasma and other desktops.
 
 ```
-kzsigner sign document.pdf -k GOSTKNCA_xxx.p12          # -> document.pdf.cms
+kzsigner sign contract.pdf -k GOSTKNCA_xxx.p12          # -> contract-signed.pdf, as the apps sign
+kzsigner sign document.docx -k GOSTKNCA_xxx.p12         # -> document.docx.cms (B-LTA)
+kzsigner sign document.pdf -k key.p12 --cms             # -> document.pdf.cms
 kzsigner sign document.pdf.cms -k RSA_yyy.p12           # adds a second signature (co-signing)
 kzsigner sign document.pdf -k key.p12 --detached        # detached (with an NCA timestamp)
-kzsigner sign document.pdf -k key.p12 --pdf --level LTA # inside the PDF, long-term (B-LTA)
 kzsigner extend document.pdf.cms                        # make a .cms long-term, or renew it
 kzsigner verify document.pdf.cms [--offline] [--json]   # exit code 0 only if all signatures are valid
 kzsigner verify detached.cms --data document.pdf
 kzsigner extract document.pdf.cms                       # -> document.pdf
 kzsigner info -k key.p12
 
-kzsigner sign contract.pdf -k key.p12 --pdf             # -> contract-signed.pdf, signed inside
-kzsigner sign contract-signed.pdf -k key2.p12 --pdf     # a second signature inside the PDF
-kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # with a visible stamp
-kzsigner sign request.xml -k key.p12 --xml              # -> request-signed.xml, XAdES B-T
+kzsigner sign contract-signed.pdf -k key2.p12           # a second signature inside the PDF
+kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # a stamp instead
+kzsigner sign request.xml -k key.p12 --level T          # -> request-signed.xml, XAdES B-T
 kzsigner verify request-signed.xml                      # checks the XML signature
 kzsigner sign request-signed.xml -k key2.p12 --xml      # a second signature inside it
 kzsigner extend request-signed.xml                      # XAdES B-LTA, or renew it

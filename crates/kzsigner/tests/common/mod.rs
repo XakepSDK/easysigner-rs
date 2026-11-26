@@ -1,7 +1,8 @@
 //! Helpers shared by the command-line tests.
 
 /// Signing and checking go online by default; the tests stay offline unless a test names a
-/// server or needs one (--level), or says `--network` (dropped here).
+/// server or needs one (--level), or says `--network` (dropped here). A signature with a
+/// timestamp server but no OCSP server is made B-T (`--level=T`).
 pub fn offline_unless_asked(args: &mut Vec<String>) {
     let Some(cmd) = args.first().cloned() else {
         return;
@@ -15,6 +16,11 @@ pub fn offline_unless_asked(args: &mut Vec<String>) {
     }
     if cmd == "sign" && !has("--tsa") && !has("--no-tsa") {
         args.push("--no-tsa".into());
+    }
+    // signing is long-term by default, which needs an OCSP server: a test that names only a
+    // timestamp server gets a timestamped signature (B-T)
+    if cmd == "sign" && has("--tsa") && !has("--ocsp") && !has("--level") {
+        args.push("--level=T".into());
     }
     if (cmd == "sign" || cmd == "verify") && !has("--ocsp") && !has("--no-ocsp") {
         args.push("--no-ocsp".into());

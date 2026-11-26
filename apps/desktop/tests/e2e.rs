@@ -416,6 +416,22 @@ fn pdf() {
         v.contains("NOT VALID") || v.contains("after"),
     );
 
+    // no options: as the window and the phone app sign, inside the PDF on the Who signed page
+    std::fs::copy(fixtures().join("pdf/plain.pdf"), t.path("default.pdf")).unwrap();
+    t.kz(&["sign", "-k", &key("alice_rsa.p12"), "default.pdf"]);
+    let made = std::fs::read(t.path("default-signed.pdf")).unwrap_or_default();
+    t.check(
+        "default: a PDF is signed inside, with the Who signed page",
+        kzsigner::pdf::whosigned::ends_with_page(&made),
+    );
+    let v = t.kz(&[
+        "verify",
+        "default-signed.pdf",
+        "--trust",
+        &key("ca_rsa.cer"),
+    ]);
+    t.check("default: it verifies", v.contains("VALID - all 1"));
+
     println!("\n{} passed, {} failed", t.pass, t.fail.len());
     let _ = std::fs::remove_dir_all(&dir);
     assert!(t.fail.is_empty(), "failed: {:?}", t.fail);

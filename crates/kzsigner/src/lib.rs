@@ -5,6 +5,7 @@ pub mod cert;
 pub mod cms;
 pub mod crl;
 pub mod env;
+pub mod file;
 pub mod gost;
 pub(crate) mod http;
 pub mod i18n;
@@ -165,13 +166,35 @@ impl Engine {
     /// warnings first. When that fails, the signature made stands as it is, with a warning.
     pub fn extend_new(
         &self,
-        mut r: SignResult,
+        r: SignResult,
         original: Option<&[u8]>,
         level: ltv::Level,
         tsa_url: &str,
         ocsp_url: &str,
     ) -> SignResult {
-        let x = if pdf::is_pdf(&r.cms) {
+        match self.try_extend_new(&r, original, level, tsa_url, ocsp_url) {
+            Ok(x) => x,
+            Err(e) => {
+                let mut r = r;
+                r.warnings.push(i18n::trf(
+                    "The signature was made, but not as a long-term one: {}",
+                    &[&e],
+                ));
+                r
+            }
+        }
+    }
+
+    /// [`Engine::extend_new`], failing when the signature can't be made long-term.
+    pub fn try_extend_new(
+        &self,
+        r: &SignResult,
+        original: Option<&[u8]>,
+        level: ltv::Level,
+        tsa_url: &str,
+        ocsp_url: &str,
+    ) -> Result<SignResult> {
+        let mut x = if pdf::is_pdf(&r.cms) {
             self.extend(&r.cms, original, level, tsa_url, ocsp_url)
         } else if xml::is_xml(&r.cms) {
             xml::ltv::extend(
@@ -192,27 +215,17 @@ impl Engine {
                 &self.env,
                 Some(&r.signature),
             )
-        };
-        let mut x = match x {
-            Ok(x) => x,
-            Err(e) => {
-                r.warnings.push(i18n::trf(
-                    "The signature was made, but not as a long-term one: {}",
-                    &[&e],
-                ));
-                return r;
-            }
-        };
-        let mut warnings = r.warnings;
+        }?;
+        let mut warnings = r.warnings.clone();
         warnings.append(&mut x.warnings);
-        SignResult {
+        Ok(SignResult {
             warnings,
             timestamped: r.timestamped,
             cosigned: r.cosigned,
             signer_count: r.signer_count,
-            signature: r.signature,
+            signature: r.signature.clone(),
             cms: x.cms,
-        }
+        })
     }
 
     /// Checks a .cms, or the signatures inside a PDF. `ocsp_url`: None to skip the revocation

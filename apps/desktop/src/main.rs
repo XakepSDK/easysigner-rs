@@ -24,7 +24,7 @@ Signing and checking use NCA's timestamp and revocation services by default, as 
   -V, --version   Print version information and exit.
 Commands:
   gui      Open the desktop window (default).
-  sign     Sign FILE into FILE.cms (or inside a PDF or an XML document).
+  sign     Sign FILE as the window and phone app do (inside a PDF or XML, else a .cms).
   verify   Check every signature in a .cms, signed PDF or signed XML.
            Exit code 0 only if all are valid.
   extend   Make the signatures in a .cms, signed PDF or XML long-term (B-LT/B-LTA).
@@ -35,31 +35,36 @@ Run 'kzsigner COMMAND --help' for a command's options.
 ";
 
 const HELP_SIGN: &str = "\
-Usage: kzsigner sign [-hV] [--detached | --pdf | --xml] [--ocsp[=URL]]
+Usage: kzsigner sign [-hV] [--cms | --detached | --pdf | --xml] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
                      [--no-tsa] [--no-ocsp] [--offline]
-                     [--level=LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
+                     [--level=T|LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
                      [--stamp-lang=LANG] [--stamp-logo=IMAGE]] [--data=ORIGINAL]
                      [--trust=CA.cer]... FILE
        kzsigner sign [options] --hash=HASH -o=OUT
-Sign FILE into FILE.cms.
-If FILE is already a .cms, your signature is ADDED to it (co-signing).
+Sign FILE the way the kzsigner window and phone app do: a PDF inside the PDF, with your box
+on its Who signed page (FILE-signed.pdf); an XML document inside it (FILE-signed.xml); a
+.cms that holds its document gets your signature ADDED (co-signing); anything else goes into
+FILE.cms. With NCA's timestamp, made long-term (B-LTA). The options below change that.
       FILE                 Document, or .cms to co-sign.
   -k, --key=KEY.p12        Your key file.
   -p, --password=PASSWORD  Key password (or env KZSIGNER_PASSWORD; prompted otherwise).
       --alias=ALIAS        Key alias, if the file holds several keys.
   -o, --out=OUT            Output file.
-      --detached           Do not embed the document in the .cms.
+      --cms                A .cms with the document inside, whatever FILE is.
+      --detached           A .cms without the document in it.
       --pdf                Sign a PDF inside the PDF (PAdES), into FILE-signed.pdf; it
                            still opens in any PDF viewer. A signed PDF gets one more.
+                           Your box goes on the Who signed page, unless --stamp.
       --hash=HASH          Sign a document known only by its hash (base64 or hex, made with
                            the key's algorithm; see `kzsigner hash`) into a detached .cms,
                            written to OUT (-o). No FILE then. Checking the signature
                            needs the document (verify --data).
       --xml                Sign an XML document inside it (an enveloped XAdES signature),
                            into FILE-signed.xml.
-      --stamp              With --pdf: a visible signature, a stamp on a page saying who
-                           signed and when (it is part of what is signed).
+      --stamp              With --pdf: instead of the Who signed page, a stamp on a page
+                           of the document saying who signed and when (it is part of
+                           what is signed).
       --stamp-page=N       The stamp's page (default: the last page).
       --stamp-at=CORNER    br (bottom right, default), bl, tr or tl.
       --stamp-lang=LANG    ru (default), kk or en.
@@ -70,14 +75,17 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --tsa[=URL]          Timestamp server (default http://tsp.pki.gov.kz:80). Every
                            signature gets NCA's timestamp, the proof of when it was made
                            (GOST 34.310-2004 keys excepted: NCA no longer serves them).
-      --no-tsa             No timestamp: the signing time is only your computer's clock.
+      --no-tsa             No timestamp: the signing time is only your computer's clock
+                           (and so not long-term).
       --no-ocsp            Do not check that your key is not revoked.
       --offline            Both: no network at all. Not for --level.
-      --level=LT|LTA       A long-term signature (ETSI B-LT): with a timestamp, and the
-                           CA certificates and revocation answers (OCSP, or the CAs'
-                           lists) needed to check it after the certificate expires,
-                           kept in it. LTA (B-LTA) adds an archive timestamp over all
-                           of it, which 'kzsigner extend' renews later.
+      --level=T|LT|LTA     How long-term (default LTA). LT (B-LT): the CA certificates
+                           and revocation answers (OCSP, or the CAs' lists) needed to
+                           check it after the certificate expires, kept in it. LTA
+                           (B-LTA) adds an archive timestamp over all of it, which
+                           'kzsigner extend' renews later. T: the timestamp only.
+                           When it can't be made long-term, the signature is kept as
+                           made, with a warning.
       --data=ORIGINAL      Original document, to co-sign a detached .cms.
       --trust=CA.cer       Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
@@ -194,6 +202,8 @@ struct Opts {
     out: Option<PathBuf>,
     data: Option<PathBuf>,
     detached: bool,
+    /// --cms: a .cms with the document inside, whatever the file.
+    cms: bool,
     pdf: bool,
     xml: bool,
     json: bool,
@@ -206,6 +216,8 @@ struct Opts {
     /// The timestamp server is the default one, not asked for.
     tsa_default: bool,
     level: Option<kzsigner::ltv::Level>,
+    /// --level=T (sign): a timestamp only, not long-term.
+    level_t: bool,
     stamp: Option<kzsigner::pdf::stamp::Stamp>,
     stamp_logo: Option<PathBuf>,
     hash: Option<String>,
@@ -276,11 +288,23 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             }
             Long("level") if allowed(&["sign", "extend"]) => {
                 let v = p.value()?.string()?;
-                o.level = Some(kzsigner::ltv::Level::parse(&v).ok_or_else(|| {
-                    Fail::Usage(format!("unknown --level {v} (use LT or LTA)"), help)
-                })?)
+                if cmd == "sign" && matches!(v.to_uppercase().as_str(), "T" | "B-T") {
+                    o.level_t = true;
+                    o.level = None;
+                } else {
+                    o.level_t = false;
+                    o.level = Some(kzsigner::ltv::Level::parse(&v).ok_or_else(|| {
+                        let use_ = if cmd == "sign" {
+                            "T, LT or LTA"
+                        } else {
+                            "LT or LTA"
+                        };
+                        Fail::Usage(format!("unknown --level {v} (use {use_})"), help)
+                    })?)
+                }
             }
             Long("detached") if allowed(&["sign"]) => o.detached = true,
+            Long("cms") if allowed(&["sign"]) => o.cms = true,
             Long("pdf") if allowed(&["sign"]) => o.pdf = true,
             Long("hash") if allowed(&["sign"]) => o.hash = Some(p.value()?.string()?),
             Long("alg") if allowed(&["hash"]) => o.alg = Some(p.value()?.string()?),
@@ -431,6 +455,39 @@ fn open_key(e: &Engine, o: &Opts, help: &'static str) -> R<kzsigner::p12::Key> {
     Ok(e.open_key(&k, &password(o)?, o.alias.as_deref())?)
 }
 
+/// How to sign, from the options: the window's and the phone app's signing (the
+/// [`FileOptions`](kzsigner::file::FileOptions) defaults) unless an option says otherwise.
+fn file_options<'a>(
+    o: &'a Opts,
+    stamp: Option<&'a kzsigner::pdf::stamp::Stamp>,
+    original: Option<&'a [u8]>,
+) -> kzsigner::file::FileOptions<'a> {
+    use kzsigner::file::{FileOptions, Make};
+    let defaults = FileOptions::default();
+    FileOptions {
+        make: if o.pdf {
+            Make::Pdf(stamp)
+        } else if o.xml {
+            Make::Xml
+        } else if o.detached || o.cms || original.is_some() {
+            Make::Cms {
+                detached: o.detached,
+                original,
+            }
+        } else {
+            Make::ByFile
+        },
+        tsa_url: o.tsa.as_deref(),
+        ocsp_url: o.ocsp.as_deref().unwrap_or(defaults.ocsp_url),
+        check_revocation: o.ocsp.is_some(),
+        level: if o.level_t || o.tsa.is_none() {
+            None
+        } else {
+            o.level.or(defaults.level)
+        },
+    }
+}
+
 fn sign(mut o: Opts) -> R<u8> {
     network_defaults(&mut o, true, HELP_SIGN)?;
     if o.hash.is_some() {
@@ -439,9 +496,14 @@ fn sign(mut o: Opts) -> R<u8> {
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
-    if [o.detached, o.pdf, o.xml].iter().filter(|x| **x).count() > 1 {
+    if [o.detached || o.cms, o.pdf, o.xml]
+        .iter()
+        .filter(|x| **x)
+        .count()
+        > 1
+    {
         return Err(Fail::Usage(
-            "choose one of --detached, --pdf and --xml".into(),
+            "choose one of --detached (or --cms), --pdf and --xml".into(),
             HELP_SIGN,
         ));
     }
@@ -456,77 +518,21 @@ fn sign(mut o: Opts) -> R<u8> {
         st.logo = Some(read(logo)?);
     }
     let input = read(&file)?;
-    if o.pdf && !e.is_pdf(&input) {
-        return Err(Fail::User(format!("{} is not a PDF file.", file.display())));
-    }
-    if o.xml && !e.is_xml(&input) {
-        return Err(Fail::User(format!(
-            "{} is not an XML document.",
-            file.display()
-        )));
-    }
     let original = o.data.as_deref().map(read).transpose()?;
     refuse_gost2004(&k)?;
     let hint = tsa_hint(&o);
-    // a long-term signature needs a timestamp
-    let tsa = o
-        .tsa
-        .clone()
-        .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
-    let r = if o.xml {
-        e.sign(
-            kzsigner::SignRequest::xml(&input, &k)
-                .tsa(tsa.as_deref())
-                .ocsp(o.ocsp.as_deref()),
-        )
-        .map_err(&hint)?
-    } else if o.pdf {
-        e.sign(
-            kzsigner::SignRequest::pdf(&input, &k)
-                .stamp(stamp.as_ref())
-                .tsa(tsa.as_deref())
-                .ocsp(o.ocsp.as_deref()),
-        )
-        .map_err(&hint)?
-    } else {
-        e.sign(
-            kzsigner::SignRequest::cms(
-                &input,
-                &k,
-                kzsigner::Cms {
-                    detached: o.detached,
-                    cosign: true,
-                    original: original.as_deref(),
-                },
-            )
-            .tsa(tsa.as_deref())
-            .ocsp(o.ocsp.as_deref()),
-        )
-        .map_err(&hint)?
-    };
-    let r = match (o.level, &tsa) {
-        (Some(level), Some(tsa)) => {
-            // a detached .cms's document: the original it co-signs, or the input itself
-            let doc = original.as_ref().or(o.detached.then_some(&input));
-            e.extend_new(
-                r,
-                doc.map(Vec::as_slice),
-                level,
-                tsa,
-                o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
-            )
-        }
-        _ => r,
-    };
+    let opts = file_options(&o, stamp.as_ref(), original.as_deref());
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document".into());
+    let signed = e.sign_file(&name, &input, &k, &opts).map_err(&hint)?;
+    let (r, level) = (signed.result, signed.level);
     let out = o.out.clone().unwrap_or_else(|| {
         if r.cosigned {
             file.clone()
-        } else if o.pdf {
-            kzsigner::signed_name(&file, "pdf")
-        } else if o.xml {
-            kzsigner::signed_name(&file, "xml")
         } else {
-            PathBuf::from(format!("{}.cms", file.display()))
+            file.with_file_name(&signed.name)
         }
     });
     let overwrite = r.cosigned && out == file;
@@ -554,7 +560,7 @@ fn sign(mut o: Opts) -> R<u8> {
         out.display(),
         r.signer_count,
         if r.signer_count == 1 { "" } else { "s" },
-        match (o.level, r.timestamped) {
+        match (level, r.timestamped) {
             (Some(kzsigner::ltv::Level::Lta), _) => ", long-term with archive timestamp (B-LTA)",
             (Some(kzsigner::ltv::Level::Lt), _) => ", long-term (B-LT)",
             (None, true) => ", with timestamp",
@@ -875,5 +881,50 @@ fn main() -> ExitCode {
             eprint!("{help}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kzsigner::file::{FileOptions, Make};
+
+    fn options(args: &[&str]) -> Opts {
+        let p = lexopt::Parser::from_args(args.iter().copied());
+        let Ok(Some(mut o)) = parse(p, "sign", HELP_SIGN) else {
+            panic!("{args:?} did not parse")
+        };
+        assert!(network_defaults(&mut o, true, HELP_SIGN).is_ok());
+        o
+    }
+
+    /// `kzsigner sign` with no options signs as the window and the phone app do.
+    #[test]
+    fn default_signing_is_the_apps() {
+        let o = options(&["-k", "key.p12", "doc.pdf"]);
+        let got = file_options(&o, None, None);
+        let want = FileOptions::default();
+        assert!(matches!(got.make, Make::ByFile));
+        assert_eq!(got.tsa_url, want.tsa_url);
+        assert_eq!(got.ocsp_url, want.ocsp_url);
+        assert_eq!(got.level, want.level);
+        assert!(got.check_revocation);
+
+        let o = options(&["-k", "key.p12", "--level=T", "--cms", "doc.pdf"]);
+        let got = file_options(&o, None, None);
+        assert!(matches!(
+            got.make,
+            Make::Cms {
+                detached: false,
+                original: None
+            }
+        ));
+        assert_eq!(got.level, None);
+        let o = options(&["-k", "key.p12", "--offline", "doc.pdf"]);
+        let got = file_options(&o, None, None);
+        assert_eq!(
+            (got.tsa_url, got.level, got.check_revocation),
+            (None, None, false)
+        );
     }
 }
