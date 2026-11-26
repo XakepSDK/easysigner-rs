@@ -398,7 +398,7 @@ pub fn try_oid_content(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Fails with [`Error::NotOid`](kzcrypto::Error::NotOid) when `s` is not a valid dotted OID.
+/// Fails with [`Error::NotOid`] when `s` is not a valid dotted OID.
 /// Check strings from outside the crate with this before they reach [`oid`].
 pub fn check_oid(s: &str) -> Result<()> {
     try_oid_content(s)
