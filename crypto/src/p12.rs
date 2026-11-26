@@ -7,9 +7,16 @@ use digest::block_api::BlockSizeUser;
 use digest::{Digest, FixedOutputReset};
 use pkcs12::kdf::{Pkcs12KeyType, derive_key};
 
+use ::der::asn1::{AnyRef, OctetString};
+use ::der::{Decode, Encode, Sequence};
+use pkcs12::cms::encrypted_data::EncryptedData;
+use pkcs12::pbe_params::{EncryptedPrivateKeyInfo, Pbes2Params, Pkcs12PbeParams};
+use pkcs12::safe_bag::SafeContents;
+use pkcs12::{AuthenticatedSafe, CertBag, MacData, Pfx};
+use spki::AlgorithmIdentifierOwned;
+
 use crate::cert::Cert;
-use crate::der::{self, Tlv};
-use crate::keys::{PrivateKey, alg_id};
+use crate::keys::PrivateKey;
 use crate::prelude::*;
 use crate::text::{tr, trf};
 use crate::{Error, ErrorKind, Result, hex};
@@ -149,28 +156,34 @@ pub fn problem(p12: &[u8], password: &str) -> Option<Problem> {
     }
 }
 
+/// Kalkan writes BER (indefinite lengths, constructed OCTET STRINGs); others write DER.
+fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
+    T::from_der(b).or_else(|_| T::from_ber(b))
+}
+
+/// The bytes of an OCTET STRING held in an ANY (a ContentInfo's content), joined when BER
+/// splits them.
+fn octets(any: &::der::Any) -> ::der::Result<Vec<u8>> {
+    let enc = any.to_der()?;
+    Ok(ber::<OctetString>(&enc)?.into_bytes().into_vec())
+}
+
 /// The AuthenticatedSafe bytes and the MAC, unchecked.
-fn pfx_parts(p12: &[u8]) -> Result<(Vec<u8>, Option<Tlv<'_>>)> {
-    let not_p12 = |e: Error| {
+fn pfx_parts(p12: &[u8]) -> Result<(Vec<u8>, Option<MacData>)> {
+    let not_p12 = |e: &dyn core::fmt::Display| {
         Error::new(trf(
             "Could not open the key file: it is not a PKCS#12 (.p12) key ({})",
-            &[&e],
+            &[&format!("{e}")],
         ))
     };
-    let pfx = der::parse(p12)
-        .and_then(|t| t.items(der::SEQUENCE))
-        .map_err(not_p12)?;
-    if pfx.len() < 2 {
-        return Err(not_p12(Error::new("too few fields")));
+    let pfx: Pfx = ber(p12).map_err(|e| not_p12(&e))?;
+    if pfx.auth_safe.content_type.to_string() != DATA {
+        return Err(not_p12(
+            &"unsupported PFX content (public-key integrity mode)",
+        ));
     }
-    let ci = pfx[1].items(der::SEQUENCE).map_err(not_p12)?;
-    if ci.len() < 2 || ci[0].oid().map_err(not_p12)? != DATA {
-        return Err(not_p12(Error::new(
-            "unsupported PFX content (public-key integrity mode)",
-        )));
-    }
-    let auth_safe = ci[1].inner().and_then(|o| o.octets()).map_err(not_p12)?;
-    Ok((auth_safe, pfx.get(2).copied()))
+    let auth_safe = octets(&pfx.auth_safe.content).map_err(|e| not_p12(&e))?;
+    Ok((auth_safe, pfx.mac_data))
 }
 
 /// Checks the MAC and returns the AuthenticatedSafe bytes.
@@ -188,20 +201,17 @@ fn read_pfx(p12: &[u8], password: &str) -> Result<Vec<u8>> {
     Ok(auth_safe)
 }
 
-fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
-    let m = mac.items(der::SEQUENCE)?;
-    let di = m[0].items(der::SEQUENCE)?;
-    let (oid, _) = alg_id(&di[0])?;
-    let expected = di[1].octets()?;
-    let salt = m[1].octets()?;
-    let iter = m.get(2).map(iterations).transpose()?.unwrap_or(1);
+fn check_mac(mac: &MacData, data: &[u8], password: &str) -> Result<bool> {
+    let expected = mac.mac.digest.as_bytes();
+    let salt = mac.mac_salt.as_bytes();
+    let iter = iterations(i64::from(mac.iterations))?;
     let pw = bmp_password(password);
     use hmac::{KeyInit as _, Mac};
     macro_rules! mac_with {
         ($h:ty) => {{
             let key = kdf::<$h>(
                 &pw,
-                &salt,
+                salt,
                 iter,
                 Pkcs12KeyType::Mac,
                 <$h as digest::OutputSizeUser>::output_size(),
@@ -209,10 +219,10 @@ fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
             let mut h =
                 <hmac::Hmac<$h>>::new_from_slice(&key).map_err(|_| Error::new("MAC key"))?;
             h.update(data);
-            Ok(h.verify_slice(&expected).is_ok())
+            Ok(h.verify_slice(expected).is_ok())
         }};
     }
-    match oid.as_str() {
+    match mac.mac.algorithm.oid.to_string().as_str() {
         crate::gost::H_SHA1 => mac_with!(sha1::Sha1),
         crate::gost::H_SHA256 => mac_with!(sha2::Sha256),
         crate::gost::H_SHA384 => mac_with!(sha2::Sha384),
@@ -222,62 +232,74 @@ fn check_mac(mac: &Tlv, data: &[u8], password: &str) -> Result<bool> {
     }
 }
 
+fn asn1(e: ::der::Error) -> Error {
+    Error::malformed(format!("malformed ASN.1: {e}"))
+}
+
 fn read_contents(
     auth_safe: &[u8],
     password: &str,
     keys: &mut Vec<Bag<Vec<u8>>>,
     certs: &mut Vec<Bag<Cert>>,
 ) -> Result<()> {
-    for ci in der::parse(auth_safe)?.items(der::SEQUENCE)? {
-        let k = ci.items(der::SEQUENCE)?;
-        let ty = k[0].oid()?;
-        let safe_contents = match ty.as_str() {
-            DATA => k[1].inner()?.octets()?,
+    let safe: AuthenticatedSafe = ber(auth_safe).map_err(asn1)?;
+    for ci in safe.iter() {
+        let safe_contents = match ci.content_type.to_string().as_str() {
+            DATA => octets(&ci.content).map_err(asn1)?,
             ENCRYPTED_DATA => {
-                let ed = k[1].inner()?.items(der::SEQUENCE)?;
-                let eci = ed[1].items(der::SEQUENCE)?;
-                let enc = eci
-                    .get(2)
+                let enc = ci.content.to_der().map_err(asn1)?;
+                let ed: EncryptedData = ber(&enc).map_err(asn1)?;
+                let eci = ed.enc_content_info;
+                let data = eci
+                    .encrypted_content
                     .ok_or_else(|| Error::new("encrypted data without content"))?;
-                decrypt(&eci[1], &enc.octets()?, password)?
+                decrypt(&eci.content_enc_alg, data.as_bytes(), password)?
             }
             o => return Err(Error::new(format!("unsupported PKCS#12 content type {o}"))),
         };
-        for bag in der::parse(&safe_contents)?.items(der::SEQUENCE)? {
-            read_bag(&bag, password, keys, certs)?;
+        let bags: SafeContents = ber(&safe_contents).map_err(asn1)?;
+        for bag in &bags {
+            read_bag(bag, password, keys, certs)?;
         }
     }
     Ok(())
 }
 
 fn read_bag(
-    bag: &Tlv,
+    bag: &pkcs12::SafeBag,
     password: &str,
     keys: &mut Vec<Bag<Vec<u8>>>,
     certs: &mut Vec<Bag<Cert>>,
 ) -> Result<()> {
-    let k = bag.items(der::SEQUENCE)?;
-    let ty = k[0].oid()?;
-    let value = k[1].inner()?;
+    // bag_value keeps its [0] EXPLICIT wrapper
+    let value = ber::<AnyRef<'_>>(&bag.bag_value).map_err(asn1)?.value();
     let (mut alias, mut local_id) = (None, None);
-    if let Some(attrs) = k.get(2) {
-        for a in attrs.items(der::SET)? {
-            let ak = a.items(der::SEQUENCE)?;
-            let Some(v) = ak[1].children()?.into_iter().next() else {
-                continue;
-            };
-            match ak[0].oid()?.as_str() {
-                FRIENDLY_NAME => alias = v.text(),
-                LOCAL_KEY_ID => local_id = Some(hex(&v.octets()?)),
-                _ => {}
+    for a in bag.bag_attributes.iter().flat_map(|s| s.iter()) {
+        let Some(v) = a.values.iter().next() else {
+            continue;
+        };
+        match a.oid.to_string().as_str() {
+            FRIENDLY_NAME => {
+                alias = v
+                    .decode_as::<::der::asn1::BmpString>()
+                    .ok()
+                    .map(|b| b.to_string())
             }
+            LOCAL_KEY_ID => {
+                local_id = Some(hex(v.decode_as::<OctetString>().map_err(asn1)?.as_bytes()))
+            }
+            _ => {}
         }
     }
     let key_alias = alias.clone().or_else(|| local_id.clone());
-    match ty.as_str() {
+    match bag.bag_id.to_string().as_str() {
         SHROUDED_KEY_BAG => {
-            let e = value.items(der::SEQUENCE)?;
-            let pki = decrypt(&e[0], &e[1].octets()?, password)?;
+            let e: EncryptedPrivateKeyInfo = ber(value).map_err(asn1)?;
+            let pki = decrypt(
+                &e.encryption_algorithm,
+                e.encrypted_data.as_bytes(),
+                password,
+            )?;
             keys.push(Bag {
                 alias: key_alias,
                 local_id,
@@ -287,12 +309,12 @@ fn read_bag(
         KEY_BAG => keys.push(Bag {
             alias: key_alias,
             local_id,
-            value: value.raw.to_vec(),
+            value: value.to_vec(),
         }),
         CERT_BAG => {
-            let cb = value.items(der::SEQUENCE)?;
-            if cb[0].oid()? == X509_CERT {
-                let c = Cert::parse(&cb[1].inner()?.octets()?)?;
+            let cb: CertBag = ber(value).map_err(asn1)?;
+            if cb.cert_id.to_string() == X509_CERT {
+                let c = Cert::parse(cb.cert_value.as_bytes())?;
                 certs.push(Bag {
                     alias,
                     local_id,
@@ -338,9 +360,9 @@ fn bmp_password(p: &str) -> Vec<u8> {
 
 /// An iteration count from the file. Real ones are a few thousand to a few hundred thousand; a
 /// damaged or hostile file must not keep the program hashing for hours.
-fn iterations(t: &Tlv) -> Result<u32> {
-    match t.small_int()? {
-        n @ 1..=10_000_000 => Ok(n as u32),
+fn iterations(n: i64) -> Result<u32> {
+    match n {
+        1..=10_000_000 => Ok(n as u32),
         n => Err(Error::new(format!("unsupported iteration count {n}"))),
     }
 }
@@ -375,18 +397,23 @@ fn new_cipher<C: KeyInit>(key: &[u8]) -> Result<C> {
 }
 
 /// Decrypts with a PKCS#12 PBE algorithm or PBES2.
-fn decrypt(alg: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
-    let (oid, params) = alg_id(alg)?;
-    let params = params.ok_or_else(|| Error::new("encryption without parameters"))?;
+fn decrypt(alg: &AlgorithmIdentifierOwned, data: &[u8], password: &str) -> Result<Vec<u8>> {
+    let oid = alg.oid.to_string();
+    let params = alg
+        .parameters
+        .as_ref()
+        .ok_or_else(|| Error::new("encryption without parameters"))?
+        .to_der()
+        .map_err(asn1)?;
     if oid == "1.2.840.113549.1.5.13" {
         return pbes2(&params, data, password);
     }
-    let p = params.items(der::SEQUENCE)?;
-    let salt = p[0].octets()?;
-    let iter = iterations(&p[1])?;
+    let p: Pkcs12PbeParams = ber(&params).map_err(asn1)?;
+    let salt = p.salt.as_bytes();
+    let iter = iterations(i64::from(p.iterations))?;
     let pw = bmp_password(password);
-    let key = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::EncryptionKey, n);
-    let iv = |n| kdf::<sha1::Sha1>(&pw, &salt, iter, Pkcs12KeyType::Iv, n);
+    let key = |n| kdf::<sha1::Sha1>(&pw, salt, iter, Pkcs12KeyType::EncryptionKey, n);
+    let iv = |n| kdf::<sha1::Sha1>(&pw, salt, iter, Pkcs12KeyType::Iv, n);
     match oid.as_str() {
         "1.2.840.113549.1.12.1.3" => {
             cbc_decrypt(new_cipher::<des::TdesEde3>(&key(24)?)?, &iv(8)?, data)
@@ -406,27 +433,45 @@ fn decrypt(alg: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
     }
 }
 
-fn pbes2(params: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
-    let p = params.items(der::SEQUENCE)?;
-    let (kdf_oid, kdf_params) = alg_id(&p[0])?;
+/// PBKDF2-params (RFC 8018 A.2); the PRF is optional (default HMAC-SHA-1), which pkcs12's
+/// own type does not allow.
+#[derive(Sequence)]
+struct Pbkdf2Params {
+    salt: OctetString,
+    iteration_count: u32,
+    #[asn1(optional = "true")]
+    _key_length: Option<u16>,
+    #[asn1(optional = "true")]
+    prf: Option<AlgorithmIdentifierOwned>,
+}
+
+fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+    let p: Pbes2Params = ber(params).map_err(asn1)?;
+    let kdf_oid = p.kdf.oid.to_string();
     if kdf_oid != "1.2.840.113549.1.5.12" {
         return Err(Error::new(format!("unsupported key derivation {kdf_oid}")));
     }
-    let kp = kdf_params
+    let kp: Pbkdf2Params = p
+        .kdf
+        .parameters
+        .as_ref()
         .ok_or_else(|| Error::new("PBKDF2 without parameters"))?
-        .items(der::SEQUENCE)?;
-    let salt = kp[0].octets()?;
-    let iter = iterations(&kp[1])?;
-    let mut prf = "1.2.840.113549.2.7".to_string();
-    for x in &kp[2..] {
-        if x.tag == der::SEQUENCE {
-            prf = alg_id(x)?.0;
-        }
-    }
-    let (enc_oid, enc_params) = alg_id(&p[1])?;
-    let iv = enc_params
+        .decode_as()
+        .map_err(asn1)?;
+    let salt = kp.salt.as_bytes();
+    let iter = iterations(i64::from(kp.iteration_count))?;
+    let prf = kp
+        .prf
+        .map_or_else(|| "1.2.840.113549.2.7".to_string(), |a| a.oid.to_string());
+    let enc_oid = p.encryption.oid.to_string();
+    let iv = p
+        .encryption
+        .parameters
+        .as_ref()
         .ok_or_else(|| Error::new("cipher without IV"))?
-        .octets()?;
+        .decode_as::<OctetString>()
+        .map_err(asn1)?;
+    let iv = iv.as_bytes();
     let key_len = match enc_oid.as_str() {
         "2.16.840.1.101.3.4.1.2" => 16,
         "2.16.840.1.101.3.4.1.22" => 24,
@@ -434,22 +479,22 @@ fn pbes2(params: &Tlv, data: &[u8], password: &str) -> Result<Vec<u8>> {
         "1.2.840.113549.3.7" => 24,
         o => return Err(Error::new(format!("unsupported cipher {o}"))),
     };
-    let mut key = vec![0u8; key_len];
+    let mut key = zeroize::Zeroizing::new(vec![0u8; key_len]);
     let pw = password.as_bytes();
     match prf.as_str() {
-        "1.2.840.113549.2.7" => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(pw, &salt, iter, &mut key),
-        "1.2.840.113549.2.8" => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(pw, &salt, iter, &mut key),
-        "1.2.840.113549.2.9" => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(pw, &salt, iter, &mut key),
-        "1.2.840.113549.2.10" => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(pw, &salt, iter, &mut key),
-        "1.2.840.113549.2.11" => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(pw, &salt, iter, &mut key),
+        "1.2.840.113549.2.7" => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(pw, salt, iter, &mut key),
+        "1.2.840.113549.2.8" => pbkdf2::pbkdf2_hmac::<sha2::Sha224>(pw, salt, iter, &mut key),
+        "1.2.840.113549.2.9" => pbkdf2::pbkdf2_hmac::<sha2::Sha256>(pw, salt, iter, &mut key),
+        "1.2.840.113549.2.10" => pbkdf2::pbkdf2_hmac::<sha2::Sha384>(pw, salt, iter, &mut key),
+        "1.2.840.113549.2.11" => pbkdf2::pbkdf2_hmac::<sha2::Sha512>(pw, salt, iter, &mut key),
         o => return Err(Error::new(format!("unsupported PBKDF2 function {o}"))),
     }
     match key_len {
-        16 => cbc_decrypt(new_cipher::<aes::Aes128>(&key)?, &iv, data),
-        32 => cbc_decrypt(new_cipher::<aes::Aes256>(&key)?, &iv, data),
+        16 => cbc_decrypt(new_cipher::<aes::Aes128>(&key)?, iv, data),
+        32 => cbc_decrypt(new_cipher::<aes::Aes256>(&key)?, iv, data),
         _ if enc_oid == "1.2.840.113549.3.7" => {
-            cbc_decrypt(new_cipher::<des::TdesEde3>(&key)?, &iv, data)
+            cbc_decrypt(new_cipher::<des::TdesEde3>(&key)?, iv, data)
         }
-        _ => cbc_decrypt(new_cipher::<aes::Aes192>(&key)?, &iv, data),
+        _ => cbc_decrypt(new_cipher::<aes::Aes192>(&key)?, iv, data),
     }
 }

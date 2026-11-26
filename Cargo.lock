@@ -2258,6 +2258,7 @@ dependencies = [
  "rsa",
  "sha1",
  "sha2",
+ "spki",
  "streebog",
  "x509-cert",
  "zeroize",
