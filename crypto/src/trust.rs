@@ -1,32 +1,44 @@
-//! Trusted CA certificates (bundled NCA RK roots and intermediates, plus --trust) and
-//! certificate path checks against them.
+//! Trusted CA certificates (the caller's) and certificate path checks against them, under a
+//! [`Policy`].
 
-use crate::Result;
 use crate::cert::{self, Cert};
 use crate::prelude::*;
 
-/// NCA RK's root and issuing CA certificates, bundled into the executable.
-pub const BUNDLED_CA: [(&str, &[u8]); 10] = [
-    (
-        "root_gost_2022",
-        include_bytes!("../certs/root_gost_2022.cer"),
-    ),
-    ("root_gost", include_bytes!("../certs/root_gost.cer")),
-    (
-        "root_rsa_2022",
-        include_bytes!("../certs/root_rsa_2022.cer"),
-    ),
-    ("root_rsa", include_bytes!("../certs/root_rsa.cer")),
-    (
-        "nca_gost_2022",
-        include_bytes!("../certs/nca_gost_2022.cer"),
-    ),
-    ("nca_gost", include_bytes!("../certs/nca_gost.cer")),
-    ("nca_rsa_2022", include_bytes!("../certs/nca_rsa_2022.cer")),
-    ("nca_rsa", include_bytes!("../certs/nca_rsa.cer")),
-    ("nca_gost_old", include_bytes!("../certs/nca_gost_old.cer")),
-    ("nca_rsa_old", include_bytes!("../certs/nca_rsa_old.cer")),
-];
+/// Tolerances for checks, set by whoever runs them (the NCA ones are in `kzcrypto-nca`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Policy {
+    /// How far ahead of the clock a server's or CA's time may be, in milliseconds.
+    pub clock_skew_ms: i64,
+    /// How old a fresh OCSP answer without nextUpdate (and without the nonce echoed) may be, in
+    /// milliseconds.
+    pub ocsp_max_age_ms: i64,
+    /// The most issuers in a certificate path.
+    pub max_path_len: usize,
+}
+
+impl Policy {
+    /// 5 minutes of clock skew, OCSP answers up to an hour old, at most 10 issuers.
+    pub const DEFAULT: Policy = Policy {
+        clock_skew_ms: 5 * 60 * 1000,
+        ocsp_max_age_ms: 60 * 60 * 1000,
+        max_path_len: 10,
+    };
+
+    pub const fn new(clock_skew_ms: i64, ocsp_max_age_ms: i64, max_path_len: usize) -> Policy {
+        Policy {
+            clock_skew_ms,
+            ocsp_max_age_ms,
+            max_path_len,
+        }
+    }
+}
+
+impl Default for Policy {
+    fn default() -> Policy {
+        Policy::DEFAULT
+    }
+}
 
 /// What a path check found. Names are certificates' common names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +59,7 @@ pub enum PathStatus {
     IssuerNotCa { issuer: String },
     /// An issuer in the path may not sign certificates (key usage).
     IssuerMayNotSignCerts { issuer: String },
-    /// More than 10 issuers.
+    /// More issuers than [`Policy::max_path_len`].
     TooLong,
 }
 
@@ -62,24 +74,31 @@ pub struct Chain {
     pub issuers: Vec<Cert>,
 }
 
+/// The CA certificates a caller trusts, and the [`Policy`] checks run under. It trusts nothing
+/// on its own: `kzcrypto-nca` gives one with NCA RK's CAs.
 pub struct TrustStore {
-    /// The bundled NCA RK certificates, then the extra ones.
     trusted: Vec<Cert>,
-    bundled: usize,
+    pub policy: Policy,
 }
 
 impl TrustStore {
-    /// `extra`: CA certificates to trust on top of the bundled NCA RK ones.
-    pub fn new(extra: Vec<Cert>) -> TrustStore {
-        let mut trusted: Vec<Cert> = BUNDLED_CA
-            .iter()
-            .map(|(n, d)| {
-                Cert::parse_any(d).unwrap_or_else(|e| panic!("bundled certificate {n}: {e:?}"))
-            })
-            .collect();
-        let bundled = trusted.len();
-        trusted.extend(extra);
-        TrustStore { trusted, bundled }
+    /// A store that trusts `cas` alone, under [`Policy::DEFAULT`].
+    pub fn new(cas: Vec<Cert>) -> TrustStore {
+        TrustStore {
+            trusted: cas,
+            policy: Policy::DEFAULT,
+        }
+    }
+
+    /// The same store under `policy`.
+    pub fn with_policy(mut self, policy: Policy) -> TrustStore {
+        self.policy = policy;
+        self
+    }
+
+    /// The trusted certificates.
+    pub fn certs(&self) -> &[Cert] {
+        &self.trusted
     }
 
     /// Builds the path from `c` to a trusted CA using only trusted certificates, never ones
@@ -135,34 +154,15 @@ impl TrustStore {
             seen.push(issuer.clone());
             cur = issuer;
             is_start = false;
-            if seen.len() > 10 {
+            if seen.len() > self.policy.max_path_len {
                 return PathStatus::TooLong;
             }
-        }
-    }
-
-    /// A store that trusts nothing, not even NCA RK (for tests, and for callers that bring
-    /// their own CAs with [`TrustStore::only`]).
-    pub fn empty() -> TrustStore {
-        TrustStore::only(vec![])
-    }
-
-    /// A store that trusts `cas` alone, without the bundled NCA RK certificates.
-    pub fn only(cas: Vec<Cert>) -> TrustStore {
-        TrustStore {
-            trusted: cas,
-            bundled: 0,
         }
     }
 
     /// Trusts one more CA certificate.
     pub fn add(&mut self, ca: Cert) {
         self.trusted.push(ca);
-    }
-
-    /// Whether `c` is one of the bundled NCA RK CA certificates.
-    pub fn is_nca(&self, c: &Cert) -> bool {
-        self.trusted[..self.bundled].contains(c)
     }
 
     fn find_issuer(&self, c: &Cert, seen: &[Cert]) -> Option<Cert> {
@@ -173,21 +173,4 @@ impl TrustStore {
             .find(|t| c.signed_by(t))
             .cloned()
     }
-}
-
-/// Checks the bundled certificates against each other: how many have a signature that no
-/// bundled issuer verifies.
-pub fn check_bundled() -> Result<(usize, usize)> {
-    let all: Vec<Cert> = BUNDLED_CA
-        .iter()
-        .map(|(_, d)| Cert::parse_any(d))
-        .collect::<Result<_>>()?;
-    let bad = all
-        .iter()
-        .filter(|c| {
-            !all.iter()
-                .any(|i| cert::names_equal(&i.subject, &c.issuer) && c.signed_by(i))
-        })
-        .count();
-    Ok((all.len(), bad))
 }

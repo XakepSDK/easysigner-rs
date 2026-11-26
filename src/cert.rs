@@ -1,13 +1,14 @@
 //! X.509 certificates: [`kzcrypto::cert`], plus names, purposes and key warnings for people.
 
 pub use kzcrypto::cert::*;
+pub use kzcrypto_nca::{SigningRefusal, may_not_sign};
 
 use crate::gost;
 use crate::i18n::{tr, trf};
 use crate::report::SignerReport;
 use crate::time;
 
-/// Why `c` may not sign (see [`kzcrypto::cert::may_not_sign`]), in the reader's language.
+/// Why `c` may not sign (see [`kzcrypto_nca::may_not_sign`]), in the reader's language.
 pub fn usage_problem(c: &Cert, issuer: Option<&Cert>) -> Option<String> {
     may_not_sign(c, issuer).map(|t| crate::i18n::text(&t))
 }

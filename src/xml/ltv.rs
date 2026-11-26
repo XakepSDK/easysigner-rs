@@ -369,7 +369,6 @@ pub fn extend(
 mod tests {
     use super::*;
     use crate::env::Env;
-    use crate::trust::TrustStore;
 
     /// A signature element whose unsigned signature properties are `usp`.
     fn signature(usp: &str) -> String {
@@ -465,7 +464,7 @@ mod tests {
         assert_eq!(gen_time(b"junk"), None);
 
         // a real token over something else: checked, not valid
-        let env = Env::new(TrustStore::new(vec![]));
+        let env = Env::new(crate::trust::trust_store(vec![]));
         let a = &check_archives(&text, &doc, sig, &env)[0];
         assert!(
             a.checked && !a.valid && a.time == Some(when) && a.tsa.is_some(),

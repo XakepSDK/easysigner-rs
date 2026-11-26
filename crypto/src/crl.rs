@@ -9,6 +9,7 @@
 use crate::cert::{self, Cert};
 pub use crate::ocsp::CertStatus;
 use crate::prelude::*;
+use crate::trust::Policy;
 use crate::{Error, Result};
 
 const CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
@@ -21,7 +22,6 @@ const UNDERSTOOD: [&str; 4] = [
     DELTA_CRL_INDICATOR,
     FRESHEST_CRL,
 ];
-const MINUTE: i64 = 60 * 1000;
 
 /// CertificateList (RFC 5280 5.1) from x509-cert's parts. x509-cert's own `TbsCertList` makes
 /// the version mandatory, but RFC 5280 has it OPTIONAL (absent in v1 lists).
@@ -125,8 +125,9 @@ impl Crl {
             .unwrap_or(false)
     }
 
-    /// Why this list can't be used for `c` (issued by `issuer`) at `now`; None when it can.
-    pub fn unusable(&self, c: &Cert, issuer: &Cert, now: i64) -> Option<Unusable> {
+    /// Why this list can't be used for `c` (issued by `issuer`) at `now`, allowing
+    /// `policy`'s clock skew; None when it can.
+    pub fn unusable(&self, c: &Cert, issuer: &Cert, now: i64, policy: &Policy) -> Option<Unusable> {
         Some(
             if !cert::names_equal(&self.issuer, &c.issuer)
                 || !cert::names_equal(&self.issuer, &issuer.subject)
@@ -134,7 +135,7 @@ impl Crl {
                 Unusable::WrongIssuer
             } else if !self.signed_by(issuer) {
                 Unusable::BadSignature
-            } else if self.this_update > now + 5 * MINUTE
+            } else if self.this_update > now + policy.clock_skew_ms
                 || self.next_update.is_none_or(|n| n < now)
             {
                 Unusable::OutOfDate
@@ -289,12 +290,13 @@ pub fn evaluate(
     c: &Cert,
     issuer: &Cert,
     now: i64,
+    policy: &Policy,
 ) -> (bool, ListStatus, Option<CertStatus>) {
     let no = |s: ListStatus| (false, s, None);
     if base.is_delta {
         return no(ListStatus::NotFullList);
     }
-    if let Some(why) = base.unusable(c, issuer, now) {
+    if let Some(why) = base.unusable(c, issuer, now, policy) {
         return no(ListStatus::Unusable(why));
     }
     if let Some(when) = base.revocation_of(c) {
@@ -305,7 +307,7 @@ pub fn evaluate(
             if !d.is_delta {
                 return no(ListStatus::NotDeltaList);
             }
-            if let Some(why) = d.unusable(c, issuer, now) {
+            if let Some(why) = d.unusable(c, issuer, now, policy) {
                 return no(ListStatus::Unusable(why));
             }
             if let Some(when) = d.revocation_of(c) {

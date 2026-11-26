@@ -176,7 +176,7 @@ pub fn timestamp(
     let tsa_ca = tsp::check(&mut check, &out.signers[0], env);
     let chain = trust.check(&key.cert, env.now_ms());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(&mut check, t, i, env);
+        tsp::same_ca(&mut check, t, i);
     }
     if check.timestamp_ok != Some(true) {
         return Err(Error::new(trf(
@@ -330,7 +330,6 @@ fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::env::Env;
-    use crate::trust::TrustStore;
 
     fn fixture(p: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -350,7 +349,7 @@ mod tests {
     /// the parsed certificate: only its end date is moved, the signature still carries the real one.
     #[test]
     fn warnings_and_counts_from_signing() {
-        let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
+        let trust = Env::new(crate::trust::trust_store(vec![ca("keys/ca_gost2015.cer")]));
         let mut k = key("keys/alice_gost2015.p12");
         k.cert.not_after = 0;
         let expired = |w: &[String]| w.iter().any(|w| w.contains("expired"));

@@ -213,9 +213,10 @@ impl Kept {
         for base in lists.iter().filter(|l| !l.is_delta) {
             let delta = lists
                 .iter()
-                .filter(|l| l.is_delta && l.unusable(c, issuer, at).is_none())
+                .filter(|l| l.is_delta && l.unusable(c, issuer, at, &trust.policy).is_none())
                 .max_by_key(|l| l.this_update);
-            let (_, status, answer) = crl::evaluate(base, delta, false, c, issuer, at);
+            let (_, status, answer) =
+                crl::evaluate(base, delta, false, c, issuer, at, &trust.policy);
             if let Some(answer) = answer {
                 let (answer, status) =
                     good_if_later(answer, status, crl_revocation(base, delta, c), at);
@@ -366,7 +367,15 @@ fn revocation(
     }
     match crl::lists(c, now, env) {
         Ok((base, delta, due)) => {
-            let (_, status, answer) = crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);
+            let (_, status, answer) = crl::evaluate(
+                &base,
+                delta.as_deref(),
+                due,
+                c,
+                issuer,
+                now,
+                &env.trust.policy,
+            );
             match answer {
                 Some(CertStatus::Good) => {
                     add(&mut g.kept.crls, &base.raw);
@@ -736,7 +745,7 @@ mod tests {
     use crate::env::Env;
     use crate::report::Answer;
     use crate::time::encode_generalized;
-    use crate::trust::TrustStore;
+
     use der_testkit as der;
     use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
 
@@ -751,7 +760,7 @@ mod tests {
     fn fx() -> Fx {
         let ca = key("ocsp/ca.p12");
         let carol = key("ocsp/carol.p12").cert;
-        let env = Env::new(TrustStore::new(vec![ca.cert.clone()]));
+        let env = Env::new(crate::trust::trust_store(vec![ca.cert.clone()]));
         Fx { ca, carol, env }
     }
 
@@ -1409,7 +1418,7 @@ mod tests {
         let list = f.crl(&f.ca.cert.subject, now - DAY, now + DAY, None, false);
         let net = Arc::new(Net(list, AtomicUsize::new(0), AtomicUsize::new(0)));
         let clock = Arc::new(Tick(AtomicI64::new(now)));
-        let env = Env::new(TrustStore::new(vec![f.ca.cert.clone()]))
+        let env = Env::new(crate::trust::trust_store(vec![f.ca.cert.clone()]))
             .with_net(net.clone())
             .with_clock(clock.clone());
         let uri = der::tlv(der::ctx_prim(6), b"http://crl.test/ca.crl");
@@ -1435,7 +1444,7 @@ mod tests {
         assert!(check().0);
         assert_eq!(net.2.load(Ordering::SeqCst), 2, "fetched again after it");
         // a fresh Env starts with no lists
-        let other = Env::new(TrustStore::new(vec![f.ca.cert.clone()]))
+        let other = Env::new(crate::trust::trust_store(vec![f.ca.cert.clone()]))
             .with_net(net.clone())
             .with_clock(clock.clone());
         assert!(revocation(&c, Some(&f.ca.cert), "http://ocsp.test", &other, None).0);

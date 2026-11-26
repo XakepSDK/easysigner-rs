@@ -32,7 +32,6 @@ use cert::Cert;
 use p12::Key;
 use report::{SignResult, SignerReport, VerifyReport};
 pub use request::{Cms, Form, SignRequest};
-use trust::TrustStore;
 
 pub const DEFAULT_TSA_URL: &str = tsp::DEFAULT_TSA_URL;
 pub const DEFAULT_OCSP_URL: &str = ocsp::DEFAULT_URL;
@@ -55,7 +54,7 @@ impl Engine {
     /// `extra_trust`: CA certificates to trust on top of the bundled NCA RK ones.
     pub fn new(extra_trust: Vec<Cert>) -> Engine {
         Engine {
-            env: env::Env::new(TrustStore::new(extra_trust)),
+            env: env::Env::new(crate::trust::trust_store(extra_trust)),
         }
     }
 

@@ -13,14 +13,16 @@ of its own.
 | `keys` | KZ GOST and RSA public and private keys; RSA PKCS#1 v1.5 (blinded) |
 | `p12` | Opening .p12 key files as Kalkan writes them (BER, 3DES, RC2-40, SHA-1 MAC) and PBES2 (AES) |
 | `time` | ASN.1 times (including looser forms some CAs write), ISO-8601 |
-| `cert` | X.509 certificates: fields, names, key usage, policies, whether a certificate may sign |
+| `cert` | X.509 certificates: fields, names, key usage, policies |
 | `cms` | CMS SignedData: reading, writing, CAdES-BES signing as NCALayer does, co-signing |
 | `verify` | One signer's signature, signed attributes and signing-certificate binding |
-| `trust` | Certificate paths to trusted CAs (NCA RK's root and issuing CAs are built in, `certs/`) |
+| `trust` | Certificate paths to the CAs the caller trusts, under a `Policy` (clock skew, OCSP freshness, path length) |
 | `tsp` | Timestamp requests (RFC 3161), checking the answer against the request, checking tokens |
 | `ocsp` | OCSP requests (with nonce), checking answers: signature, responder, nonce, freshness |
 | `crl` | Revocation lists and delta lists: reading, checking, and what they say about a certificate |
-| `text` | Messages for people: an English template and its arguments |
+
+It assumes no CA and no national rules. NCA RK's CA certificates, TSA policies, its signing
+rules (Order 500) and its tolerances are in `kzcrypto-nca` (`crates/kzcrypto-nca`).
 
 All formats are read and written with RustCrypto's `der`, `x509-cert`, `cms`, `x509-tsp`,
 `x509-ocsp` and `pkcs12` (BER where Kalkan writes it). Signed parts are kept exactly as encoded.

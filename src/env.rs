@@ -101,10 +101,13 @@ mod tests {
 
     #[test]
     fn env_parts() {
-        let env = Env::new(TrustStore::new(vec![])).with_clock(Arc::new(FixedClock(42)));
+        let env = Env::new(crate::trust::trust_store(vec![])).with_clock(Arc::new(FixedClock(42)));
         assert_eq!(env.now_ms(), 42);
         assert_eq!(format!("{env:?}"), "Env { .. }");
         let real = SystemClock.now_ms();
-        assert!(real > 1_700_000_000_000 && Env::new(TrustStore::new(vec![])).now_ms() >= real);
+        assert!(
+            real > 1_700_000_000_000
+                && Env::new(crate::trust::trust_store(vec![])).now_ms() >= real
+        );
     }
 }

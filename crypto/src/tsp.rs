@@ -10,7 +10,7 @@ use x509_tsp::cmpv2::status::PkiStatus;
 use x509_tsp::{MessageImprint, TimeStampReq, TimeStampResp, TspVersion};
 
 use crate::asn1::{err as asn1, oid, positive, strip_zeros};
-use crate::gost::{self, Scheme};
+use crate::gost;
 use crate::prelude::*;
 use crate::trust::{Chain, TrustStore};
 use crate::verify::{self, Outcome};
@@ -106,23 +106,6 @@ impl Request {
             nonce: r.nonce.map(|n| strip_zeros(n.as_bytes()).to_vec()),
             cert_req: r.cert_req,
         })
-    }
-}
-
-/// The hash and NCA TSA policy NCALayer uses for each key type.
-pub fn hash_and_policy(scheme: Option<Scheme>) -> (&'static str, &'static str) {
-    hash_and_policy_for(scheme.map_or("", |s| s.key_oid))
-}
-
-/// The hash and NCA TSA policy for timestamps over the work of a key of type `key_alg` (a
-/// certificate's key algorithm), as [`hash_and_policy`] picks them for a signing key.
-pub fn hash_and_policy_for(key_alg: &str) -> (&'static str, &'static str) {
-    if key_alg == gost::KEY_GOST2004 {
-        (gost::H_GOST34311, "1.2.398.3.3.2.6.1")
-    } else if gost::is_gost(key_alg) {
-        (gost::H_GOST2015_512, "1.2.398.3.3.2.6.4")
-    } else {
-        (gost::H_SHA256, "1.2.398.3.3.2.6.2")
     }
 }
 
@@ -372,19 +355,6 @@ mod tests {
             assert_eq!(read_response(&r).is_ok(), ok, "status {code:?}");
         }
         assert!(read_response(&resp(PkiStatus::Accepted, None)).is_err());
-
-        assert_eq!(
-            hash_and_policy_for(gost::KEY_GOST2004),
-            (gost::H_GOST34311, "1.2.398.3.3.2.6.1")
-        );
-        assert_eq!(
-            hash_and_policy_for(gost::KEY_GOST2015_512),
-            (gost::H_GOST2015_512, "1.2.398.3.3.2.6.4")
-        );
-        assert_eq!(
-            hash_and_policy_for(gost::RSA_ENCRYPTION),
-            (gost::H_SHA256, "1.2.398.3.3.2.6.2")
-        );
     }
 
     #[test]
@@ -440,7 +410,7 @@ mod tests {
     /// The token must cover the stamped bytes and be signed by a trusted TSA.
     #[test]
     fn tokens() {
-        let trust = TrustStore::new(vec![]);
+        let trust = crate::testing::nca();
         let case = "gost2015-policy-6.4";
         let resp = live(case, "tsr.der");
         let token = &read_response(&resp).unwrap()[..];
@@ -457,7 +427,7 @@ mod tests {
         let c = check_token(&live(case, "data.bin"), &sd.encode().unwrap(), &trust).unwrap();
         assert!(c.imprint_ok && !c.signature_ok && !c.ok());
         // a TSA nobody trusts
-        let c = check_token(&live(case, "data.bin"), token, &TrustStore::empty()).unwrap();
+        let c = check_token(&live(case, "data.bin"), token, &TrustStore::new(vec![])).unwrap();
         assert!(c.ok() && !c.trusted() && c.tsa_ca().is_none());
         // requests made here
         let r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[0xff, 0]).unwrap();

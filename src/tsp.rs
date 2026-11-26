@@ -2,6 +2,7 @@
 //! sends the requests and records what a token says in a signer's report.
 
 pub use kzcrypto::tsp::*;
+pub use kzcrypto_nca::tsp::*;
 
 use crate::Result;
 use crate::cert::Cert;
@@ -61,9 +62,9 @@ pub fn check(sr: &mut SignerReport, si: &SignerInfo, env: &Env) -> Option<Cert> 
 /// Order 500/НҚ p.17.2: the TSA's certificate should come from the signer's CA. Adds a warning
 /// to `sr` when `tsa_ca` (from [`check`]) and `signer_ca` (the signer's verified issuer)
 /// differ. NCA RK's own CA certificates (GOST, RSA, every generation) count as one CA.
-pub fn same_ca(sr: &mut SignerReport, tsa_ca: &Cert, signer_ca: &Cert, env: &Env) {
-    let trust = &env.trust;
-    if tsa_ca == signer_ca || (trust.is_nca(tsa_ca) && trust.is_nca(signer_ca)) {
+pub fn same_ca(sr: &mut SignerReport, tsa_ca: &Cert, signer_ca: &Cert) {
+    use crate::trust::is_nca;
+    if tsa_ca == signer_ca || (is_nca(tsa_ca) && is_nca(signer_ca)) {
         return;
     }
     sr.warnings.push(trf(
@@ -117,12 +118,11 @@ pub fn check_token(
 mod tests {
     use super::*;
     use crate::env::Env;
-    use crate::trust::TrustStore;
 
     /// Real exchanges with NCA's TSA (tests/fixtures/nca-live, captured 2026-11-01).
     #[test]
     fn real_nca_timestamps() {
-        let env = Env::new(TrustStore::new(vec![]));
+        let env = Env::new(crate::trust::trust_store(vec![]));
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/nca-live");
         let nca = |n: &str| {
             let (_, d) = crate::trust::BUNDLED_CA
@@ -158,7 +158,7 @@ mod tests {
                 (other.clone(), true),
             ] {
                 let mut sr = SignerReport::default();
-                same_ca(&mut sr, &tsa_ca, &signer_ca, &env);
+                same_ca(&mut sr, &tsa_ca, &signer_ca);
                 assert_eq!(
                     sr.warnings.len(),
                     usize::from(warns),
@@ -186,7 +186,7 @@ mod tests {
     /// The token must cover the stamped bytes and be signed by its TSA.
     #[test]
     fn tokens_over_other_data() {
-        let env = Env::new(TrustStore::new(vec![]));
+        let env = Env::new(crate::trust::trust_store(vec![]));
         let case = "gost2015-policy-6.4";
         let resp = live(case, "tsr.der");
         let token = &read_response(&resp).unwrap()[..];

@@ -7,7 +7,6 @@ use der_testkit as der;
 use kzsigner::cert::Cert;
 use kzsigner::cms::{self, SignedData};
 use kzsigner::env::Env;
-use kzsigner::trust::TrustStore;
 use kzsigner::verify::{signing_certificate_matches, verify, verify_with};
 use kzsigner::{Engine, gost, p12};
 
@@ -128,7 +127,7 @@ fn signing_certificate_reference() {
     let rep = verify(
         &sd.encode().unwrap(),
         Some(b"hello"),
-        &Env::new(TrustStore::new(vec![])),
+        &Env::new(kzsigner::trust::trust_store(vec![])),
         None,
     )
     .unwrap();
@@ -147,7 +146,9 @@ fn signing_certificate_reference() {
 /// Without the document, a signature can still be checked over its signed attributes.
 #[test]
 fn signature_without_its_document() {
-    let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
+    let trust = Env::new(kzsigner::trust::trust_store(vec![ca(
+        "keys/ca_gost2015.cer",
+    )]));
     let good = signed(b"hello");
     let rep = verify_with(&good, None, &trust, None, true, None).unwrap();
     let s = &rep.signers[0];
@@ -201,7 +202,9 @@ fn signature_without_its_document() {
 
 #[test]
 fn what_a_report_says() {
-    let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
+    let trust = Env::new(kzsigner::trust::trust_store(vec![ca(
+        "keys/ca_gost2015.cer",
+    )]));
     let before = kzsigner::time::now_ms() / 1000 * 1000;
     let rep = verify(&signed(b"hello"), Some(b"hello"), &trust, None).unwrap();
     assert!(rep.valid);

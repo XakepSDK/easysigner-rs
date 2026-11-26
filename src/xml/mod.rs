@@ -331,7 +331,7 @@ fn timestamp(
     let tsa_ca = tsp::check_token(&mut check, stamped, &token, env)?;
     let chain = trust.check(&key.cert, env.now_ms());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(&mut check, t, i, env);
+        tsp::same_ca(&mut check, t, i);
     }
     if check.timestamp_ok != Some(true) {
         return Err(Error::new(trf(

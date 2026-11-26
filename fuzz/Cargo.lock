@@ -731,6 +731,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kzcrypto-nca"
+version = "0.1.0-dev"
+dependencies = [
+ "kzcrypto",
+]
+
+[[package]]
 name = "kzsigner"
 version = "0.1.0-dev"
 dependencies = [
@@ -749,6 +756,7 @@ dependencies = [
  "gost94",
  "hmac",
  "kzcrypto",
+ "kzcrypto-nca",
  "lopdf",
  "pbkdf2",
  "pkcs12",

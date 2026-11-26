@@ -201,7 +201,7 @@ pub fn check_certificate(
     sr.chain = chain.path;
     sr.usage_error = cert::usage_problem(c, chain.issuer.as_ref());
     if let (Some(t), Some(i), true) = (&tsa_ca, &chain.issuer, chain.ok) {
-        tsp::same_ca(sr, t, i, env);
+        tsp::same_ca(sr, t, i);
     }
     let mut ocsp_good = true;
     if let Some(url) = ocsp_url {
@@ -340,8 +340,15 @@ pub fn revocation(
         let now = env.now_ms();
         let (good, crl_status, answer, revoked) = match crate::crl::lists(c, now, env) {
             Ok((base, delta, due)) => {
-                let (good, s, a) =
-                    crate::crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);
+                let (good, s, a) = crate::crl::evaluate(
+                    &base,
+                    delta.as_deref(),
+                    due,
+                    c,
+                    issuer,
+                    now,
+                    &env.trust.policy,
+                );
                 (good, s, a, ltv::crl_revocation(&base, delta.as_deref(), c))
             }
             Err(e) => (

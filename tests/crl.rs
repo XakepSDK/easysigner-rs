@@ -94,6 +94,7 @@ fn revocation_lists_decide_only_when_current_and_from_the_ca() {
             &carol.cert,
             &ca.cert,
             now,
+            &kzsigner::trust::POLICY,
         )
     };
 
@@ -143,6 +144,7 @@ fn unknown_critical_extensions_make_a_list_unusable() {
             &carol.cert,
             &ca.cert,
             now,
+            &kzsigner::trust::POLICY,
         )
     };
     // a critical issuingDistributionPoint (a partial list): no answer
@@ -183,7 +185,17 @@ fn delta_lists_are_read_with_the_full_list() {
     )])]);
     let base = crl_of(&[], &[(FRESHEST, false, point)]);
     assert_eq!(base.freshest, ["http://example/delta.crl"]);
-    let eval = |b: &Crl, d: Option<&Crl>, due| crl::evaluate(b, d, due, &carol.cert, &ca.cert, now);
+    let eval = |b: &Crl, d: Option<&Crl>, due| {
+        crl::evaluate(
+            b,
+            d,
+            due,
+            &carol.cert,
+            &ca.cert,
+            now,
+            &kzsigner::trust::POLICY,
+        )
+    };
 
     // revoked since the full list: the delta decides
     let delta = crl_of(&[&carol.cert.serial], std::slice::from_ref(&ind));
@@ -248,6 +260,7 @@ fn which_lists_are_current() {
             &carol.cert,
             &ca.cert,
             now,
+            &kzsigner::trust::POLICY,
         )
         .2
     };
@@ -268,7 +281,15 @@ fn which_lists_are_current() {
     )
     .unwrap();
     let list = Crl::parse(&make(&ca, &[], now - DAY, now + DAY)).unwrap();
-    let (good, status, _) = crl::evaluate(&list, None, false, &carol.cert, &alice.cert, now);
+    let (good, status, _) = crl::evaluate(
+        &list,
+        None,
+        false,
+        &carol.cert,
+        &alice.cert,
+        now,
+        &kzsigner::trust::POLICY,
+    );
     assert!(
         !good && status.contains("not from the certificate's CA"),
         "{status}"
@@ -338,7 +359,7 @@ fn fetched_lists() {
     let c = naming(&carol, &url);
     assert_eq!(crl::urls(&c), std::slice::from_ref(&url));
     assert!(crl::urls(&carol.cert).iter().all(|u| *u != url));
-    let env = kzsigner::env::Env::new(kzsigner::trust::TrustStore::new(vec![]));
+    let env = kzsigner::env::Env::new(kzsigner::trust::trust_store(vec![]));
 
     let (base, delta, due) = crl::lists(&c, now, &env).unwrap();
     assert!(base.next_update.is_some() && delta.is_none() && !due);

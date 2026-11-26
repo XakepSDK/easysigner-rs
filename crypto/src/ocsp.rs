@@ -313,11 +313,12 @@ fn evaluate(
         if let Some((_, now)) = fresh {
             // Without our nonce echoed back, only freshness shows that the answer is not an old
             // one replayed: it must be within its validity period (nextUpdate), or, without one,
-            // made within the last hour.
-            let skew = 5 * 60 * 1000;
+            // recent (Policy::ocsp_max_age_ms).
+            let p = trust.policy;
+            let skew = p.clock_skew_ms;
             let fresh = match next_update {
                 Some(n) => n >= now,
-                None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
+                None => nonce_ok || this_update.is_some_and(|t| t >= now - p.ocsp_max_age_ms),
             };
             if !fresh || this_update.is_some_and(|t| t > now + skew) {
                 return Ok(Answer::error(Status::OutOfDate, body));
@@ -599,9 +600,8 @@ mod tests {
     /// Short or empty pieces in a stored answer are errors, not crashes.
     #[test]
     fn broken_stored_answers_are_errors() {
-        let trust = TrustStore::new(vec![]);
-        let (_, d) = crate::trust::BUNDLED_CA[4];
-        let ca = Cert::parse_any(d).unwrap();
+        let trust = crate::testing::nca();
+        let ca = trust.certs()[0].clone();
         let empty: &[u8] = &[0x30, 0];
         let short: &[u8] = &[0x30, 4, 0x30, 0, 0x30, 0];
         for basic in [empty, short] {

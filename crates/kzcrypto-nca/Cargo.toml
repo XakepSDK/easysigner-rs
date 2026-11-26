@@ -1,0 +1,12 @@
+[package]
+name = "kzcrypto-nca"
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.100"
+description = "NCA RK (Kazakhstan) data and rules for kzcrypto: the CA certificates, TSA policies, signing rules and check tolerances (no_std + alloc)"
+repository = "https://github.com/XakepSDK/easysigner-rs"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+kzcrypto = { path = "../../crypto", version = "0.1.0-dev" }

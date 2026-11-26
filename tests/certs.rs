@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use der_testkit as der;
 use der_testkit::Tlv;
 use kzsigner::cert::{self, Cert};
-use kzsigner::trust::TrustStore;
 use kzsigner::{Engine, cms, p12};
 
 fn fixture(p: &str) -> PathBuf {
@@ -37,7 +36,7 @@ fn trust_rests_on_the_ca_signature() {
     for a in ["rsa", "gost2004", "gost2015"] {
         let ca = ca(&format!("keys/ca_{a}.cer"));
         let alice = key(&format!("keys/alice_{a}.p12")).cert;
-        let store = TrustStore::new(vec![ca.clone()]);
+        let store = kzsigner::trust::trust_store(vec![ca.clone()]);
         let now = kzsigner::time::now_ms();
         assert!(alice.signed_by(&ca), "{a}");
         assert!(store.check(&alice, now).ok, "{a}");
@@ -54,7 +53,7 @@ fn trust_rests_on_the_ca_signature() {
 
         // a trusted root whose own signature is broken
         let bad_root = forged(&ca);
-        let chain = TrustStore::new(vec![bad_root.clone()]).check(&bad_root, now);
+        let chain = kzsigner::trust::trust_store(vec![bad_root.clone()]).check(&bad_root, now);
         assert!(!chain.ok, "{a}");
         assert!(
             kzsigner::i18n::text(&chain.status).contains("signature"),
@@ -76,7 +75,7 @@ fn dates_and_ca_rights() {
     assert!(alice.valid_on(alice.not_before));
     assert!(alice.valid_on(alice.not_after));
     assert!(!alice.valid_on(alice.not_after + 1));
-    let store = TrustStore::new(vec![ca.clone()]);
+    let store = kzsigner::trust::trust_store(vec![ca.clone()]);
     assert!(store.check(&alice, alice.not_before).ok);
     let late = store.check(&alice, alice.not_after + 1);
     assert!(
@@ -213,7 +212,7 @@ fn warnings_about_a_key() {
     assert!(w.len() == 1 && w[0].contains("not valid until"), "{w:?}");
     // the engine asks its clock
     let at = |ms| {
-        let env = kzsigner::env::Env::new(TrustStore::new(vec![]))
+        let env = kzsigner::env::Env::new(kzsigner::trust::trust_store(vec![]))
             .with_clock(std::sync::Arc::new(kzsigner::env::FixedClock(ms)));
         Engine::with_env(env).key_warnings(&alice)
     };
@@ -293,7 +292,7 @@ fn issuers_must_be_cas() {
     let now = kzsigner::time::now_ms();
     let by_alice = issue(&alice, &bob);
     assert!(by_alice.signed_by(&alice.cert));
-    let store = TrustStore::new(vec![ca.clone(), alice.cert.clone()]);
+    let store = kzsigner::trust::trust_store(vec![ca.clone(), alice.cert.clone()]);
     let chain = store.check(&by_alice, now);
     assert!(!chain.ok, "{:?}", chain.status);
     assert!(
@@ -303,7 +302,7 @@ fn issuers_must_be_cas() {
     );
 
     // a trusted certificate that is not a root still needs its own issuer
-    let chain = TrustStore::new(vec![alice.cert.clone()]).check(&alice.cert, now);
+    let chain = kzsigner::trust::trust_store(vec![alice.cert.clone()]).check(&alice.cert, now);
     assert!(!chain.ok && chain.issuer.is_none(), "{:?}", chain.status);
     assert!(
         kzsigner::i18n::text(&chain.status).contains("Issuer not found"),

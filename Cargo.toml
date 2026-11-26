@@ -9,6 +9,8 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 [dependencies]
 # the cryptography, on its own (no_std): crypto/
 kzcrypto = { path = "crypto", version = "0.1.0-dev" }
+# NCA RK's CA certificates, TSA policies, signing rules and tolerances
+kzcrypto-nca = { path = "crates/kzcrypto-nca", version = "0.1.0-dev" }
 der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid", "ber", "derive"] }
 spki = { version = "0.8", default-features = false, features = ["alloc"] }
 gost94 = "0.11"
@@ -44,8 +46,8 @@ zeroize = "1"
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }
 
 [workspace]
-members = ["crypto", "ffi", "desktop", "crates/gost3410", "crates/der-testkit"]
-default-members = [".", "crypto", "desktop"]
+members = ["crypto", "ffi", "desktop", "crates/gost3410", "crates/der-testkit", "crates/kzcrypto-nca"]
+default-members = [".", "crypto", "crates/kzcrypto-nca", "desktop"]
 # vendored crates: dependencies, not ours to lint
 exclude = ["third_party"]
 

@@ -136,6 +136,25 @@ pub(crate) mod testing {
         .unwrap()
     }
 
+    /// A trust store with NCA RK's CA certificates (from `kzcrypto-nca`'s files).
+    pub fn nca() -> crate::trust::TrustStore {
+        let dir = format!(
+            "{}/../crates/kzcrypto-nca/certs",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut certs: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        certs.sort();
+        crate::trust::TrustStore::new(
+            certs
+                .iter()
+                .map(|p| crate::cert::Cert::parse_any(&std::fs::read(p).unwrap()).unwrap())
+                .collect(),
+        )
+    }
+
     pub fn key(name: &str) -> crate::p12::Key {
         crate::p12::open(&fixture(&format!("keys/{name}.p12")), "Qwerty12", None).unwrap()
     }

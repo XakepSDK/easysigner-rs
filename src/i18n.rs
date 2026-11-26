@@ -281,10 +281,10 @@ impl Words for kzcrypto::crl::ListStatus {
     }
 }
 
-impl Words for kzcrypto::cert::SigningRefusal {
+impl Words for kzcrypto_nca::SigningRefusal {
     fn words(&self) -> crate::text::Text {
         use crate::text::{tr, trf};
-        use kzcrypto::cert::SigningRefusal as R;
+        use kzcrypto_nca::SigningRefusal as R;
         match self {
             R::IsCa => tr(
                 "The certificate belongs to a certification authority, not to a person or organization.",

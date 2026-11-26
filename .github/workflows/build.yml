@@ -58,8 +58,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: crypto
-      - name: kzcrypto and gost3410 build without an operating system (no_std)
-        run: cargo build --release --locked -p kzcrypto -p gost3410 --target thumbv7em-none-eabihf
+      - name: kzcrypto, kzcrypto-nca and gost3410 build without an operating system (no_std)
+        run: cargo build --release --locked -p kzcrypto -p kzcrypto-nca -p gost3410 --target thumbv7em-none-eabihf
   build:
     strategy:
       fail-fast: false

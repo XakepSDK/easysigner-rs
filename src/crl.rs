@@ -26,8 +26,10 @@ pub fn evaluate(
     c: &Cert,
     issuer: &Cert,
     now: i64,
+    policy: &crate::trust::Policy,
 ) -> (bool, String, Option<CertStatus>) {
-    let (good, status, answer) = kzcrypto::crl::evaluate(base, delta, delta_due, c, issuer, now);
+    let (good, status, answer) =
+        kzcrypto::crl::evaluate(base, delta, delta_due, c, issuer, now, policy);
     (good, i18n::text(&status), answer)
 }
 

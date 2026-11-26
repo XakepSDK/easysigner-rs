@@ -201,7 +201,7 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
 
 * `crypto/` (crate `kzcrypto`): all of the cryptography, on its own, `no_std` + `alloc`, with no
   files, network, clock or OS random numbers: the caller passes the time and a random source in
-  and does all I/O, and messages are English templates the application translates. It is kept
+  and does all I/O, and it has no wording: the application words its errors and statuses. It is kept
   small and separate so that it can be certified (СТ РК 1073) and later moved to its own
   repository; see [crypto/README.md](crypto/README.md).
   * `gost.rs`: the KZ profiles of the GOST algorithms. GOST 34.311-95 is GOST R 34.11-94 with
@@ -222,8 +222,10 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
     one signer's signature and signing-certificate binding.
   * `tsp.rs`, `ocsp.rs`, `crl.rs`: timestamp and OCSP requests, and checking the answers,
     timestamp tokens and revocation lists (with delta lists). `trust.rs`: certificate paths
-    built only from trusted certificates (NCA RK's are built in, `crypto/certs/`). `cert.rs`:
+    built only from the certificates the caller trusts, under a `Policy`. `cert.rs`:
     certificates, key usage and certificate policies.
+  * No NCA data or rules: those are in `crates/kzcrypto-nca` (NCA RK's CA certificates in
+    `certs/`, TSA policies, who may sign under Order 500, the tolerances NCA's servers need).
   * It has no wording: errors (`error.rs`) and statuses are enums, with data but no sentences.
 * `src/` (crate `kzsigner`, the core) keeps the module names above as re-exports and adds what
   is not cryptography: sending the requests (`http.rs`), caching revocation lists, the clock,
