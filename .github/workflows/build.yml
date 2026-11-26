@@ -62,8 +62,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cbindgen@0.29.4
-      - name: kzcrypto builds without an operating system (no_std + alloc)
-        run: cargo build --release --locked -p kzcrypto --target thumbv7em-none-eabihf
+      - name: kzcrypto and gost3410 build without an operating system (no_std)
+        run: cargo build --release --locked -p kzcrypto -p gost3410 --target thumbv7em-none-eabihf
       - name: The C header matches the code
         run: sh scripts/capi-header.sh --check
       - name: The C interface, from C

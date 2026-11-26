@@ -1,0 +1,21 @@
+[package]
+name = "gost3410"
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.100"
+description = "GOST R 34.10-2012 (and 34.10-2001) signatures on the CryptoPro-A, TC26 256-A and TC26 512-A curves, as used by Kazakhstan's NCA RK (GOST 34.310-2004, ST RK GOST R 34.10-2015)"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+elliptic-curve = { version = "0.14.3", default-features = false, features = ["arithmetic", "sec1"] }
+primeorder = "0.14"
+primefield = "0.14"
+signature = { version = "3", default-features = false, features = ["rand_core"] }
+hmac = { version = "0.13", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+zeroize = { version = "1.8", default-features = false }
+
+[dev-dependencies]
+getrandom = { version = "0.4", features = ["sys_rng"] }
+kzcrypto = { path = "../../crypto" }

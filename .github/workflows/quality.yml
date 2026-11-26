@@ -152,7 +152,7 @@ jobs:
           fi
           # two passes: the core, crypto and C interface with their tests (.cargo/mutants.toml);
           # then the app layer (ffi) and the desktop command line with theirs
-          cargo mutants $args -p kzsigner -p kzcrypto -p kzcrypto-capi --output core
+          cargo mutants $args -p kzsigner -p kzcrypto -p kzcrypto-capi -p gost3410 --output core
           r1=$?
           cargo mutants $args -p kzsigner-ffi -p kzsigner-desktop \
             --test-package kzsigner-ffi --test-package kzsigner-desktop --output app
