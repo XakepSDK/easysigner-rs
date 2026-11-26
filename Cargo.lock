@@ -2244,6 +2244,7 @@ dependencies = [
  "base64",
  "cbc",
  "cipher",
+ "der",
  "des",
  "digest",
  "getrandom 0.4.3",
@@ -2258,6 +2259,7 @@ dependencies = [
  "sha1",
  "sha2",
  "streebog",
+ "x509-cert",
  "zeroize",
 ]
 

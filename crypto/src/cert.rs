@@ -38,10 +38,19 @@ pub const KU_NON_REPUDIATION: usize = 1;
 pub const ANY_POLICY: &str = "2.5.29.32.0";
 pub const KU_KEY_CERT_SIGN: usize = 5;
 
+/// An INTEGER's content without leading zero bytes (one zero for zero).
+fn strip_zeros(mut b: &[u8]) -> &[u8] {
+    while let [0, rest @ ..] = b
+        && !rest.is_empty()
+    {
+        b = rest;
+    }
+    b
+}
+
 impl Cert {
     pub fn parse(data: &[u8]) -> Result<Cert> {
-        let t = der::parse(data)?;
-        Self::from_tlv(&t)
+        Self::from_der(data)
     }
 
     /// Accepts DER, or Base64 / PEM text.
@@ -50,49 +59,42 @@ impl Cert {
     }
 
     pub fn from_tlv(t: &Tlv) -> Result<Cert> {
-        let f = || Error::malformed("Unreadable certificate: malformed ASN.1");
-        let top = t.items(der::SEQUENCE)?;
-        if top.len() < 3 {
-            return Err(f());
-        }
-        let tbs = top[0].items(der::SEQUENCE)?;
-        let mut i = 0;
-        if tbs.first().is_some_and(|x| x.tag == der::ctx(0)) {
-            i = 1;
-        }
-        if tbs.len() < i + 6 {
-            return Err(f());
-        }
-        let validity = tbs[i + 3].items(der::SEQUENCE)?;
-        if validity.len() < 2 {
-            return Err(f());
-        }
+        Self::parse(t.raw)
+    }
+
+    /// From DER, read by `x509-cert`. Its `Raw` profile: CAs, NCA's among them, issue serial
+    /// numbers RFC 5280 forbids (negative, or longer than 20 bytes), and the fields are kept
+    /// exactly as encoded.
+    fn from_der(data: &[u8]) -> Result<Cert> {
+        use x509_cert::der::{Decode, Encode};
+        let f = |_| Error::malformed("Unreadable certificate: malformed ASN.1");
+        let c =
+            x509_cert::certificate::CertificateInner::<x509_cert::certificate::Raw>::from_der(data)
+                .map_err(f)?;
+        let tbs = c.tbs_certificate();
+        let ms = |t: &x509_cert::time::Time| -> Result<i64> {
+            i64::try_from(t.to_unix_duration().as_millis())
+                .map_err(|_| Error::malformed("Unreadable certificate: malformed ASN.1"))
+        };
         let mut extensions = Vec::new();
-        for x in &tbs[i + 6..] {
-            if x.tag == der::ctx(3) {
-                for e in x.inner()?.items(der::SEQUENCE)? {
-                    let k = e.items(der::SEQUENCE)?;
-                    let oid = k.first().ok_or_else(f)?.oid()?;
-                    let v = k
-                        .last()
-                        .ok_or_else(f)?
-                        .expect(der::OCTET_STRING)?
-                        .octets()?;
-                    extensions.push((oid, v));
-                }
-            }
+        for e in tbs.extensions().into_iter().flatten() {
+            extensions.push((e.extn_id.to_string(), e.extn_value.as_bytes().to_vec()));
         }
         Ok(Cert {
-            der: t.raw.to_vec(),
-            tbs: top[0].raw.to_vec(),
-            serial: tbs[i].uint()?.to_vec(),
-            issuer: tbs[i + 2].raw.to_vec(),
-            subject: tbs[i + 4].raw.to_vec(),
-            not_before: validity[0].time()?,
-            not_after: validity[1].time()?,
-            spki: tbs[i + 5].raw.to_vec(),
-            sig_alg: crate::keys::alg_id(&top[1])?.0,
-            signature: top[2].bits()?.to_vec(),
+            der: data.to_vec(),
+            tbs: tbs.to_der().map_err(f)?,
+            serial: strip_zeros(tbs.serial_number().as_bytes()).to_vec(),
+            issuer: tbs.issuer().to_der().map_err(f)?,
+            subject: tbs.subject().to_der().map_err(f)?,
+            not_before: ms(&tbs.validity().not_before)?,
+            not_after: ms(&tbs.validity().not_after)?,
+            spki: tbs.subject_public_key_info().to_der().map_err(f)?,
+            sig_alg: c.signature_algorithm().oid.to_string(),
+            signature: c
+                .signature()
+                .as_bytes()
+                .ok_or_else(|| Error::malformed("Unreadable certificate: malformed ASN.1"))?
+                .to_vec(),
             extensions,
         })
     }

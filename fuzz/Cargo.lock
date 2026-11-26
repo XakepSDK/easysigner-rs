@@ -686,6 +686,7 @@ dependencies = [
  "base64",
  "cbc",
  "cipher",
+ "der",
  "des",
  "digest",
  "gost3410",
@@ -699,6 +700,7 @@ dependencies = [
  "sha1",
  "sha2",
  "streebog",
+ "x509-cert",
  "zeroize",
 ]
 
