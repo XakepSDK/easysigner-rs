@@ -9,7 +9,7 @@
 use crate::cert::{self, Cert};
 pub use crate::ocsp::CertStatus;
 use crate::prelude::*;
-use crate::text::{Text, Time, tr, trf};
+use crate::text::tr;
 use crate::{Error, ErrorKind, Result};
 
 const CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
@@ -127,21 +127,24 @@ impl Crl {
     }
 
     /// Why this list can't be used for `c` (issued by `issuer`) at `now`; None when it can.
-    pub fn unusable(&self, c: &Cert, issuer: &Cert, now: i64) -> Option<Text> {
-        let why = if !cert::names_equal(&self.issuer, &c.issuer)
-            || !cert::names_equal(&self.issuer, &issuer.subject)
-        {
-            "ERROR: the revocation list is not from the certificate's CA"
-        } else if !self.signed_by(issuer) {
-            "ERROR: the revocation list's signature is not valid"
-        } else if self.this_update > now + 5 * MINUTE || self.next_update.is_none_or(|n| n < now) {
-            "ERROR: the revocation list is out of date"
-        } else if self.unknown_critical.is_some() {
-            "ERROR: the revocation list has a critical extension kzsigner does not support"
-        } else {
-            return None;
-        };
-        Some(tr(why))
+    pub fn unusable(&self, c: &Cert, issuer: &Cert, now: i64) -> Option<Unusable> {
+        Some(
+            if !cert::names_equal(&self.issuer, &c.issuer)
+                || !cert::names_equal(&self.issuer, &issuer.subject)
+            {
+                Unusable::WrongIssuer
+            } else if !self.signed_by(issuer) {
+                Unusable::BadSignature
+            } else if self.this_update > now + 5 * MINUTE
+                || self.next_update.is_none_or(|n| n < now)
+            {
+                Unusable::OutOfDate
+            } else if self.unknown_critical.is_some() {
+                Unusable::UnknownCritical
+            } else {
+                return None;
+            },
+        )
     }
 
     /// From when `c`'s key is not to be trusted, if `c` is listed (see [`Crl::revoked_from`]).
@@ -246,9 +249,40 @@ pub fn uris_in(ext: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// What a full list and, when one is due, a delta list say about `c`: (good, status for
-/// people, the answer, or None when they can't be used). `issuer` is `c`'s CA
-/// certificate; `now` the moment of checking. A delta is required when `delta_due`.
+/// Why a revocation list can't be used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Unusable {
+    /// Not from the certificate's CA.
+    WrongIssuer,
+    BadSignature,
+    /// Past its nextUpdate, without one, or made too far ahead.
+    OutOfDate,
+    /// It has a critical extension this crate does not support.
+    UnknownCritical,
+}
+
+/// What the revocation lists say about a certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ListStatus {
+    /// Not in the lists, as of `at` (the newest list's thisUpdate).
+    Good { at: i64 },
+    /// Revoked at `at`.
+    Revoked { at: i64 },
+    /// The "full" list is a delta list.
+    NotFullList,
+    /// The delta list is not one.
+    NotDeltaList,
+    /// A delta list is due and none could be read.
+    DeltaMissing,
+    /// A list can't be used.
+    Unusable(Unusable),
+}
+
+/// What a full list and, when one is due, a delta list say about `c`: (good, status, the
+/// answer, or None when they can't be used). `issuer` is `c`'s CA certificate; `now` the
+/// moment of checking. A delta is required when `delta_due`.
 pub fn evaluate(
     base: &Crl,
     delta: Option<&Crl>,
@@ -256,13 +290,13 @@ pub fn evaluate(
     c: &Cert,
     issuer: &Cert,
     now: i64,
-) -> (bool, Text, Option<CertStatus>) {
-    let no = |s: Text| (false, s, None);
+) -> (bool, ListStatus, Option<CertStatus>) {
+    let no = |s: ListStatus| (false, s, None);
     if base.is_delta {
-        return no(tr("ERROR: the revocation list is not a full list"));
+        return no(ListStatus::NotFullList);
     }
     if let Some(why) = base.unusable(c, issuer, now) {
-        return no(why);
+        return no(ListStatus::Unusable(why));
     }
     if let Some(when) = base.revocation_of(c) {
         return revoked(when);
@@ -270,37 +304,26 @@ pub fn evaluate(
     match delta {
         Some(d) => {
             if !d.is_delta {
-                return no(tr("ERROR: the delta revocation list is not a delta list"));
+                return no(ListStatus::NotDeltaList);
             }
             if let Some(why) = d.unusable(c, issuer, now) {
-                return no(why);
+                return no(ListStatus::Unusable(why));
             }
             if let Some(when) = d.revocation_of(c) {
                 return revoked(when);
             }
         }
         None if delta_due => {
-            return no(tr("ERROR: the delta revocation list could not be read"));
+            return no(ListStatus::DeltaMissing);
         }
         None => {}
     }
     let at = delta.map_or(base.this_update, |d| d.this_update);
-    (
-        true,
-        trf(
-            "GOOD (not in the revocation list of {})",
-            &[&Time(Some(at))],
-        ),
-        Some(CertStatus::Good),
-    )
+    (true, ListStatus::Good { at }, Some(CertStatus::Good))
 }
 
-fn revoked(when: i64) -> (bool, Text, Option<CertStatus>) {
-    (
-        false,
-        trf("REVOKED on {} (revocation list)", &[&Time(Some(when))]),
-        Some(CertStatus::Revoked),
-    )
+fn revoked(at: i64) -> (bool, ListStatus, Option<CertStatus>) {
+    (false, ListStatus::Revoked { at }, Some(CertStatus::Revoked))
 }
 
 #[cfg(test)]

@@ -161,6 +161,62 @@ impl Words for kzcrypto::trust::PathStatus {
     }
 }
 
+impl Words for kzcrypto::crl::ListStatus {
+    fn words(&self) -> kzcrypto::Text {
+        use kzcrypto::crl::{ListStatus as L, Unusable as U};
+        use kzcrypto::text::Time;
+        use kzcrypto::{tr, trf};
+        match self {
+            L::Good { at } => trf(
+                "GOOD (not in the revocation list of {})",
+                &[&Time(Some(*at))],
+            ),
+            L::Revoked { at } => trf("REVOKED on {} (revocation list)", &[&Time(Some(*at))]),
+            L::NotFullList => tr("ERROR: the revocation list is not a full list"),
+            L::NotDeltaList => tr("ERROR: the delta revocation list is not a delta list"),
+            L::DeltaMissing => tr("ERROR: the delta revocation list could not be read"),
+            L::Unusable(U::WrongIssuer) => {
+                tr("ERROR: the revocation list is not from the certificate's CA")
+            }
+            L::Unusable(U::BadSignature) => {
+                tr("ERROR: the revocation list's signature is not valid")
+            }
+            L::Unusable(U::OutOfDate) => tr("ERROR: the revocation list is out of date"),
+            L::Unusable(U::UnknownCritical) => {
+                tr("ERROR: the revocation list has a critical extension kzsigner does not support")
+            }
+            _ => trf("ERROR: {}", &[&tr("unknown problem")]),
+        }
+    }
+}
+
+impl Words for kzcrypto::cert::SigningRefusal {
+    fn words(&self) -> kzcrypto::Text {
+        use kzcrypto::cert::SigningRefusal as R;
+        use kzcrypto::{tr, trf};
+        match self {
+            R::IsCa => tr(
+                "The certificate belongs to a certification authority, not to a person or organization.",
+            ),
+            R::KeyUsage => tr("The certificate's key usage does not allow signing."),
+            R::ServiceCert => tr(
+                "The certificate belongs to a timestamp or OCSP service, not to a person or organization.",
+            ),
+            R::CaPoliciesUnreadable => tr("The CA certificate's policies can't be read."),
+            R::PoliciesUnreadable => tr("The certificate's policies can't be read."),
+            R::PolicyOutsideCa { own, allowed } => trf(
+                "The certificate's policy ({}) is not one of its CA's policies ({}).",
+                &[&own.join(", "), &allowed.join(", ")],
+            ),
+            R::NoPolicy { allowed } => trf(
+                "The certificate names no certificate policy, but its CA issues under {}.",
+                &[&allowed.join(", ")],
+            ),
+            _ => tr("unknown problem"),
+        }
+    }
+}
+
 impl Words for kzcrypto::ocsp::Status {
     fn words(&self) -> kzcrypto::Text {
         use kzcrypto::ocsp::{ResponderProblem as R, Status as S};

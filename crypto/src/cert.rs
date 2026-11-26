@@ -8,7 +8,6 @@ use x509_cert::ext::pkix::{
 
 use crate::keys::PublicKey;
 use crate::prelude::*;
-use crate::text::{Text, tr, trf};
 use crate::{Error, Result};
 
 #[derive(Clone, Debug)]
@@ -342,25 +341,22 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
 /// its CA `issuer` was found) certificate policies outside the CA's. Only the direct issuer's
 /// policies count: NCA's issuing CAs have policies outside their root's. A CA without a
 /// policies extension, or with anyPolicy, sets no rule on policies. None when it may.
-pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<Text> {
+pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<SigningRefusal> {
+    use SigningRefusal as R;
     if c.is_ca() {
-        return Some(tr(
-            "The certificate belongs to a certification authority, not to a person or organization.",
-        ));
+        return Some(R::IsCa);
     }
     if c.key_usage()
         .is_some_and(|k| !k[KU_DIGITAL_SIGNATURE] && !k[KU_NON_REPUDIATION])
     {
-        return Some(tr("The certificate's key usage does not allow signing."));
+        return Some(R::KeyUsage);
     }
     if c.has_eku(EKU_TIME_STAMPING) || c.has_eku(EKU_OCSP_SIGNING) {
-        return Some(tr(
-            "The certificate belongs to a timestamp or OCSP service, not to a person or organization.",
-        ));
+        return Some(R::ServiceCert);
     }
     let allowed = match issuer?.policies()? {
         Ok(a) => a,
-        Err(_) => return Some(tr("The CA certificate's policies can't be read.")),
+        Err(_) => return Some(R::CaPoliciesUnreadable),
     };
     if allowed.iter().any(|p| p == ANY_POLICY) {
         return None;
@@ -375,14 +371,31 @@ pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<Text> {
     };
     match c.policies() {
         Some(Ok(own)) if own.iter().any(under) => None,
-        Some(Ok(own)) if !own.is_empty() => Some(trf(
-            "The certificate's policy ({}) is not one of its CA's policies ({}).",
-            &[&own.join(", "), &allowed.join(", ")],
-        )),
-        Some(Err(_)) => Some(tr("The certificate's policies can't be read.")),
-        _ => Some(trf(
-            "The certificate names no certificate policy, but its CA issues under {}.",
-            &[&allowed.join(", ")],
-        )),
+        Some(Ok(own)) if !own.is_empty() => Some(R::PolicyOutsideCa { own, allowed }),
+        Some(Err(_)) => Some(R::PoliciesUnreadable),
+        _ => Some(R::NoPolicy { allowed }),
     }
+}
+
+/// Why a certificate may not sign documents ([`may_not_sign`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SigningRefusal {
+    /// It is a CA's certificate.
+    IsCa,
+    /// Its key usage allows neither digitalSignature nor nonRepudiation.
+    KeyUsage,
+    /// It is a timestamp or OCSP service's certificate.
+    ServiceCert,
+    /// The CA certificate's policies can't be read.
+    CaPoliciesUnreadable,
+    /// The certificate's policies can't be read.
+    PoliciesUnreadable,
+    /// Its policies (`own`) are outside the CA's (`allowed`).
+    PolicyOutsideCa {
+        own: Vec<String>,
+        allowed: Vec<String>,
+    },
+    /// It names no policy, but its CA issues under `allowed`.
+    NoPolicy { allowed: Vec<String> },
 }
