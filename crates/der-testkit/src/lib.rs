@@ -3,6 +3,17 @@
 //! answers by hand, malformed ones included, and look inside what the code wrote. The code
 //! itself uses RustCrypto's `der`.
 
+#![no_std]
+
+extern crate alloc;
+
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
+
 use kzcrypto::{Error, Result};
 
 pub const BOOLEAN: u8 = 0x01;
@@ -85,7 +96,7 @@ impl<'a> core::ops::Index<core::ops::RangeFrom<usize>> for Items<'a> {
 
 impl<'a> IntoIterator for Items<'a> {
     type Item = Tlv<'a>;
-    type IntoIter = std::vec::IntoIter<Tlv<'a>>;
+    type IntoIter = alloc::vec::IntoIter<Tlv<'a>>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }

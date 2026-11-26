@@ -59,7 +59,7 @@ jobs:
         with:
           key: crypto
       - name: kzcrypto, kzcrypto-nca and gost3410 build without an operating system (no_std)
-        run: cargo build --release --locked -p kzcrypto -p kzcrypto-nca -p gost3410 --target thumbv7em-none-eabihf
+        run: cargo build --release --locked -p kzcrypto -p kzcrypto-nca -p gost3410 -p der-testkit --target thumbv7em-none-eabihf
   build:
     strategy:
       fail-fast: false
