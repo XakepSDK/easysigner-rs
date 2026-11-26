@@ -780,6 +780,8 @@ dependencies = [
 name = "kzsigner-fuzz"
 version = "0.0.0"
 dependencies = [
+ "kzcrypto",
+ "kzcrypto-nca",
  "kzsigner",
  "libfuzzer-sys",
 ]

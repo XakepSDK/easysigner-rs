@@ -16,6 +16,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 kzsigner = { path = ".." }
+kzcrypto = { path = "../crypto" }
+kzcrypto-nca = { path = "../crates/kzcrypto-nca" }
 
 # not part of the main workspace: it needs nightly and libFuzzer
 [workspace]
@@ -38,6 +40,41 @@ bench = false
 [[bin]]
 name = "extract"
 path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cert"
+path = "fuzz_targets/cert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crl"
+path = "fuzz_targets/crl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ocsp"
+path = "fuzz_targets/ocsp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tsp"
+path = "fuzz_targets/tsp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cms"
+path = "fuzz_targets/cms.rs"
 test = false
 doc = false
 bench = false

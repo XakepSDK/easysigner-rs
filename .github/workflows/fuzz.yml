@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [verify, open_key, extract]
+        target: [verify, open_key, extract, cert, crl, ocsp, tsp, cms]
     steps:
       - uses: actions/checkout@v4
       - name: Rust nightly
