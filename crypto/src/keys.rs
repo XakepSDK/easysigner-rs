@@ -327,7 +327,16 @@ impl PrivateKey {
             .unwrap_or(gost::SIG_SHA256_RSA)
     }
 
+    /// Signs `data`. GOST 34.310-2004 keys are refused: NCA no longer issues them and its TSA no
+    /// longer stamps them, so they are only for checking old signatures.
     pub fn sign(&self, data: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>> {
+        if let PrivateKey::Gost { scheme, .. } = self
+            && scheme.key_oid == gost::KEY_GOST2004
+        {
+            return Err(Error::unsupported(
+                "GOST 34.310-2004 keys can no longer sign; they only check old signatures",
+            ));
+        }
         let h = gost::hash(self.digest_oid(), data)?;
         match self {
             PrivateKey::Gost { key, .. } => key.sign_prehash(&h, rng),
@@ -429,7 +438,7 @@ mod tests {
                 Err(Error::of(crate::ErrorKind::Random, "broken"))
             }
         }
-        for name in ["alice_rsa", "alice_gost2015", "alice_gost2004"] {
+        for name in ["alice_rsa", "alice_gost2015", "alice_gost2015_256"] {
             let e = key(name).private_key.sign(b"x", &mut Broken).unwrap_err();
             assert_eq!(e.kind, crate::ErrorKind::Random, "{name}");
             let sig = key(name)
@@ -445,6 +454,18 @@ mod tests {
                     .unwrap()
             );
         }
+    }
+
+    /// GOST 2004 keys only check: signing is refused, checking their old signatures works.
+    #[test]
+    fn gost2004_checks_only() {
+        let k = key("alice_gost2004");
+        let e = k
+            .private_key
+            .sign(b"x", &mut crate::testing::OsRng)
+            .unwrap_err();
+        assert_eq!(e.kind, crate::ErrorKind::Unsupported);
+        assert!(k.private_key.matches(&k.cert.public_key().unwrap()));
     }
 
     #[test]

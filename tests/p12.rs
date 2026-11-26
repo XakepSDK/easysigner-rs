@@ -15,6 +15,11 @@ fn opens_all_fixture_keys() {
                     k.cert.cn(),
                     k.chain.len()
                 );
+                if k.cert.key_alg() == kzsigner::gost::KEY_GOST2004 {
+                    // checks only
+                    assert!(k.private_key.sign(b"hello", &mut kzsigner::OsRng).is_err());
+                    continue;
+                }
                 let sig = k.private_key.sign(b"hello", &mut kzsigner::OsRng).unwrap();
                 assert!(
                     k.cert

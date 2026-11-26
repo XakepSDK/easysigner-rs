@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- заявка -->
+<z:Request xmlns:z="urn:z" xmlns="urn:d" xml:lang="kk">
+  <z:Item n="1">Договор &amp; №7</z:Item>
+  <Empty/>
+</z:Request>

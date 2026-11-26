@@ -96,7 +96,15 @@ fn end_to_end() {
     let doc = "Договор №1 test document\n";
     std::fs::write(t.path("doc.txt"), doc).unwrap();
 
-    for a in ["gost2015", "gost2015_256", "gost2004", "rsa"] {
+    // GOST 2004 keys only check old signatures (tests/fixtures/gost2004, kalkan/)
+    std::fs::write(t.path("d_gost2004.txt"), doc).unwrap();
+    let v = t.kz(&["sign", "-k", &key("alice_gost2004.p12"), "d_gost2004.txt"]);
+    t.check(
+        "gost2004: signing is refused",
+        v.contains("can no longer sign") && !t.path("d_gost2004.txt.cms").exists(),
+    );
+
+    for a in ["gost2015", "gost2015_256", "rsa"] {
         let d = format!("d_{a}.txt");
         std::fs::write(t.path(&d), doc).unwrap();
         let ca = key(&format!("ca_{a}.cer"));
@@ -162,14 +170,14 @@ fn end_to_end() {
     t.check("tampered document is rejected", v.contains("content hash"));
 
     std::fs::copy(t.path("d_rsa.txt.cms"), t.path("mixed.cms")).unwrap();
-    t.kz(&["sign", "-k", &key("alice_gost2004.p12"), "mixed.cms"]);
+    t.kz(&["sign", "-k", &key("alice_gost2015.p12"), "mixed.cms"]);
     let v = t.kz(&[
         "verify",
         "mixed.cms",
         "--trust",
         &key("ca_rsa.cer"),
         "--trust",
-        &key("ca_gost2004.cer"),
+        &key("ca_gost2015.cer"),
     ]);
     t.check(
         "mixed RSA + GOST co-signing (3 signers)",
@@ -297,6 +305,9 @@ fn end_to_end() {
             &format!("kalkan {a}: timestamped file verifies"),
             v.contains("FAKE TEST TSA, signature ok"),
         );
+        if a == "gost2004" {
+            continue; // checks only
+        }
         let kc = format!("k_{a}.cms");
         std::fs::copy(fx.join(format!("cosigned_{a}.cms")), t.path(&kc)).unwrap();
         t.kz(&["sign", "-k", &s(&fx.join(format!("alice_{a}.p12"))), &kc]);
@@ -346,11 +357,17 @@ fn pdf_and_card() {
     let orig = std::fs::read(t.path("plain.pdf")).unwrap();
 
     // PAdES: the signature inside the PDF
-    for (a, f) in [
-        ("rsa", "plain.pdf"),
-        ("gost2015", "objstm.pdf"),
-        ("gost2004", "plain.pdf"),
-    ] {
+    let v = t.kz(&[
+        "verify",
+        &s(&fixtures().join("gost2004/pades.pdf")),
+        "--trust",
+        &key("ca_gost2004.cer"),
+    ]);
+    t.check(
+        "PAdES gost2004: an old two-signer PDF verifies",
+        v.contains("VALID - all 2"),
+    );
+    for (a, f) in [("rsa", "plain.pdf"), ("gost2015", "objstm.pdf")] {
         let out = format!("pades_{a}.pdf");
         t.kz(&[
             "sign",
@@ -1387,7 +1404,31 @@ fn xml() {
     let doc = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- заявка -->\n<z:Request xmlns:z=\"urn:z\" xmlns=\"urn:d\" xml:lang=\"kk\">\n  <z:Item n=\"1\">Договор &amp; №7</z:Item>\n  <Empty/>\n</z:Request>\n";
     std::fs::write(t.path("req.xml"), doc).unwrap();
 
-    for a in ["gost2015", "gost2015_256", "gost2004", "rsa"] {
+    let g04 = fixtures().join("gost2004");
+    let v = t.kz(&[
+        "verify",
+        "--trust",
+        &s(&fixtures().join("keys/ca_gost2004.cer")),
+        &s(&g04.join("signed.xml")),
+    ]);
+    t.check(
+        "xml gost2004: an old signature verifies (XAdES B-B)",
+        v.contains("VALID - all 1") && v.contains("B-B"),
+    );
+    let old = std::fs::read_to_string(g04.join("signed.xml")).unwrap();
+    std::fs::write(t.path("bad04.xml"), old.replace("№7", "№8")).unwrap();
+    let v = t.kz(&[
+        "verify",
+        "--trust",
+        &s(&fixtures().join("keys/ca_gost2004.cer")),
+        "bad04.xml",
+    ]);
+    t.check(
+        "xml gost2004: a changed document is caught",
+        v.contains("NOT VALID") && v.contains("was changed"),
+    );
+
+    for a in ["gost2015", "gost2015_256", "rsa"] {
         let key = s(&fixtures().join(format!("keys/alice_{a}.p12")));
         let ca = s(&fixtures().join(format!("keys/ca_{a}.cer")));
         let out = format!("req-{a}.xml");
@@ -1613,7 +1654,6 @@ fn by_hash() {
     for (a, alg) in [
         ("gost2015", "gost2015"),
         ("gost2015_256", "gost2015-256"),
-        ("gost2004", "gost2004"),
         ("rsa", "sha256"),
     ] {
         let key = s(&fixtures().join(format!("keys/alice_{a}.p12")));
@@ -1634,6 +1674,21 @@ fn by_hash() {
             v.contains("NOT VALID"),
         );
     }
+    let g04 = fixtures().join("gost2004");
+    let v = t.kz(&[
+        "verify",
+        "--trust",
+        &s(&fixtures().join("keys/ca_gost2004.cer")),
+        "--data",
+        &s(&g04.join("doc.txt")),
+        &s(&g04.join("detached.cms")),
+    ]);
+    t.check(
+        "hash gost2004: an old detached signature verifies",
+        v.contains("VALID - all 1"),
+    );
+    let v = t.kz(&["hash", "--alg", "gost2004", "doc.txt"]);
+    t.check("hash: no gost2004 any more", v.contains("unknown --alg"));
     let key = s(&fixtures().join("keys/alice_gost2015.p12"));
     // hex works too; the length must fit the key
     let h = t

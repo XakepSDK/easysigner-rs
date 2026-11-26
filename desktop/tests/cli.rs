@@ -240,7 +240,7 @@ fn network_by_default() {
     ]);
     assert!(ok && !out.contains("Warning"), "{out}");
 
-    // NCA's TSA no longer serves GOST 2004 keys: no default timestamp for them
+    // GOST 2004 keys only check old signatures
     let (ok, out) = run(&[
         "sign",
         "-k",
@@ -252,7 +252,7 @@ fn network_by_default() {
         "c.cms",
         "doc.txt",
     ]);
-    assert!(ok && out.contains("Note: no timestamp"), "{out}");
+    assert!(!ok && out.contains("can no longer sign"), "{out}");
 
     for (args, says) in [
         (&["sign", "--offline", "--tsa", "doc.txt"][..], "contradict"),

@@ -133,7 +133,7 @@ Usage: kzsigner hash [-hV] [--alg=ALG] FILE
 Print FILE's hash in base64, for `kzsigner sign --hash` (signing a document by its hash).
       FILE        The document.
       --alg=ALG   gost2015 (default; GOST 34.11-2015, 512 bits, for GOST 2015 keys),
-                  gost2015-256, gost2004 (GOST 34.311-95, for GOST 2004 keys) or sha256 (RSA).
+                  gost2015-256 or sha256 (RSA).
 ";
 
 const HELP_EXTRACT: &str = "\
@@ -404,16 +404,18 @@ fn tsa_hint(o: &Opts) -> impl Fn(kzsigner::Error) -> Fail + '_ {
     }
 }
 
-/// NCA's timestamp server no longer serves GOST 34.310-2004 keys: the default timestamp is left
-/// out for them, with a note.
-fn skip_tsa_for_gost2004(o: &mut Opts, k: &kzsigner::p12::Key) {
-    if o.tsa_default && k.cert.key_alg() == kzsigner::gost::KEY_GOST2004 {
-        o.tsa = None;
-        o.tsa_default = false;
-        println!(
-            "Note: no timestamp: NCA's timestamp server no longer serves GOST 34.310-2004 keys."
+/// GOST 34.310-2004 keys only check old signatures: they are refused before anything is signed
+/// (kzcrypto refuses them too).
+fn refuse_gost2004(k: &kzsigner::p12::Key) -> R<()> {
+    if k.cert.key_alg() == kzsigner::gost::KEY_GOST2004 {
+        return Err(
+            kzsigner::Error::from(kzsigner::kzcrypto::Error::unsupported(
+                "GOST 34.310-2004 keys can no longer sign; they only check old signatures",
+            ))
+            .into(),
         );
     }
+    Ok(())
 }
 
 fn print_version() {
@@ -517,7 +519,7 @@ fn sign(mut o: Opts) -> R<u8> {
         )));
     }
     let original = o.data.as_deref().map(read).transpose()?;
-    skip_tsa_for_gost2004(&mut o, &k);
+    refuse_gost2004(&k)?;
     let hint = tsa_hint(&o);
     // a long-term signature needs a timestamp
     let tsa = o
@@ -697,7 +699,7 @@ fn verify(mut o: Opts) -> R<u8> {
 }
 
 /// sign --hash: a detached .cms from a document's hash.
-fn sign_hash(mut o: Opts) -> R<u8> {
+fn sign_hash(o: Opts) -> R<u8> {
     let value = o.hash.as_deref().unwrap_or_default();
     // (--detached is allowed: the .cms is detached anyway)
     if o.file.is_some()
@@ -730,7 +732,7 @@ fn sign_hash(mut o: Opts) -> R<u8> {
     }
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
-    skip_tsa_for_gost2004(&mut o, &k);
+    refuse_gost2004(&k)?;
     let tsa = o
         .tsa
         .clone()
@@ -782,11 +784,10 @@ fn hash(o: Opts) -> R<u8> {
     let alg = match o.alg.as_deref().unwrap_or("gost2015") {
         "gost2015" | "gost2015-512" => kzsigner::gost::H_GOST2015_512,
         "gost2015-256" => kzsigner::gost::H_GOST2015_256,
-        "gost2004" => kzsigner::gost::H_GOST34311,
         "sha256" => kzsigner::gost::H_SHA256,
         other => {
             return Err(Fail::Usage(
-                format!("unknown --alg {other} (use gost2015, gost2015-256, gost2004 or sha256)"),
+                format!("unknown --alg {other} (use gost2015, gost2015-256 or sha256)"),
                 HELP_HASH,
             ));
         }

@@ -5,8 +5,9 @@ One small executable with no runtime: 5.5 MB on Linux (1.7 MB tar.xz), 6.4 MB on
 (2.7 MB zip). The window and command line are the `desktop` crate; the signing core is the
 `kzsigner` library at the root.
 
-It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256),
-GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also sign without the
+It signs, co-signs, verifies and extracts `.cms` files made with GOST 34.10-2015 (512 and 256)
+and RSA keys, and files made by NCALayer / Kalkan. GOST 34.310-2004 keys only check: their old
+signatures verify, but they no longer sign (NCA stopped issuing them and its TSA stamping them). It can also sign without the
 `.cms` wrapper, so the result opens like any document:
 
 * **Inside a PDF** (PAdES, `--pdf`): the signature goes into the PDF itself, which still opens in
@@ -51,8 +52,7 @@ GOST 34.310-2004 and RSA keys, and files made by NCALayer / Kalkan. It can also 
 The network is used for an NCA timestamp and the NCA revocation check (and the CAs'
 revocation lists when OCSP gives no answer), as Order 500/НҚ asks: `sign` gets both by
 default, and `verify` checks revocation. `--no-tsa`, `--no-ocsp` or `--offline` (both) turn
-them off; a card and a long-term signature always need them. GOST 34.310-2004 keys get no
-default timestamp, since NCA no longer serves them.
+them off; a card and a long-term signature always need them.
 
 ### What is checked (Order 500/НҚ)
 
@@ -301,7 +301,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `desktop/tests/e2e.rs`: end-to-end checks against the built executable. It uses throwaway test keys
   (`tests/fixtures/keys`), a fake local timestamp server, and files and keys made by NCA's own
   Kalkan library (`tests/fixtures/kalkan`).
-* `desktop/tests/e2e.rs` also signs PDFs (RSA, GOST 2015, GOST 2004; co-signing; changed files) and makes,
+* `desktop/tests/e2e.rs` also signs PDFs (RSA, GOST 2015; co-signing; changed files), checks old GOST 2004 PDF, XML and CMS signatures (`tests/fixtures/gost2004`) and makes,
   co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
   CA (`tests/fixtures/ocsp`, made with openssl), QR codes read back, and a revoked certificate
   refused. Test PDFs are in `tests/fixtures/pdf`.
