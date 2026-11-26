@@ -86,14 +86,15 @@ fn pick(
         .collect();
     let alias = wanted_alias
         .map(str::to_string)
-        .unwrap_or_else(|| aliases[0].clone());
+        .or_else(|| aliases.first().cloned())
+        .unwrap_or_default();
     let Some(idx) = aliases.iter().position(|a| *a == alias) else {
         return Err(Error::NoSuchAlias {
             alias,
             available: aliases,
         });
     };
-    let kb = &keys[idx];
+    let kb = keys.get(idx).ok_or(Error::NoPrivateKey)?;
     let private_key = PrivateKey::from_pkcs8(&kb.value)?;
     let pool: Vec<Cert> = certs.iter().map(|b| b.value.clone()).collect();
     let mut leaf = None;

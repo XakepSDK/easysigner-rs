@@ -401,6 +401,12 @@ fn check_responder(
 /// Test helpers for this crate's and the application's tests: test keys, certificates issued
 /// on the spot, and OCSP answers made to order. Not for production (feature `testkit`).
 #[cfg(any(test, feature = "testkit"))]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 pub mod testkit {
     extern crate std;
 

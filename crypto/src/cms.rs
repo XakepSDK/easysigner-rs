@@ -225,7 +225,9 @@ impl SignedData {
         };
         // [1] IMPLICIT SET OF: read as the SET it stands for
         let mut set = c.clone();
-        set[0] = 0x31;
+        if let Some(t) = set.first_mut() {
+            *t = 0x31;
+        }
         ber::<SetOfVec<Any>>(&set)
             .map(|s| s.iter().filter_map(|i| asn1::der(i).ok()).collect())
             .unwrap_or_default()
@@ -423,7 +425,9 @@ impl SignerInfo {
         match &self.signed_attrs {
             Some(a) => {
                 let mut v = a.clone();
-                v[0] = 0x31; // SET
+                if let Some(t) = v.first_mut() {
+                    *t = 0x31; // SET
+                }
                 alloc::borrow::Cow::Owned(v)
             }
             None => alloc::borrow::Cow::Borrowed(content),

@@ -115,7 +115,7 @@ pub fn digest_len(oid: &str) -> Result<usize> {
 }
 
 pub fn sha256(data: &[u8]) -> Vec<u8> {
-    hash(H_SHA256, data).expect("SHA-256")
+    <sha2::Sha256 as digest::Digest>::digest(data).to_vec()
 }
 
 #[cfg(test)]

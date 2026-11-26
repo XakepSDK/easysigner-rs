@@ -17,6 +17,22 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+// malformed input is an error, never a panic (with panic = "abort" a panic ends the caller)
+#![warn(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
 
 extern crate alloc;
 #[cfg(test)]

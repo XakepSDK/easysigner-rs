@@ -147,8 +147,12 @@ pub fn validate(req: &Request, token: &[u8]) -> Result<()> {
     let sd = SignedData::parse_inner(token)?;
     let info = TstInfo::parse(sd.content.as_deref().ok_or(Error::NoContent)?)?;
     let strip = |n: &Option<Vec<u8>>| {
-        n.as_deref()
-            .map(|b| b[b.iter().position(|&x| x != 0).unwrap_or(b.len())..].to_vec())
+        n.as_deref().map(|b| {
+            b.iter()
+                .skip_while(|&&x| x == 0)
+                .copied()
+                .collect::<Vec<u8>>()
+        })
     };
     if req.nonce.is_some() && strip(&info.nonce) != strip(&req.nonce) {
         return Err(Error::WrongNonce);
@@ -207,13 +211,12 @@ impl TokenCheck {
 /// An error: the token can't be read or is not a timestamp token.
 pub fn check_token(stamped: &[u8], token: &[u8], trust: &TrustStore) -> Result<TokenCheck> {
     let sd = SignedData::parse_inner(token)?;
-    if sd.signers.len() != 1 {
+    let [tsi] = sd.signers.as_slice() else {
         return Err(Error::MultipleSigners);
-    }
+    };
     if sd.content_type != TST_INFO {
         return Err(Error::NotTstInfo);
     }
-    let tsi = &sd.signers[0];
     if tsi.signed_attr(ATTR_SIGNING_CERT).is_none()
         && tsi.signed_attr(ATTR_SIGNING_CERT_V2).is_none()
     {

@@ -10,6 +10,21 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+#![warn(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
 
 extern crate alloc;
 #[cfg(test)]
@@ -152,7 +167,7 @@ pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<SigningRefusal> {
         return Some(R::IsCa);
     }
     if c.key_usage()
-        .is_some_and(|k| !k[KU_DIGITAL_SIGNATURE] && !k[KU_NON_REPUDIATION])
+        .is_some_and(|k| !bit(&k, KU_DIGITAL_SIGNATURE) && !bit(&k, KU_NON_REPUDIATION))
     {
         return Some(R::KeyUsage);
     }
@@ -180,6 +195,11 @@ pub fn may_not_sign(c: &Cert, issuer: Option<&Cert>) -> Option<SigningRefusal> {
         Some(Err(_)) => Some(R::PoliciesUnreadable),
         _ => Some(R::NoPolicy { allowed }),
     }
+}
+
+/// Whether key usage bit `n` is set (a bit past the end is not).
+fn bit(k: &[bool], n: usize) -> bool {
+    k.get(n).copied().unwrap_or(false)
 }
 
 /// Why a certificate may not sign documents ([`may_not_sign`]).

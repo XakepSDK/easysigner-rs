@@ -83,7 +83,7 @@ pub fn parse_asn1(tag: Tag, content: &[u8]) -> Result<i64> {
     let mi = num(rest + 6, rest + 8)?;
     let mut i = rest + 8;
     let mut sec = 0;
-    if s.len() >= i + 2 && s.as_bytes()[i].is_ascii_digit() {
+    if s.len() >= i + 2 && s.as_bytes().get(i).is_some_and(u8::is_ascii_digit) {
         sec = num(i, i + 2)?;
         i += 2;
     }
@@ -91,10 +91,10 @@ pub fn parse_asn1(tag: Tag, content: &[u8]) -> Result<i64> {
     if s.as_bytes().get(i) == Some(&b'.') || s.as_bytes().get(i) == Some(&b',') {
         let start = i + 1;
         let mut end = start;
-        while end < s.len() && s.as_bytes()[end].is_ascii_digit() {
+        while s.as_bytes().get(end).is_some_and(u8::is_ascii_digit) {
             end += 1;
         }
-        let frac = &s[start..end];
+        let frac = s.get(start..end).ok_or_else(bad_time)?;
         let f3: String = frac.chars().chain("000".chars()).take(3).collect();
         ms = f3.parse::<i64>().map_err(|_| bad_time())?;
         i = end;
@@ -103,7 +103,11 @@ pub fn parse_asn1(tag: Tag, content: &[u8]) -> Result<i64> {
     match s.as_bytes().get(i) {
         Some(b'Z') | None => {}
         Some(b'+') | Some(b'-') => {
-            let sign = if s.as_bytes()[i] == b'+' { 1 } else { -1 };
+            let sign = if s.as_bytes().get(i) == Some(&b'+') {
+                1
+            } else {
+                -1
+            };
             offset_min = sign * (num(i + 1, i + 3)? * 60 + num(i + 3, i + 5).unwrap_or(0));
         }
         _ => return Err(bad_time()),

@@ -297,7 +297,7 @@ impl PrivateKey {
             let mut d = zeroize::Zeroizing::new(match v.tag() {
                 ::der::Tag::Integer => {
                     let mut be = v.value().to_vec();
-                    while be.len() > 1 && be[0] == 0 {
+                    while be.len() > 1 && be.first() == Some(&0) {
                         be.remove(0);
                     }
                     be.reverse();

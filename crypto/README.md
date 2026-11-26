@@ -53,6 +53,13 @@ What the caller does:
 `Error::kind()` gives the broad class (`Malformed`, `Unsupported`, `WrongPassword`, `Random`,
 `Other`) and `Error::code()` a stable number for each variant, for logs and other languages.
 
+## No panics
+
+Malformed input is an error, never a panic: with `panic = "abort"` a panic would end the
+caller's process. Library code (this crate, `kzcrypto-nca` and `gost3410`) may not index or
+slice, `unwrap`, `expect` or `panic!` (clippy's `indexing_slicing`, `unwrap_used`,
+`expect_used` and `panic`, which CI turns into errors). Tests and the `testkit` helpers may.
+
 ## Size
 
 The release profile uses `opt-level = "z"`, LTO, one codegen unit, `panic = "abort"` and
@@ -60,8 +67,5 @@ stripping.
 
 ## Known gaps (follow-ups)
 
-* **Panics on malformed input.** Some parsers index slices directly, so a malformed file can
-  panic, and with `panic = "abort"` that ends the process. The plan is to deny
-  `clippy::indexing_slicing` in this crate and return `ErrorKind::Malformed` instead.
 * **Fixtures.** The tests read `../tests/fixtures`. Moving the crate to its own repository means
   copying the keys, CA certificates and NCA captures it uses.

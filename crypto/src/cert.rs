@@ -193,7 +193,8 @@ impl Cert {
 
     /// Whether key usage allows signing certificates (true without the extension).
     pub fn may_sign_certs(&self) -> bool {
-        self.key_usage().is_none_or(|k| k[KU_KEY_CERT_SIGN])
+        self.key_usage()
+            .is_none_or(|k| k.get(KU_KEY_CERT_SIGN).copied().unwrap_or(false))
     }
 
     pub fn serial_hex(&self) -> String {
@@ -253,15 +254,21 @@ fn value_text(v: &Any) -> String {
         Tag::BmpString => {
             let u: Vec<u16> = c
                 .chunks(2)
-                .map(|p| u16::from_be_bytes([p[0], *p.get(1).unwrap_or(&0)]))
+                .map(|p| {
+                    u16::from_be_bytes([
+                        p.first().copied().unwrap_or(0),
+                        p.get(1).copied().unwrap_or(0),
+                    ])
+                })
                 .collect();
             String::from_utf16_lossy(&u)
         }
         // UniversalString
         t if t.is_universal() && t.number().value() == 0x1c => c
-            .chunks(4)
-            .filter(|&p| p.len() == 4)
-            .map(|p| u32::from_be_bytes([p[0], p[1], p[2], p[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u32::from_be_bytes(*p))
             .map(|u| char::from_u32(u).unwrap_or('\u{fffd}'))
             .collect(),
         _ => {
