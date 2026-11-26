@@ -13,7 +13,8 @@
 # ~/.cache/kzsigner-gradle, or taken from KZSIGNER_GRADLE. Two builds of a commit give the same
 # APK.
 #
-# KZSIGNER_CHECKS=1 also runs the app's JVM unit tests and Android Lint.
+# KZSIGNER_CHECKS=1 also runs the app's JVM unit tests, their mutation tests (Pitest) and Android
+# Lint.
 #
 # KZSIGNER_UITEST=1 also builds the emulator tests (UI Automator, android/uitest) as
 # target/apk-uitest/kzsigner-uitest.apk, and the app they drive: the same app with the test
@@ -39,9 +40,9 @@ TASKS=":compose:assembleRelease"
 if [ -n "${KZSIGNER_UITEST:-}" ]; then
     TASKS="$TASKS :compose:assembleUitest :uitest:assembleDebug"
 fi
-# KZSIGNER_CHECKS=1: also the JVM unit tests (android/compose/src/test) and Android Lint, all checks
+# KZSIGNER_CHECKS=1: also the JVM unit tests (android/compose/src/test), Pitest and Android Lint
 if [ -n "${KZSIGNER_CHECKS:-}" ]; then
-    TASKS="$TASKS :compose:testDebugUnitTest :compose:lintRelease"
+    TASKS="$TASKS :compose:testDebugUnitTest :compose:pitest :compose:lintRelease"
 fi
 FFI=target/android-ffi
 OUT=dist/kzsigner-$V-android.apk

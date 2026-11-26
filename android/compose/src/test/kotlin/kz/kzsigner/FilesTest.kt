@@ -48,6 +48,19 @@ class FilesTest {
     }
 
     @Test
+    fun mimeOfOtherFilesFromThePhonesList() {
+        val asked = mutableListOf<String>()
+        val list = { ext: String ->
+            asked += ext
+            if (ext == "pdf") "application/pdf" else null
+        }
+        assertEquals("application/pdf", Files.mime("Договор.PDF", list))
+        assertEquals("application/octet-stream", Files.mime("a.unknown", list))
+        assertEquals("application/octet-stream", Files.mime("no-extension", list))
+        assertEquals(listOf("pdf", "unknown", ""), asked)
+    }
+
+    @Test
     fun readAtMostTakesUpToTheLimit() {
         val max = 20_000
         for (n in listOf(0, 1, 8191, 8192, 8193, max - 1, max)) {
@@ -63,9 +76,11 @@ class FilesTest {
 
     @Test
     fun readAtMostReadsNoMoreThanItNeeds() {
-        val s = CountingStream(1_000_000)
-        assertNull(Files.readAtMost(s, 10))
-        assertEquals("one byte past the limit", 11, s.taken)
+        for (max in listOf(0, 10, 8191, 8192, 10_000, 3 * 8192)) {
+            val s = CountingStream(1_000_000)
+            assertNull(Files.readAtMost(s, max))
+            assertEquals("one byte past $max", max + 1, s.taken)
+        }
     }
 
     /** [size] zero bytes, counting what was read. */

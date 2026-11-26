@@ -35,7 +35,7 @@ object Files {
         val buf = ByteArray(8192)
         while (out.size() <= max) {
             val n = input.read(buf, 0, minOf(buf.size, max + 1 - out.size()))
-            if (n < 0) break
+            if (n == -1) break
             out.write(buf, 0, n)
         }
         return if (out.size() > max) null else out.toByteArray()
@@ -44,13 +44,14 @@ object Files {
     /** A file name with nothing that could leave the folder. */
     fun safe(name: String): String = name.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_").trim('.', ' ').ifEmpty { "document" }
 
-    fun mime(name: String): String {
+    /** The media type of a file called [name]; [lookup] knows the common ones (the phone's list). */
+    fun mime(name: String, lookup: (String) -> String? = { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }): String {
         val ext = name.substringAfterLast('.', "").lowercase()
         return when (ext) {
             "cms", "p7s", "sig" -> "application/pkcs7-signature"
             "p7m" -> "application/pkcs7-mime"
             "xml" -> "text/xml"
-            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+            else -> lookup(ext) ?: "application/octet-stream"
         }
     }
 

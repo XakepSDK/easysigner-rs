@@ -33,6 +33,7 @@ private fun checked(name: String, verdict: Verdict = Verdict.VALID) = Checked(ve
 private class FakeDocuments : Documents {
     val asked = mutableListOf<String>()
     var gate: CompletableDeferred<Unit>? = null
+    var during: () -> Unit = {}
 
     override fun inspect(name: String, bytes: ByteArray): Doc {
         asked += "inspect $name"
@@ -41,6 +42,7 @@ private class FakeDocuments : Documents {
 
     override fun check(name: String, bytes: ByteArray, original: ByteArray?, lang: String): Checked {
         asked += "check $name ${bytes.size} ${original?.size} $lang"
+        during()
         gate?.let { runBlocking { it.await() } }
         return checked(name)
     }
@@ -88,6 +90,21 @@ class CheckFlowTest {
         assertArrayEquals(byteArrayOf(1, 2), f.file?.bytes)
         f.check("ru")
         assertEquals("check a.cms 2 3 ru", docs.asked.last())
+
+        // checking again: no stale result while it runs
+        var whileChecking: Checked? = checked("stale")
+        docs.during = { whileChecking = f.result }
+        f.check("en")
+        assertNull(whileChecking)
+        assertEquals("a.cms", f.result?.documentName)
+
+        // another file: the last result goes
+        f.start("b.pdf", byteArrayOf(5))
+        assertNull(f.result)
+        assertEquals("b.pdf", f.file?.name)
+        assertNull(f.file?.original)
+        f.check("en")
+        assertEquals("b.pdf", f.result?.documentName)
 
         f.close()
         assertNull(f.file)
@@ -139,6 +156,15 @@ class SignFlowTest {
         f.close()
         assertNull(f.document)
         assertNull(f.signed)
+    }
+
+    @Test
+    fun addingAKeyFirst() {
+        val f = SignFlow(FakeDocuments(), EmptyCoroutineContext) { null }
+        assertFalse(f.signAfterAdd || f.pickDocument)
+        f.signAfterAdd = true
+        f.pickDocument = true
+        assertTrue(f.signAfterAdd && f.pickDocument)
     }
 
     @Test

@@ -116,6 +116,9 @@ android {
     }
 }
 
+// Pitest, for the pitest task below
+val pitest: Configuration by configurations.creating
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.11.01"))
     implementation("androidx.compose.material3:material3:1.5.0")
@@ -131,4 +134,45 @@ dependencies {
 
     // JVM unit tests (src/test): plain logic, no phone needed
     testImplementation("junit:junit:4.13.2")
+    pitest("org.pitest:pitest-command-line:1.30.2")
+}
+
+// Mutation testing of the logic the JVM tests cover (Pitest): `gradle :compose:pitest` changes
+// the compiled classes one way at a time and expects a test to fail each time; the report goes
+// to target/gradle-compose/reports/pitest. Compose screens and the code that needs a phone or
+// the Rust library are left out: the emulator tests (android/uitest) cover those.
+val pitestClasses = listOf("kz.kzsigner.CheckFlow*", "kz.kzsigner.SignFlow*", "kz.kzsigner.Files")
+tasks.register<JavaExec>("pitest") {
+    group = "verification"
+    description = "Mutation tests for the JVM-tested logic (Pitest)"
+    val unitTests = tasks.named<Test>("testDebugUnitTest")
+    dependsOn(unitTests)
+    classpath = pitest
+    mainClass = "org.pitest.mutationtest.commandline.MutationCoverageReport"
+    val report = layout.buildDirectory.dir("reports/pitest")
+    doFirst {
+        // the app's classes as a folder (the tests' classpath has them as a jar, which Pitest
+        // doesn't mutate)
+        val main = tasks.named("compileDebugKotlin").get().outputs.files.filter { File(it, "kz/kzsigner").isDirectory }
+        val cp = (main.files + unitTests.get().classpath.files.filter { it.exists() }).joinToString(",")
+        args(
+            "--reportDir", report.get().asFile.path,
+            "--targetClasses", pitestClasses.joinToString(","),
+            "--targetTests", "kz.kzsigner.*Test",
+            "--excludedClasses", "kz.kzsigner.*Test*",
+            // what needs a phone (Context, MimeTypeMap): the emulator tests cover it
+            "--excludedMethods", "share,send,view,uri",
+            // Kotlin's own null checks and coroutine machinery (no test can tell them apart), and
+            // the phone's own lists (android.webkit)
+            "--avoidCallsTo", "kotlin.jvm.internal,kotlin.ResultKt,kotlin.coroutines.intrinsics,android.webkit",
+            "--sourceDirs", file("src/main/kotlin").path,
+            "--classPath", cp,
+            "--mutableCodePaths", main.asPath.replace(File.pathSeparator, ","),
+            "--outputFormats", "HTML,XML",
+            "--timestampedReports", "false",
+            // the survivors allowed: a suspend function's Unit return replaced with null, which
+            // its callers can't see (SignFlow.open, CheckFlow.check twice)
+            "--maxSurviving", "3"
+        )
+    }
 }

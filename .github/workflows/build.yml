@@ -234,7 +234,7 @@ jobs:
           curl -sSfL -o "$RUNNER_TEMP/ktlint.jar" https://repo1.maven.org/maven2/com/pinterest/ktlint/ktlint-cli/1.8.0/ktlint-cli-1.8.0-all.jar
           echo "369ad2b789f95a011f807e1fcb690ccef80bd7cd014fd139e73ae82dcc0baeab  $RUNNER_TEMP/ktlint.jar" | sha256sum -c -
           cd android && java -jar "$RUNNER_TEMP/ktlint.jar" 'compose/src/**/*.kt' '*.kts' 'compose/*.kts' 'uitest/*.kts'
-      - name: Build the APK, and the emulator tests; the app's unit tests and Android Lint
+      - name: Build the APK, and the emulator tests; the app's unit tests, Pitest and Android Lint
         env:
           KZSIGNER_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KZSIGNER_UITEST: 1
