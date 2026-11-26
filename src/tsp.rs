@@ -137,7 +137,7 @@ mod tests {
             let f = |n: &str| std::fs::read(format!("{dir}/{case}/{n}")).unwrap();
             let req = Request::parse(&f("tsq.der")).unwrap();
             let resp = f("tsr.der");
-            let token = read_response(&resp).unwrap();
+            let token = &read_response(&resp).unwrap()[..];
             kzcrypto::tsp::validate(&req, token).unwrap_or_else(|e| panic!("{case}: {e}"));
             let mut sr = SignerReport::default();
             check_token(&mut sr, &f("data.bin"), token, &env).unwrap();
@@ -189,7 +189,7 @@ mod tests {
         let env = Env::new(TrustStore::new(vec![]));
         let case = "gost2015-policy-6.4";
         let resp = live(case, "tsr.der");
-        let token = read_response(&resp).unwrap();
+        let token = &read_response(&resp).unwrap()[..];
         let mut data = live(case, "data.bin");
         let mut sr = SignerReport::default();
         check_token(&mut sr, &data, token, &env).unwrap();

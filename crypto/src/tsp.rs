@@ -3,9 +3,14 @@
 
 use crate::cert::{self, Cert};
 use crate::cms::{ATTR_SIGNING_CERT, ATTR_SIGNING_CERT_V2, SignedData};
-use crate::der::{self, Tlv};
+use ::der::asn1::{Int, ObjectIdentifier, OctetString};
+use ::der::{Decode, Encode};
+use spki::AlgorithmIdentifier;
+use x509_tsp::cmpv2::status::PkiStatus;
+use x509_tsp::{MessageImprint, TimeStampReq, TimeStampResp, TspVersion};
+
+use crate::der;
 use crate::gost::{self, Scheme};
-use crate::keys::alg_id;
 use crate::prelude::*;
 use crate::text::trf;
 use crate::trust::{Chain, TrustStore};
@@ -26,25 +31,51 @@ pub struct TstInfo {
 }
 
 impl TstInfo {
+    /// From a token's encapsulated content (DER), read by `x509-tsp`.
     pub fn parse(data: &[u8]) -> Result<TstInfo> {
-        let k = der::parse(data)?.items(der::SEQUENCE)?;
-        if k.len() < 5 {
-            return Err(Error::new("TSTInfo too short"));
-        }
-        let mi = k[2].items(der::SEQUENCE)?;
-        let nonce = k[5..]
-            .iter()
-            .find(|t| t.tag == der::INTEGER)
-            .map(|t| t.uint().map(<[u8]>::to_vec))
-            .transpose()?;
+        let t = x509_tsp::TstInfo::from_der(data).map_err(asn1)?;
+        let ms = i64::try_from(t.gen_time.to_unix_duration().as_millis())
+            .map_err(|_| Error::malformed("TSTInfo time out of range"))?;
         Ok(TstInfo {
-            policy: k[1].oid()?,
-            imprint_alg: alg_id(&mi[0])?.0,
-            imprint: mi[1].octets()?,
-            gen_time: k[4].time()?,
-            nonce,
+            policy: t.policy.to_string(),
+            imprint_alg: t.message_imprint.hash_algorithm.oid.to_string(),
+            imprint: t.message_imprint.hashed_message.as_bytes().to_vec(),
+            gen_time: ms,
+            nonce: t.nonce.map(|n| strip_zeros(n.as_bytes()).to_vec()),
         })
     }
+}
+
+fn asn1(e: ::der::Error) -> Error {
+    Error::malformed(format!("malformed ASN.1: {e}"))
+}
+
+/// An INTEGER's content without leading zero bytes (one zero for zero).
+fn strip_zeros(mut b: &[u8]) -> &[u8] {
+    while let [0, rest @ ..] = b
+        && !rest.is_empty()
+    {
+        b = rest;
+    }
+    b
+}
+
+/// An OID that [`der::check_oid`] has accepted.
+fn oid(s: &str) -> Result<ObjectIdentifier> {
+    der::check_oid(s)?;
+    ObjectIdentifier::new(s)
+        .map_err(|_| Error::malformed(trf("'{}' is not an object identifier", &[&s])))
+}
+
+/// A positive INTEGER from unsigned big-endian bytes.
+fn positive(n: &[u8]) -> Result<Int> {
+    let n = strip_zeros(n);
+    let mut b = Vec::with_capacity(n.len() + 1);
+    if n.first().is_none_or(|&x| x & 0x80 != 0) {
+        b.push(0);
+    }
+    b.extend(n);
+    Int::new(&b).map_err(asn1)
 }
 
 /// A timestamp request (TimeStampReq).
@@ -80,50 +111,34 @@ impl Request {
 
     /// Fails when `hash_oid` or `policy` is not an object identifier.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        der::check_oid(&self.hash_oid)?;
-        if let Some(p) = &self.policy {
-            der::check_oid(p)?;
-        }
-        let mut b = der::small_int(1);
-        // the hash algorithm without parameters, as Bouncy Castle (NCALayer's library) writes it
-        b.extend(der::seq(&[
-            &der::seq(&[&der::oid(&self.hash_oid)]),
-            &der::octets(&self.hash),
-        ]));
-        if let Some(p) = &self.policy {
-            b.extend(der::oid(p));
-        }
-        if let Some(n) = &self.nonce {
-            b.extend(der::uint(n));
-        }
-        if self.cert_req {
-            b.extend(der::boolean(true));
-        }
-        Ok(der::tlv(der::SEQUENCE, &b))
+        let req = TimeStampReq {
+            version: TspVersion::V1,
+            // the hash algorithm without parameters, as Bouncy Castle (NCALayer's library)
+            // writes it
+            message_imprint: MessageImprint {
+                hash_algorithm: AlgorithmIdentifier {
+                    oid: oid(&self.hash_oid)?,
+                    parameters: None,
+                },
+                hashed_message: OctetString::new(self.hash.clone()).map_err(asn1)?,
+            },
+            req_policy: self.policy.as_deref().map(oid).transpose()?,
+            nonce: self.nonce.as_deref().map(positive).transpose()?,
+            cert_req: self.cert_req,
+            extensions: None,
+        };
+        req.to_der().map_err(asn1)
     }
 
     pub fn parse(data: &[u8]) -> Result<Request> {
-        let k = der::parse(data)?.items(der::SEQUENCE)?;
-        let mi = k
-            .get(1)
-            .ok_or_else(|| Error::new("bad timestamp request"))?
-            .items(der::SEQUENCE)?;
-        let mut r = Request {
-            hash_oid: alg_id(&mi[0])?.0,
-            hash: mi[1].octets()?,
-            policy: None,
-            nonce: None,
-            cert_req: false,
-        };
-        for t in &k[2..] {
-            match t.tag {
-                der::OID => r.policy = Some(t.oid()?),
-                der::INTEGER => r.nonce = Some(t.uint()?.to_vec()),
-                der::BOOLEAN => r.cert_req = t.boolean()?,
-                _ => {}
-            }
-        }
-        Ok(r)
+        let r = TimeStampReq::from_der(data).map_err(asn1)?;
+        Ok(Request {
+            hash_oid: r.message_imprint.hash_algorithm.oid.to_string(),
+            hash: r.message_imprint.hashed_message.as_bytes().to_vec(),
+            policy: r.req_policy.map(|p| p.to_string()),
+            nonce: r.nonce.map(|n| strip_zeros(n.as_bytes()).to_vec()),
+            cert_req: r.cert_req,
+        })
     }
 }
 
@@ -147,13 +162,13 @@ pub fn hash_and_policy_for(key_alg: &str) -> (&'static str, &'static str) {
 /// The checked token (a ContentInfo, as encoded) in the TSA's answer `resp` to `req`.
 pub fn read_answer(req: &Request, resp: &[u8]) -> Result<Vec<u8>> {
     let token = read_response(resp)?;
-    validate(req, token).map_err(|e| {
+    validate(req, &token).map_err(|e| {
         Error::new(trf(
             "The timestamp server's answer does not match the request: {}",
             &[&e],
         ))
     })?;
-    Ok(token.to_vec())
+    Ok(token)
 }
 
 /// The certificate that signed a timestamp token, when the token carries it.
@@ -162,36 +177,29 @@ pub fn token_cert(token: &[u8]) -> Option<Cert> {
     sd.signers.first().and_then(|s| sd.signer_cert(s))
 }
 
-/// The token (a ContentInfo, as encoded) from a TimeStampResp.
-pub fn read_response(resp: &[u8]) -> Result<&[u8]> {
-    let bad = |e: Error| {
+/// The token (a ContentInfo, DER) from a TimeStampResp.
+pub fn read_response(resp: &[u8]) -> Result<Vec<u8>> {
+    let bad = |e: ::der::Error| {
         Error::of(
             ErrorKind::Malformed,
-            trf("The timestamp server's answer is unreadable ({})", &[&e]),
+            trf(
+                "The timestamp server's answer is unreadable ({})",
+                &[&format!("{e}")],
+            ),
         )
     };
-    let k = der::parse(resp)
-        .and_then(|t| t.items(der::SEQUENCE))
+    let r = TimeStampResp::from_der(resp)
+        .or_else(|_| TimeStampResp::from_ber(resp))
         .map_err(bad)?;
-    let status = k
-        .first()
-        .ok_or_else(|| bad(Error::new("empty")))?
-        .items(der::SEQUENCE)
-        .map_err(bad)?;
-    let code = status
-        .first()
-        .map(|s| s.small_int())
-        .transpose()
-        .map_err(bad)?
-        .unwrap_or(2);
-    match k.get(1) {
-        Some(tok) if code == 0 || code == 1 => Ok(tok.raw),
+    match (r.status.status, r.time_stamp_token) {
+        (PkiStatus::Accepted | PkiStatus::GrantedWithMods, Some(tok)) => tok.to_der().map_err(bad),
         _ => {
-            let text = status
-                .get(1)
-                .filter(|t| t.tag == der::SEQUENCE)
-                .and_then(|t| t.children().ok())
-                .and_then(|c| c.first().and_then(Tlv::text));
+            let text = r
+                .status
+                .status_string
+                .as_ref()
+                .and_then(|t| t.first())
+                .map(|t| t.as_str().to_string());
             Err(Error::new(trf(
                 "The timestamp server refused the request{}",
                 &[&text.map(|t| format!(": {t}")).unwrap_or_default()],
@@ -326,7 +334,7 @@ mod tests {
     fn answers_must_match_the_request() {
         let case = "sha256-policy-6.2";
         let resp = live(case, "tsr.der");
-        let token = read_response(&resp).unwrap();
+        let token = &read_response(&resp).unwrap()[..];
         let req = || Request::parse(&live(case, "tsq.der")).unwrap();
         assert!(req().cert_req && req().nonce.is_some() && req().policy.is_some());
         validate(&req(), token).unwrap();
@@ -398,7 +406,10 @@ mod tests {
 
         // granted (0) and granted with modifications (1) give the token; anything else is a
         // refusal, even with a token
-        let token = der::seq(&[&der::small_int(5)]);
+        let token = der::seq(&[
+            &der::oid(crate::cms::SIGNED_DATA),
+            &der::tlv(der::ctx(0), &der::null()),
+        ]);
         for (code, ok) in [(0, true), (1, true), (2, false), (5, false)] {
             let resp = der::seq(&[&der::seq(&[&der::small_int(code)]), &token]);
             assert_eq!(read_response(&resp).is_ok(), ok, "status {code}");
@@ -457,7 +468,7 @@ mod tests {
         let trust = TrustStore::new(vec![]);
         let case = "gost2015-policy-6.4";
         let resp = live(case, "tsr.der");
-        let token = read_response(&resp).unwrap();
+        let token = &read_response(&resp).unwrap()[..];
         let mut data = live(case, "data.bin");
         let c = check_token(&data, token, &trust).unwrap();
         assert!(c.ok() && c.trusted() && c.tsa_ca().is_some());

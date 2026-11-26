@@ -862,6 +862,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "cmpv2"
+version = "0.3.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f1447c225395762423ec0a0c319a2ecdba87256baf4a9d9648cb220c0fc2736"
+dependencies = [
+ "crmf",
+ "der",
+ "spki",
+ "x509-cert",
+]
+
+[[package]]
 name = "cms"
 version = "0.3.0-rc.2"
 dependencies = [
@@ -1001,6 +1013,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crmf"
+version = "0.3.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "691ea00e3a867032ecfaadf82040e2c204ea007e9845eb2f723ddfb31808ba57"
+dependencies = [
+ "cms",
+ "der",
+ "spki",
+ "x509-cert",
 ]
 
 [[package]]
@@ -2260,6 +2284,7 @@ dependencies = [
  "spki",
  "streebog",
  "x509-cert",
+ "x509-tsp",
  "zeroize",
 ]
 
@@ -5194,6 +5219,18 @@ dependencies = [
  "const-oid",
  "der",
  "spki",
+]
+
+[[package]]
+name = "x509-tsp"
+version = "0.2.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a37a884245847754119708e7716365a6cf94bb227b9c7892303184b143463da1"
+dependencies = [
+ "cmpv2",
+ "cms",
+ "der",
+ "x509-cert",
 ]
 
 [[package]]
