@@ -194,7 +194,6 @@
     <string name="f_xml">XAdES, қол XML құжаттың ішінде</string>
     <string name="f_cms">CAdES, құжат пен қолдар .cms ішінде</string>
     <string name="f_detached">CAdES, қолдар құжаттан бөлек .cms-те</string>
-    <string name="f_card">Құжат карточкасы (түпнұсқасы мен қолдары бар PDF)</string>
     <string name="f_none">Қол жоқ</string>
     <string name="d_time">Қол қою уақыты</string>
     <string name="d_time_nca">ҰКО уақыт белгісі (TSA)</string>

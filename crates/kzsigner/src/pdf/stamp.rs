@@ -3,8 +3,8 @@
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
-use super::import::{inherited, rect};
 use super::layout::{MM, Page, Writer, leading};
+use super::page::{inherited, rect};
 use crate::cert::{self, Cert};
 use crate::i18n::{Lang, tr, trf};
 use crate::report::SignerReport;
@@ -218,7 +218,7 @@ fn compose(
             t[4].replace("{}", &until)
         ),
     ));
-    lines.push((6.0, 0.3, t[5].replace("{}", &super::card::astana(at))));
+    lines.push((6.0, 0.3, t[5].replace("{}", &astana(at))));
     let mut w = Writer::new();
     let mut height = PAD;
     let mut wrapped = Vec::new();
@@ -237,8 +237,6 @@ fn compose(
         w: W,
         h: height,
         ops: String::new(),
-        xobjects: Vec::new(),
-        alpha: false,
     };
     // a blue frame; the page shows through, so the stamp hides nothing
     p.ops.push_str(&format!(
@@ -661,6 +659,12 @@ fn unfilter(raw: &[u8], stride: usize, rows: usize, bpp: usize) -> Option<Vec<u8
         }
     }
     Some(out)
+}
+
+/// `ms` in Astana's time, for people: 01.11.2026 15:00:00 UTC+5.
+fn astana(ms: i64) -> String {
+    let t = crate::time::astana(ms).unwrap_or_default();
+    format!("{} UTC+5", t.strftime("%d.%m.%Y %H:%M:%S"))
 }
 
 #[cfg(test)]

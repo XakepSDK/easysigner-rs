@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
-use super::import::rect;
 use super::layout::{A4, MM, Page, Writer, leading};
+use super::page::rect;
 use super::stamp::{Drawn, widget_rects};
 use crate::cert::{self, Cert};
 use crate::report::SignerReport;
@@ -162,7 +162,7 @@ fn new_page(
     let bad = |e: lopdf::Error| Error::new(format!("{e}"));
     let n = pages.len();
     let mut objects = Vec::new();
-    let mut p = Page::new(false);
+    let mut p = Page::a4();
     let mut w = Writer::new();
     let width = A4.0 - 2.0 * M;
     w.text(
@@ -324,8 +324,6 @@ fn form(
         w,
         h,
         ops: String::new(),
-        xobjects: Vec::new(),
-        alpha: false,
     };
     let mut wr = Writer::new();
     draw(&mut p, &mut wr);

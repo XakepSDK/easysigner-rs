@@ -66,21 +66,6 @@ fn a_signed_xml_is_checked_as_xml() {
 }
 
 #[test]
-fn a_document_card_is_checked_with_its_original() {
-    let nca = fake_nca(false);
-    let key = kzsigner::p12::open(&file("ocsp/carol.p12"), "Qwerty12", None).unwrap();
-    let r = nca
-        .engine
-        .sign_card(b"the act", "Akt.txt", &key, &nca.tsa, &nca.ocsp, None, None)
-        .unwrap();
-    let c = run(&nca, "Akt-card.pdf", r.cms, None);
-    assert_eq!(c.format, Some(Format::Card), "{c:?}");
-    assert_eq!(c.document_name, "Akt.txt");
-    assert_eq!(c.document.as_deref(), Some(&b"the act"[..]));
-    assert_eq!(c.signers.len(), 1);
-}
-
-#[test]
 fn revoked_keys_and_changed_documents_are_not_valid() {
     let s = signed_by_carol("check-cms", "Akt.docx", b"the act".to_vec());
     let c = run(&fake_nca(true), &s.name, s.bytes.clone(), None);

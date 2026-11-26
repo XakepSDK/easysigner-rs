@@ -71,7 +71,6 @@ fn format_name(f: Option<Format>) -> &'static str {
         Some(Format::Xml) => t("XAdES, signature inside the XML document"),
         Some(Format::Cms) => t("CAdES, document and signatures inside the .cms"),
         Some(Format::DetachedCms) => t("CAdES, signatures in a .cms beside the document"),
-        Some(Format::Card) => t("Document card (PDF with the original and its signatures)"),
         None => t("No signature"),
     }
 }

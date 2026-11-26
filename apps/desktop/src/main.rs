@@ -15,7 +15,7 @@ use kzsigner::{Engine, Error, output};
 
 const HELP: &str = "\
 Usage: kzsigner [-hV] [COMMAND | FILE]
-Sign and verify .cms files, signed PDFs and document cards with Kazakhstan NCA RK
+Sign and verify .cms files, signed PDFs and signed XML with Kazakhstan NCA RK
 keys, locally, without NCALayer.
 Run without arguments, or with just a FILE, to open the desktop window.
 Signing and checking use NCA's timestamp and revocation services by default, as Order
@@ -24,18 +24,18 @@ Signing and checking use NCA's timestamp and revocation services by default, as 
   -V, --version   Print version information and exit.
 Commands:
   gui      Open the desktop window (default).
-  sign     Sign FILE into FILE.cms (or inside a PDF, or into a document card).
-  verify   Check every signature in a .cms, signed PDF or document card.
+  sign     Sign FILE into FILE.cms (or inside a PDF or an XML document).
+  verify   Check every signature in a .cms, signed PDF or signed XML.
            Exit code 0 only if all are valid.
   extend   Make the signatures in a .cms, signed PDF or XML long-term (B-LT/B-LTA).
-  extract  Write out the document embedded in a .cms or document card.
+  extract  Write out the document embedded in a .cms.
   hash     Print a document's hash, for signing it by its hash (sign --hash).
   info     Show the certificate inside a key file.
 Run 'kzsigner COMMAND --help' for a command's options.
 ";
 
 const HELP_SIGN: &str = "\
-Usage: kzsigner sign [-hV] [--detached | --pdf | --xml | --card [--qr] [--lang=LANG]] [--ocsp[=URL]]
+Usage: kzsigner sign [-hV] [--detached | --pdf | --xml] [--ocsp[=URL]]
                      -k=KEY.p12 [-p=PASSWORD] [--alias=ALIAS] [-o=OUT] [--tsa[=URL]]
                      [--no-tsa] [--no-ocsp] [--offline]
                      [--level=LT|LTA] [--stamp [--stamp-page=N] [--stamp-at=CORNER]
@@ -64,44 +64,32 @@ If FILE is already a .cms, your signature is ADDED to it (co-signing).
       --stamp-at=CORNER    br (bottom right, default), bl, tr or tl.
       --stamp-lang=LANG    ru (default), kk or en.
       --stamp-logo=IMAGE   A logo on the stamp: JPEG, or PNG (8-bit, not interlaced).
-      --card               Make a document card (карточка электронного документа, the
-                           ddcard format SIGEX uses), FILE.card.pdf: a PDF anyone can
-                           open, with the document's pages, a page per signature, and the
-                           document and its .cms signatures attached. Signing a card adds
-                           your signature to it. Always timestamped (NCA TSA by default).
-      --qr                 With --card: also print each signature as QR codes.
-      --lang=LANG          With --card: ru (default), kk, or kk/ru.
-                           Adding a signature to a card keeps its language and QR codes.
       --ocsp[=URL]         Where to check that your key is not revoked before signing
                            (always done; default http://ocsp.pki.gov.kz, and the CA's
-                           revocation list when OCSP gives no answer). A card keeps the
-                           OCSP answer in the signature.
+                           revocation list when OCSP gives no answer).
       --tsa[=URL]          Timestamp server (default http://tsp.pki.gov.kz:80). Every
                            signature gets NCA's timestamp, the proof of when it was made
                            (GOST 34.310-2004 keys excepted: NCA no longer serves them).
       --no-tsa             No timestamp: the signing time is only your computer's clock.
       --no-ocsp            Do not check that your key is not revoked.
-      --offline            Both: no network at all. Not for --card or --level.
+      --offline            Both: no network at all. Not for --level.
       --level=LT|LTA       A long-term signature (ETSI B-LT): with a timestamp, and the
                            CA certificates and revocation answers (OCSP, or the CAs'
                            lists) needed to check it after the certificate expires,
                            kept in it. LTA (B-LTA) adds an archive timestamp over all
-                           of it, which 'kzsigner extend' renews later. Not for --card.
+                           of it, which 'kzsigner extend' renews later.
       --data=ORIGINAL      Original document, to co-sign a detached .cms.
       --trust=CA.cer       Extra trusted CA certificate (repeatable), on top of NCA RK's.
 ";
 
 const HELP_VERIFY: &str = "\
-Usage: kzsigner verify [-hV] [--json] [--qr] [--data=ORIGINAL] [--ocsp[=URL] | --offline]
+Usage: kzsigner verify [-hV] [--json] [--data=ORIGINAL] [--ocsp[=URL] | --offline]
                        [--trust=CA.cer]... FILE
-Check every signature in a .cms, a signed PDF or a document card. Exit code 0 only if all
+Check every signature in a .cms, a signed PDF or a signed XML. Exit code 0 only if all
 are valid. Revocation is checked online (Order 500/НҚ p.16); with --offline, the revocation
 answers kept in a signature are used, and otherwise the result says it was not checked.
-A card's signatures are checked against the document inside it.
-      FILE              .cms, signed PDF, or document card.
-      --data=ORIGINAL   Original document, for a detached .cms or with --qr.
-      --qr              FILE is the text of scanned QR codes from a card's signature
-                        pages, one code per line, in any order; needs --data.
+      FILE              .cms, signed PDF, or signed XML.
+      --data=ORIGINAL   Original document, for a detached .cms.
       --ocsp[=URL]      OCSP server (default http://ocsp.pki.gov.kz; the CA's revocation
                         list when OCSP gives no answer).
       --offline         No network (also --no-ocsp): no online revocation check.
@@ -138,10 +126,9 @@ Print FILE's hash in base64, for `kzsigner sign --hash` (signing a document by i
 
 const HELP_EXTRACT: &str = "\
 Usage: kzsigner extract [-hV] [-o=OUT] FILE
-Write out the document embedded in a .cms, or the original document in a document card.
-      FILE            .cms or document card.
-  -o, --out=OUT   Output file (default: FILE without .cms; for a card, the document's own
-                  name next to the card).
+Write out the document embedded in a .cms.
+      FILE            .cms.
+  -o, --out=OUT   Output file (default: FILE without .cms).
 ";
 
 const HELP_INFO: &str = "\
@@ -209,9 +196,6 @@ struct Opts {
     detached: bool,
     pdf: bool,
     xml: bool,
-    card: bool,
-    qr: bool,
-    lang: Option<String>,
     json: bool,
     tsa: Option<String>,
     ocsp: Option<String>,
@@ -301,9 +285,6 @@ fn parse(mut p: lexopt::Parser, cmd: &str, help: &'static str) -> R<Option<Opts>
             Long("hash") if allowed(&["sign"]) => o.hash = Some(p.value()?.string()?),
             Long("alg") if allowed(&["hash"]) => o.alg = Some(p.value()?.string()?),
             Long("xml") if allowed(&["sign"]) => o.xml = true,
-            Long("card") if allowed(&["sign"]) => o.card = true,
-            Long("qr") if allowed(&["sign", "verify"]) => o.qr = true,
-            Long("lang") if allowed(&["sign"]) => o.lang = Some(p.value()?.string()?),
             Long("json") if allowed(&["verify"]) => o.json = true,
             Long("tsa") if allowed(&["sign", "extend"]) => {
                 o.tsa = Some(optional_url(&mut p, kzsigner::DEFAULT_TSA_URL)?)
@@ -349,13 +330,7 @@ fn optional_url(p: &mut lexopt::Parser, default: &str) -> R<String> {
 /// and gets NCA's timestamp, the proof of when it was signed (Digital Code Art. 50 p.3.4);
 /// checking looks up revocation (p.16). `--no-tsa`, `--no-ocsp` and `--offline` turn them off.
 fn network_defaults(o: &mut Opts, signing: bool, help: &'static str) -> R<()> {
-    let needs_network = if o.card {
-        Some("--card")
-    } else if o.level.is_some() {
-        Some("--level")
-    } else {
-        None
-    };
+    let needs_network = o.level.is_some().then_some("--level");
     for (off, given, name) in [
         (o.no_tsa, o.tsa.is_some(), "--tsa"),
         (o.no_ocsp, o.ocsp.is_some(), "--ocsp"),
@@ -464,29 +439,12 @@ fn sign(mut o: Opts) -> R<u8> {
     let file = need(&o.file, "parameter: 'FILE'", HELP_SIGN)?.clone();
     let e = engine(&o)?;
     let k = open_key(&e, &o, HELP_SIGN)?;
-    if o.qr && !o.card {
-        return Err(Fail::Usage("--qr needs --card".into(), HELP_SIGN));
-    }
-    if [o.detached, o.pdf, o.card, o.xml]
-        .iter()
-        .filter(|x| **x)
-        .count()
-        > 1
-    {
+    if [o.detached, o.pdf, o.xml].iter().filter(|x| **x).count() > 1 {
         return Err(Fail::Usage(
-            "choose one of --detached, --pdf, --xml and --card".into(),
+            "choose one of --detached, --pdf and --xml".into(),
             HELP_SIGN,
         ));
     }
-    let lang = match o.lang.as_deref() {
-        None => None,
-        Some(l) => Some(kzsigner::pdf::card::CardLang::parse(l).ok_or_else(|| {
-            Fail::Usage(
-                format!("unknown --lang {l} (use ru, kk or kk/ru)"),
-                HELP_SIGN,
-            )
-        })?),
-    };
     if o.stamp.is_some() && !o.pdf {
         return Err(Fail::Usage(
             "--stamp and its options need --pdf".into(),
@@ -496,12 +454,6 @@ fn sign(mut o: Opts) -> R<u8> {
     let mut stamp = o.stamp.clone();
     if let (Some(st), Some(logo)) = (&mut stamp, &o.stamp_logo) {
         st.logo = Some(read(logo)?);
-    }
-    if o.level.is_some() && o.card {
-        return Err(Fail::Usage(
-            "--level is not for --card (a card keeps its revocation answers already)".into(),
-            HELP_SIGN,
-        ));
     }
     let input = read(&file)?;
     if o.pdf && !e.is_pdf(&input) {
@@ -521,21 +473,7 @@ fn sign(mut o: Opts) -> R<u8> {
         .tsa
         .clone()
         .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
-    let r = if o.card {
-        let name = file
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "document".into());
-        e.sign_card(
-            &input,
-            &name,
-            &k,
-            o.tsa.as_deref().unwrap_or(kzsigner::DEFAULT_TSA_URL),
-            o.ocsp.as_deref().unwrap_or(kzsigner::DEFAULT_OCSP_URL),
-            lang,
-            o.qr.then_some(true),
-        )?
-    } else if o.xml {
+    let r = if o.xml {
         e.sign(
             kzsigner::SignRequest::xml(&input, &k)
                 .tsa(tsa.as_deref())
@@ -583,8 +521,6 @@ fn sign(mut o: Opts) -> R<u8> {
     let out = o.out.clone().unwrap_or_else(|| {
         if r.cosigned {
             file.clone()
-        } else if o.card {
-            PathBuf::from(format!("{}.card.pdf", file.display()))
         } else if o.pdf {
             kzsigner::signed_name(&file, "pdf")
         } else if o.xml {
@@ -674,16 +610,7 @@ fn verify(mut o: Opts) -> R<u8> {
     let e = engine(&o)?;
     let cms = read(file)?;
     let original = o.data.as_deref().map(read).transpose()?;
-    let r = if o.qr {
-        let doc = need(
-            &original,
-            "option with --qr: '--data=ORIGINAL'",
-            HELP_VERIFY,
-        )?;
-        e.verify_qr(&String::from_utf8_lossy(&cms), doc, o.ocsp.as_deref())?
-    } else {
-        e.verify(&cms, original.as_deref(), o.ocsp.as_deref())?
-    };
+    let r = e.verify(&cms, original.as_deref(), o.ocsp.as_deref())?;
     if o.json {
         println!("{}", output::json(&r));
     } else {
@@ -700,15 +627,12 @@ fn sign_hash(o: Opts) -> R<u8> {
     if o.file.is_some()
         || o.pdf
         || o.xml
-        || o.card
         || o.data.is_some()
         || o.stamp.is_some()
         || o.stamp_logo.is_some()
-        || o.qr
-        || o.lang.is_some()
     {
         return Err(Fail::Usage(
-            "--hash signs a hash, not a file: give no FILE, --pdf, --xml, --card, --stamp, --qr, --lang or --data".into(),
+            "--hash signs a hash, not a file: give no FILE, --pdf, --xml, --stamp or --data".into(),
             HELP_SIGN,
         ));
     }
@@ -796,28 +720,9 @@ fn extract(o: Opts) -> R<u8> {
     let file = need(&o.file, "parameter: 'FILE'", HELP_EXTRACT)?;
     let data = read(file)?;
     let e = Engine::new(vec![]);
-    let card = e.card_original(&data);
-    let content = match &card {
-        Some((_, c)) => c.clone(),
-        None => e.extract(&data)?,
-    };
+    let content = e.extract(&data)?;
     let out = match &o.out {
         Some(p) => p.clone(),
-        None if card.is_some() => {
-            let name = card.as_ref().map(|c| c.0.as_str()).unwrap_or_default();
-            // only the name, never a path from inside the card
-            let name = name
-                .rsplit(['/', '\\'])
-                .next()
-                .map(str::to_string)
-                .filter(|n| !n.is_empty() && n != "." && n != "..")
-                .unwrap_or_else(|| "document".into());
-            let mut p = file.with_file_name(name);
-            if p.exists() {
-                p = PathBuf::from(format!("{}.extracted", p.display()));
-            }
-            p
-        }
         None => {
             let n = file.to_string_lossy();
             let mut p = if n.to_lowercase().ends_with(".cms") {

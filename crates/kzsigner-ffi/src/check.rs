@@ -54,8 +54,6 @@ pub enum Format {
     Cms,
     /// CAdES: a .cms beside the document (detached).
     DetachedCms,
-    /// A document card (a PDF that carries the original and its .cms signatures).
-    Card,
 }
 
 /// One signature.
@@ -159,7 +157,6 @@ pub fn check_file(
         None
     };
     out.format = Some(match kind {
-        DocKind::Pdf if e.card_original(&bytes).is_some() => Format::Card,
         DocKind::Pdf => Format::Pdf,
         DocKind::Xml => Format::Xml,
         _ if content.is_some() => Format::Cms,
@@ -193,10 +190,6 @@ pub fn check_file(
         return out;
     }
     let doc = match out.format {
-        Some(Format::Card) => e.card_original(&bytes).map(|(n, d)| {
-            out.document_name = n;
-            d
-        }),
         Some(Format::Cms) => content,
         Some(Format::DetachedCms) => original.clone(),
         _ => Some(bytes.clone()),

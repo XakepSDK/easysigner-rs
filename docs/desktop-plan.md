@@ -41,8 +41,9 @@ below are the starting point; the desktop design is reviewed before phase 2.
 - **Signed**: where the file is, "Show in folder", Done.
 - **Check**: the same verdicts, reasons, next steps and Signature details (plain revocation
   words) as the phone; a detached .cms asks for its document.
-- No options anywhere in the window. Detached .cms, document cards, levels and stamp
-  placement stay in the command line. Existing cards and detached files are still checked.
+- No options anywhere in the window. Detached .cms, levels and stamp placement stay in the
+  command line. Detached files are still checked. (Document cards, ddcard, were dropped
+  from kzsigner later.)
 
 ## Shape
 

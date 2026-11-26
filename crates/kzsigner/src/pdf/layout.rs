@@ -1,9 +1,7 @@
-//! Drawing pages for the document card: text in the bundled font, lines, boxes, QR codes and
-//! imported pages. Positions are in millimetres from the page's top left, as in ddc.
+//! Drawing PDF pages (the stamp and the "Who signed" page): text in the bundled font and
+//! lines. Positions are in millimetres from the page's top left.
 
 use std::collections::BTreeMap;
-
-use qrcodegen::QrCode;
 
 use super::font::Font;
 
@@ -22,21 +20,16 @@ pub struct Page {
     pub w: f64,
     pub h: f64,
     pub ops: String,
-    /// Form XObjects drawn on the page: (resource name, object id).
-    pub xobjects: Vec<(String, lopdf::ObjectId)>,
-    /// Whether the semi-transparent graphics state is used.
-    pub alpha: bool,
 }
 
 impl Page {
-    pub fn new(landscape: bool) -> Page {
-        let (w, h) = if landscape { (A4.1, A4.0) } else { A4 };
+    /// An empty A4 page, upright.
+    pub fn a4() -> Page {
+        let (w, h) = A4;
         Page {
             w,
             h,
             ops: String::new(),
-            xobjects: Vec::new(),
-            alpha: false,
         }
     }
 
@@ -54,70 +47,6 @@ impl Page {
             f(c),
             f(d)
         ));
-    }
-
-    pub fn rect(&mut self, x: f64, y: f64, w: f64, h: f64, grey: f64) {
-        self.ops.push_str(&format!(
-            "q {} G 0.3 w {} {} {} {} re S Q\n",
-            f(grey),
-            f(x * MM),
-            f(self.y(y + h)),
-            f(w * MM),
-            f(h * MM)
-        ));
-    }
-
-    /// A QR code `size` mm wide with its top left at (x, y), with the quiet zone inside.
-    pub fn qr(&mut self, x: f64, y: f64, size: f64, q: &QrCode) {
-        let n = q.size();
-        let m = size / f64::from(n + 8);
-        let mut s = String::from("q 0 g\n");
-        for row in 0..n {
-            let mut col = 0;
-            while col < n {
-                if q.get_module(col, row) {
-                    let start = col;
-                    while col < n && q.get_module(col, row) {
-                        col += 1;
-                    }
-                    let top = y + f64::from(row + 4) * m;
-                    s.push_str(&format!(
-                        "{} {} {} {} re\n",
-                        f((x + f64::from(start + 4) * m) * MM),
-                        f(self.y(top + m)),
-                        f(f64::from(col - start) * m * MM),
-                        f(m * MM)
-                    ));
-                } else {
-                    col += 1;
-                }
-            }
-        }
-        s.push_str("f Q\n");
-        self.ops.push_str(&s);
-    }
-
-    /// Draws form XObject `name` (registered with `id`) scaled into the box.
-    #[allow(clippy::too_many_arguments)]
-    pub fn form(
-        &mut self,
-        name: &str,
-        id: lopdf::ObjectId,
-        x: f64,
-        y: f64,
-        w: f64,
-        h: f64,
-        bbox: (f64, f64),
-    ) {
-        let (sx, sy) = (w * MM / bbox.0, h * MM / bbox.1);
-        self.ops.push_str(&format!(
-            "q {} 0 0 {} {} {} cm /{name} Do Q\n",
-            f(sx),
-            f(sy),
-            f(x * MM),
-            f(self.y(y + h))
-        ));
-        self.xobjects.push((name.to_string(), id));
     }
 }
 
@@ -172,31 +101,6 @@ impl Writer {
             f(size),
             f(x * MM),
             f(p.y(y))
-        ));
-    }
-
-    /// Text centred on `cx`, rotated by `deg` degrees, semi-transparent (a watermark).
-    pub fn watermark(&mut self, p: &mut Page, cx: f64, cy: f64, size: f64, deg: f64, s: &str) {
-        let mut hex = String::new();
-        for (g, c) in self.font.shape(s) {
-            self.used.insert(g, c);
-            hex.push_str(&format!("{g:04X}"));
-        }
-        let w = self.font.text_width(s, size);
-        let (sin, cos) = deg.to_radians().sin_cos();
-        // start so that the middle of the text lands on the centre
-        let (dx, dy) = (-w / 2.0, -size * 0.35);
-        let (ox, oy) = (cx * MM + dx * cos - dy * sin, p.y(cy) + dx * sin + dy * cos);
-        p.alpha = true;
-        p.ops.push_str(&format!(
-            "q /GS1 gs BT 0.6 g /F1 {} Tf {} {} {} {} {} {} Tm <{hex}> Tj ET Q\n",
-            f(size),
-            f(cos),
-            f(sin),
-            f(-sin),
-            f(cos),
-            f(ox),
-            f(oy)
         ));
     }
 

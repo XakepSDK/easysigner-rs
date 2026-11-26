@@ -383,7 +383,6 @@ fun CheckDetailsScreen(model: AppModel, onBack: () -> Unit) {
             Format.XML -> R.string.f_xml
             Format.CMS -> R.string.f_cms
             Format.DETACHED_CMS -> R.string.f_detached
-            Format.CARD -> R.string.f_card
             null -> R.string.f_none
         }
     )

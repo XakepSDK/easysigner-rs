@@ -83,9 +83,9 @@ fn options_only_where_they_mean_something() {
         ("verify", &["--hash", "00"]),
         ("sign", &["--alg", "sha256"]),
         ("verify", &["--xml"]),
-        ("verify", &["--card"]),
-        ("extract", &["--qr"]),
-        ("verify", &["--lang", "ru"]),
+        ("sign", &["--card"]),
+        ("verify", &["--qr"]),
+        ("sign", &["--lang", "ru"]),
         ("sign", &["--json"]),
         ("verify", &["--tsa"]),
         ("extract", &["--ocsp"]),
@@ -126,12 +126,9 @@ fn hash_signing_takes_no_file_options() {
         &["doc.txt"][..],
         &["--pdf"],
         &["--xml"],
-        &["--card"],
         &["--data", "doc.txt"],
         &["--stamp"],
         &["--stamp-logo", "doc.txt"],
-        &["--qr"],
-        &["--lang", "ru"],
     ] {
         let mut args = vec!["sign", "-k", &key, "--hash", &hash];
         args.extend(extra);
@@ -257,10 +254,6 @@ fn network_by_default() {
     for (args, says) in [
         (&["sign", "--offline", "--tsa", "doc.txt"][..], "contradict"),
         (&["sign", "--no-ocsp", "--ocsp", "doc.txt"], "contradict"),
-        (
-            &["sign", "--offline", "--card", "doc.txt"],
-            "--card needs the network",
-        ),
         (
             &["sign", "--no-tsa", "--level", "LT", "doc.txt"],
             "--level needs the network",

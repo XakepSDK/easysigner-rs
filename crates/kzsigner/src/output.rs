@@ -26,14 +26,7 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
             "RESULT: NOT VALID (see details below)".into()
         }
     );
-    if let Some(name) = &r.card_document {
-        let _ = writeln!(
-            o,
-            "Document: {name} (inside the document card), {} bytes, SHA-256 {}",
-            r.content_size,
-            r.content_sha256.as_deref().unwrap_or("")
-        );
-    } else if r.is_pdf {
+    if r.is_pdf {
         let _ = writeln!(
             o,
             "Document: PDF, {} bytes, SHA-256 {}",
@@ -242,7 +235,6 @@ pub fn json(r: &VerifyReport) -> String {
         ("warnings", strs(&r.warnings)),
         ("signers", J::List(r.signers.iter().map(signer).collect())),
         ("isPdf", J::Bool(r.is_pdf)),
-        ("cardDocument", s(&r.card_document)),
         (
             "documentTimestamps",
             J::List(r.document_timestamps.iter().map(archive).collect()),

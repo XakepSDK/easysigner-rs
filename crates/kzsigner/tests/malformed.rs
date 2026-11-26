@@ -116,8 +116,7 @@ fn deep_nesting_and_bad_oids_are_errors() {
     );
 }
 
-/// PDFs (plain, object streams, signed) with bytes changed or cut, for checking, signing and
-/// reading as a card.
+/// PDFs (plain, object streams, signed) with bytes changed or cut, for checking and signing.
 #[test]
 fn damaged_pdfs_give_errors_not_crashes() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
@@ -154,7 +153,6 @@ fn damaged_pdfs_give_errors_not_crashes() {
         let p = damaged(&mut rng, &pdfs[round % pdfs.len()]);
         no_panic(&format!("pdf round {round}"), || {
             let _ = e.verify(&p, None, None);
-            let _ = e.card_original(&p);
             if round % 4 == 0 {
                 let _ = e.sign(kzsigner::SignRequest::pdf(&p, &key));
             }
@@ -195,41 +193,6 @@ fn hostile_pdfs_give_errors_not_crashes() {
     for (i, c) in cases.iter().enumerate() {
         no_panic(&format!("hostile pdf {i}"), || {
             let _ = e.verify(c, None, None);
-            let _ = e.card_original(c);
         });
     }
-}
-
-/// Showing a hostile PDF's pages in a card: damaged files, and resources that are a very long
-/// chain of references.
-#[test]
-fn importing_hostile_pages_does_not_crash() {
-    use kzsigner::pdf::import::import_pages;
-    use lopdf::{Dictionary, Document, Object};
-    let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/pdf");
-    let pdfs: Vec<Vec<u8>> = ["plain.pdf", "objstm.pdf", "land.pdf"]
-        .iter()
-        .map(|f| std::fs::read(fx.join(f)).unwrap())
-        .collect();
-    let mut rng = Rng(11);
-    for round in 0..900 {
-        let p = damaged(&mut rng, &pdfs[round % pdfs.len()]);
-        no_panic(&format!("import round {round}"), || {
-            if let Ok(src) = Document::load_mem(&p) {
-                let _ = import_pages(&src, &mut Document::with_version("1.7"));
-            }
-        });
-    }
-    let mut src = Document::load_mem(&pdfs[0]).unwrap();
-    let mut next = Object::Null;
-    for _ in 0..200_000 {
-        next = Object::Reference(src.add_object(Dictionary::from_iter([("Next", next)])));
-    }
-    for (_, id) in src.get_pages() {
-        src.get_dictionary_mut(id)
-            .unwrap()
-            .set("Resources", next.clone());
-    }
-    let imported = import_pages(&src, &mut Document::with_version("1.7")).unwrap();
-    assert!(!imported.is_empty());
 }

@@ -2,11 +2,9 @@
 //! document still opens in any PDF viewer. The signature is added as an incremental update:
 //! the original bytes, and any earlier signatures, stay exactly as they were.
 
-pub mod card;
 pub mod font;
-pub mod import;
 pub mod layout;
-pub mod qr;
+pub mod page;
 pub mod stamp;
 pub mod whosigned;
 

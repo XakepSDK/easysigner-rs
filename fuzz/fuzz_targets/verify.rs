@@ -1,4 +1,4 @@
-//! Checking a file: .cms (attached or detached), PDF, XML, the document card. Everything the
+//! Checking a file: .cms (attached or detached), PDF, XML. Everything the
 //! Check screen reads. No network: no OCSP address is given.
 #![no_main]
 

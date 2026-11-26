@@ -1,6 +1,6 @@
 # kzsigner
 
-Sign and verify `.cms` files, signed PDFs, signed XML and document cards with Kazakhstan NCA RK keys, locally, without NCALayer.
+Sign and verify `.cms` files, signed PDFs and signed XML with Kazakhstan NCA RK keys, locally, without NCALayer.
 One small executable with no runtime: 5.5 MB on Linux (1.7 MB tar.xz), 6.4 MB on Windows
 (2.7 MB zip). The window and command line are the `desktop` crate; the signing core is the
 `kzsigner` library at the root.
@@ -15,14 +15,6 @@ signatures verify, but they no longer sign (NCA stopped issuing them and its TSA
   `--stamp` also draws a visible stamp on the page (the signer, ИИН/БИН, the certificate and
   the signing time; `--stamp-page N`, `--stamp-at br|bl|tr|tl`, `--stamp-lang kk|ru|en`,
   `--stamp-logo logo.png|.jpg`); the window has it under More options.
-* **Document card** (`--card`, карточка электронного документа, the
-  [ddcard](https://github.com/kaarkz/ddcard) format SIGEX uses): a PDF that shows the document's
-  pages, a page per signature with the signer, certificate, timestamp and revocation answer
-  (and, with `--qr`, the signature itself as QR codes), and carries the original document and
-  its `.cms` signatures as attachments. Any document can be put in a card, not only a PDF.
-  Cards made by kzsigner open in SIGEX's [ddc](https://github.com/sigex-kz/ddc), and kzsigner
-  checks and co-signs cards made by SIGEX.
-
 * **Inside an XML document** (XAdES, `--xml`): an enveloped XAdES signature (Order 500 p.10:
   SignedInfo, SignatureValue, the certificate in KeyInfo, and signed properties with the
   signing time and the signer's certificate), B-T (B-B with `--no-tsa`), or B-LT/B-LTA with
@@ -97,7 +89,7 @@ copy elsewhere**. Check gives the phone's verdicts (valid, do not trust and why,
 not signed, a detached .cms asking for its document), who signed, and the details to copy. A file
 opened with kzsigner or dropped anywhere on the window goes where it belongs. Enter signs, Esc goes
 back. The window is in Kazakh, Russian or English (Your keys › Language; it starts in the system's
-language, and `KZSIGNER_LANG=kk|ru|en` also sets it). Detached .cms, document cards, levels and the
+language, and `KZSIGNER_LANG=kk|ru|en` also sets it). Detached .cms, levels and the
 visible stamp are made with the command line, which stays in English.
 
 **On the phone** (Android 11 or newer) kzsigner is its own app, built for one touch per
@@ -134,21 +126,13 @@ kzsigner info -k key.p12
 kzsigner sign contract.pdf -k key.p12 --pdf             # -> contract-signed.pdf, signed inside
 kzsigner sign contract-signed.pdf -k key2.p12 --pdf     # a second signature inside the PDF
 kzsigner sign contract.pdf -k key.p12 --pdf --stamp --stamp-logo logo.png  # with a visible stamp
-kzsigner sign contract.docx -k key.p12 --card --qr      # -> contract.docx.card.pdf
-kzsigner sign contract.docx.card.pdf -k key2.p12 --card # adds a signature to the card
-kzsigner verify contract.docx.card.pdf                  # checks the card's signatures
 kzsigner sign request.xml -k key.p12 --xml              # -> request-signed.xml, XAdES B-T
 kzsigner verify request-signed.xml                      # checks the XML signature
 kzsigner sign request-signed.xml -k key2.p12 --xml      # a second signature inside it
 kzsigner extend request-signed.xml                      # XAdES B-LTA, or renew it
 kzsigner hash --alg gost2015 document.pdf               # -> the hash to sign
 kzsigner sign --hash=… -k key.p12 -o document.pdf.cms   # a detached .cms from the hash alone
-kzsigner extract contract.docx.card.pdf                 # -> contract.docx, from inside the card
-kzsigner verify --qr scans.txt --data contract.docx     # signatures read back from QR codes
 ```
-
-A card's language is `--lang ru` (default), `kk` or `kk/ru`. For `verify --qr`, `scans.txt` holds
-the texts a QR scanner reads from a card's signature pages, one code per line, in any order.
 
 The password comes from `-p`, the `KZSIGNER_PASSWORD` environment variable, or a prompt.
 `--trust CA.cer` adds a trusted CA on top of NCA RK's bundled root and issuing certificates.
@@ -258,25 +242,20 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   and over remote desktop). `icons.rs` draws the icons from SVG path data as vector shapes, so
 they stay sharp at any scale with no image files. Fonts are a 51 KB subset of Noto Sans with Cyrillic and Kazakh
   letters (`assets/`).
-* `pdf/`: PDF signatures and document cards, on [lopdf](https://github.com/J-F-Liu/lopdf).
+* `pdf/`: PDF signatures, on [lopdf](https://github.com/J-F-Liu/lopdf).
   `pdf/mod.rs` signs a PDF as an incremental update (ETSI.CAdES.detached, the `ByteRange`
   covering everything but the signature) and checks every signature in one. A signature only
   passes if every later update just added signatures (new signature fields and widgets, the
   AcroForm entries for them, the DSS); an update that changes a page, the page tree or the
   catalog fails every earlier signature, since the PDF no longer shows what was signed. A PDF
-  certified with no changes allowed (DocMDP P=1) is not signed. `pdf/whosigned.rs` adds the "Who signed" page (the first signer adds it and certifies the PDF with DocMDP P=2; each signer's box is that signature's widget, in a grid that never covers another app's stamp). `pdf/stamp.rs` draws the visible stamp (a widget appearance with the bundled font, an optional JPEG or PNG logo, upright on rotated pages). `pdf/card.rs` builds and reads document cards after ddc's layout and texts
-  (MIT licence; its Kazakh texts are reused): the card's signatures are detached CAdES with a
-  mime-type attribute, an NCA timestamp, the certificate chain and the OCSP answer kept in
-  `crls` (RFC 5940), as the ddcard specification asks. `pdf/qr.rs` turns a signature into QR
-  codes (ZIP, Base64, JSON parts; [qrcodegen](https://github.com/nayuki/QR-Code-generator)) and
-  back. `pdf/import.rs` shows the document's own pages in the card; `pdf/layout.rs`,
-  `pdf/font.rs` draw the pages in an embedded subset of the bundled Noto Sans (read with `skrifa`).
+  certified with no changes allowed (DocMDP P=1) is not signed. `pdf/whosigned.rs` adds the "Who signed" page (the first signer adds it and certifies the PDF with DocMDP P=2; each signer's box is that signature's widget, in a grid that never covers another app's stamp). `pdf/stamp.rs` draws the visible stamp (a widget appearance with the bundled font, an optional JPEG or PNG logo, upright on rotated pages). `pdf/layout.rs` and
+  `pdf/font.rs` draw the stamp and the "Who signed" page in an embedded subset of the bundled Noto Sans (read with `skrifa`).
 * `apps/desktop/`: the executable: `src/main.rs` the command line, `src/gui/` the window (egui),
   `src/icons.rs` its drawn icons. `output.rs` (core): the text and JSON reports.
 * `crates/kzsigner-ffi`: the core's calls for the Android app (UniFFI): the key vault over the phone's chip,
   signing with the output picked by the input, and checking with one verdict and reason.
 * `apps/android/compose`: the Android app; `apps/android/uitest`: its emulator tests.
-* `i18n.rs`: the Kazakh and Russian texts of the core's messages and document cards (the window has its own, `apps/desktop/src/gui/text.rs`). The Kazakh was not written by a
+* `i18n.rs`: the Kazakh and Russian texts of the core's messages, the stamp and the "Who signed" page (the window has its own, `apps/desktop/src/gui/text.rs`). The Kazakh was not written by a
   native speaker; corrections are welcome.
 * `assets/kzsigner.ico`, `.png`: the icon, drawn by `packaging/make-icon.py`; `apps/desktop/build.rs` puts it
   and the version into the Windows `.exe`. `packaging/linux/`: the menu entry and installer.
@@ -309,10 +288,9 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
 * `apps/desktop/tests/e2e.rs`: end-to-end checks against the built executable. It uses throwaway test keys
   (`testdata/keys`), a fake local timestamp server, and files and keys made by NCA's own
   Kalkan library (`testdata/kalkan`).
-* `apps/desktop/tests/e2e.rs` also signs PDFs (RSA, GOST 2015; co-signing; changed files), checks old GOST 2004 PDF, XML and CMS signatures (`testdata/gost2004`) and makes,
-  co-signs, checks and unpacks document cards, with a fake local OCSP responder for its own test
-  CA (`testdata/ocsp`, made with openssl), QR codes read back, and a revoked certificate
-  refused. Test PDFs are in `testdata/pdf`.
+* `apps/desktop/tests/e2e.rs` also signs PDFs (RSA, GOST 2015; co-signing; changed files), checks old GOST 2004 PDF, XML and CMS signatures (`testdata/gost2004`) and refuses
+  a revoked certificate, with a fake local OCSP responder for its own test CA (`testdata/ocsp`,
+  made with openssl). Test PDFs are in `testdata/pdf`.
 * `apps/desktop/tests/gui.rs`: drives the window without a display (egui_kittest) against fake NCA
   servers: add a key (wrong password, Russian keyboard, not recognized, GOST 2004, not a key,
   already added), sign text, XML, a signed PDF and a .cms, NCA down then Try again, a revoked key,
@@ -352,9 +330,7 @@ None of the test keys or certificates is a real NCA certificate. The Kalkan fixt
 2027-11-01; the OCSP test CA and key on 2046-10-27.
 
 Checked by hand (not in `cargo test`, they need other tools): RSA-signed PDFs pass poppler's
-`pdfsig` and pyHanko (neither knows KZ GOST); cards made by kzsigner open with ddc's
-`ExtractAttachments` (Go, pdfcpu), and a card ddc builds from kzsigner's signatures verifies,
-co-signs and extracts with kzsigner.
+`pdfsig` and pyHanko (neither knows KZ GOST).
 
 ### Coverage and mutation testing
 
@@ -366,7 +342,7 @@ how well they check it, apart from the build:
   `cargo llvm-cov --release --html`.
 * **Mutation testing** (cargo-mutants): small changes are made to the code, one at a time, and
   some test must fail for each. A full run (about 2500 mutants; the icons' geometry, the
-  window's layout, the stamp and card drawing and the Android glue are left out, see
+  window's layout, the stamp and Who signed drawing and the Android glue are left out, see
   `.cargo/mutants.toml`) runs weekly and by hand (Actions > quality > Run workflow, optionally
   for some files or shards), split over 16 shards; a pull request runs only the mutants in lines it changes. Missed mutants are listed
   in the job summary and the `mutants-N` artifacts. Locally: `cargo mutants -f crates/kzsigner/src/xml/mod.rs`.

@@ -133,61 +133,6 @@ impl Engine {
         xml::is_xml(data)
     }
 
-    /// Signs `input` into a document card (ddcard), checking the key and the signature
-    /// first; see
-    /// [`pdf::card`]. If `input` is already a card, the signature is added to it and the card
-    /// is made again. A card needs a timestamp, and asks for an OCSP answer kept in the
-    /// signature (a missing one only warns). `lang` and `qr`: None to keep what the card had
-    /// (Russian, without QR codes, for a new card).
-    #[allow(clippy::too_many_arguments)]
-    pub fn sign_card(
-        &self,
-        input: &[u8],
-        file_name: &str,
-        key: &Key,
-        tsa_url: &str,
-        ocsp_url: &str,
-        lang: Option<pdf::card::CardLang>,
-        qr: Option<bool>,
-    ) -> Result<SignResult> {
-        self_test()?;
-        let mut r = SignResult {
-            // revocation is checked when the card's OCSP answer is fetched
-            warnings: self.check_key(&key.cert, None)?,
-            ..Default::default()
-        };
-        let (name, doc, mut signatures, made_with) = match pdf::card::read(input) {
-            Some(c) => {
-                r.cosigned = true;
-                (c.original.0, c.original.1, c.signatures, c.made_with)
-            }
-            None => (file_name.to_string(), input.to_vec(), vec![], None),
-        };
-        let lang = lang
-            .or(made_with.map(|m| m.0))
-            .unwrap_or(pdf::card::CardLang::Ru);
-        let qr = qr.or(made_with.map(|m| m.1)).unwrap_or(false);
-        let cms = pdf::card::sign_for_card(&doc, &name, key, tsa_url, ocsp_url, &self.env, &mut r)?;
-        let mut n = signatures.len() + 1;
-        while signatures
-            .iter()
-            .any(|(s, _)| *s == pdf::card::signature_file_name(&name, n))
-        {
-            n += 1;
-        }
-        signatures.push((pdf::card::signature_file_name(&name, n), cms));
-        let input = pdf::card::CardInput {
-            doc: &doc,
-            file_name: &name,
-            signatures,
-            lang,
-            qr,
-        };
-        r.cms = pdf::card::build(&input, &self.env)?;
-        r.signer_count = input.signatures.len();
-        Ok(r)
-    }
-
     /// Makes the signatures in a .cms, a PDF or an XML document long-term (B-LT, or B-LTA with an archive
     /// timestamp); see [`pdf::extend`]. `original`: a detached .cms's
     /// document.
@@ -201,11 +146,6 @@ impl Engine {
     ) -> Result<SignResult> {
         self_test()?;
         let archive = level == ltv::Level::Lta;
-        if pdf::card::read(input).is_some() {
-            return Err(Error::new(i18n::tr(
-                "A document card's signatures already keep their revocation answers; a card cannot be extended.",
-            )));
-        }
         if pdf::is_pdf(input) {
             return pdf::extend(input, archive, tsa_url, ocsp_url, &self.env);
         }
@@ -275,40 +215,6 @@ impl Engine {
         }
     }
 
-    /// The original document inside a document card: (file name, bytes). None if `data` is
-    /// not a card.
-    pub fn card_original(&self, data: &[u8]) -> Option<(String, Vec<u8>)> {
-        pdf::card::read(data).map(|c| c.original)
-    }
-
-    /// Checks the signatures carried by scanned QR codes (one scanned text per line) against
-    /// the original document.
-    pub fn verify_qr(
-        &self,
-        scans: &str,
-        original: &[u8],
-        ocsp_url: Option<&str>,
-    ) -> Result<VerifyReport> {
-        self_test()?;
-        let sigs = pdf::qr::assemble(scans)?;
-        let card = pdf::card::Card {
-            original: (String::new(), original.to_vec()),
-            signatures: sigs
-                .into_iter()
-                .map(|(id, c)| (format!("{id}.cms"), c))
-                .collect(),
-            made_with: None,
-        };
-        let mut rep = pdf::card::verify(&card, &self.env, ocsp_url);
-        rep.card_document = None;
-        rep.has_content = false;
-        rep.detached_provided = true;
-        for s in &mut rep.signers {
-            s.kind = None;
-        }
-        Ok(rep)
-    }
-
     /// Checks a .cms, or the signatures inside a PDF. `ocsp_url`: None to skip the revocation
     /// check.
     pub fn verify(
@@ -318,9 +224,6 @@ impl Engine {
         ocsp_url: Option<&str>,
     ) -> Result<VerifyReport> {
         self_test()?;
-        if let Some(card) = pdf::card::read(cms) {
-            return Ok(pdf::card::verify(&card, &self.env, ocsp_url));
-        }
         if pdf::is_pdf(cms) {
             return pdf::verify(cms, &self.env, ocsp_url);
         }

@@ -430,7 +430,7 @@ pub fn forget() {
 /// (English, Kazakh, Russian).
 #[rustfmt::skip]
 pub const TABLE: &[(&str, &str, &str)] = &[
-    // report and card
+    // report
     ("Sign", "Қол қою", "Подписать"),
     ("Signature added", "Қолтаңба қосылды", "Подпись добавлена"),
     ("Signed", "Қол қойылды", "Подписано"),
@@ -525,13 +525,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("Only the signature was checked, not the document: it signs a document whose {} hash is {}.", "Тек қолтаңба тексерілді, құжат емес: ол {} хэші {} болатын құжатқа қойылған.", "Проверена только подпись, а не документ: она поставлена под документом, {}-хэш которого {}."),
     ("Type", "Түрі", "Тип"),
     ("Covers", "Қамтиды", "Охватывает"),
-    ("A card signature must hold exactly one signer.", "Карточкадағы қолтаңбада бір ғана қол қоюшы болуы керек.", "Подпись в карточке должна содержать ровно одного подписанта."),
-    ("The signature contains the document; a card's signatures should be detached.", "Қолтаңбаның ішінде құжат бар; карточканың қолтаңбалары бөлек (detached) болуы керек.", "Подпись содержит документ; подписи в карточке должны быть открепленными."),
     ("The kept OCSP answer is older than the signature's timestamp.", "Сақталған OCSP жауабы қолтаңбаның уақыт белгісінен ескі.", "Сохраненный ответ OCSP старше метки времени подписи."),
-    ("The signature carries no OCSP answer, which the card specification asks for.", "Қолтаңбада карточка спецификациясы талап ететін OCSP жауабы жоқ.", "В подписи нет ответа OCSP, которого требует спецификация карточки."),
-    ("The signature has no timestamp, which the card specification requires.", "Қолтаңбада карточка спецификациясы талап ететін уақыт белгісі жоқ.", "В подписи нет метки времени, которую требует спецификация карточки."),
-    ("Signature {} is not valid, so no card was made: {}", "{} қолтаңбасы жарамсыз, сондықтан карточка жасалмады: {}", "Подпись {} недействительна, поэтому карточка не создана: {}"),
-    ("Signature in the document card ({})", "Құжат карточкасындағы қолтаңба ({})", "Подпись в карточке документа ({})"),
     ("{} (answer kept in the signature)", "{} (жауап қолтаңбада сақталған)", "{} (ответ сохранен в подписи)"),
     ("This PDF is encrypted (password-protected or with restrictions); kzsigner cannot sign or check it.", "Бұл PDF шифрланған (құпиясөзбен немесе шектеулермен); kzsigner оған қол қоя да, оны тексере де алмайды.", "Этот PDF зашифрован (защищен паролем или ограничениями); kzsigner не может его подписать или проверить."),
     ("This PDF has no pages.", "Бұл PDF-те беттер жоқ.", "В этом PDF нет страниц."),
@@ -553,7 +547,6 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("the page tree", "беттер ағашы", "дерево страниц"),
     ("an annotation", "аннотация", "аннотация"),
     ("an object", "объект", "объект"),
-    ("Only the document attached to the card is checked against its signatures. The card's pages (the document's image and the signature pages) are not signed and may differ from it; rely on the attached document.", "Карточкаға тіркелген құжат қана оның қолтаңбаларымен тексеріледі. Карточканың беттеріне (құжаттың бейнесі мен қолтаңба беттері) қол қойылмаған және олар құжаттан өзгеше болуы мүмкін; тіркелген құжатқа сүйеніңіз.", "С подписями сверяется только документ, вложенный в карточку. Страницы карточки (изображение документа и страницы подписей) не подписаны и могут от него отличаться; опирайтесь на вложенный документ."),
     ("This PDF is certified with no changes allowed (DocMDP); adding a signature would break its certification.", "Бұл PDF ешқандай өзгеріске рұқсат етілмей куәландырылған (DocMDP); қолтаңба қосу оның куәландыруын бұзады.", "Этот PDF заверен с запретом любых изменений (DocMDP); добавление подписи нарушит заверение."),
     ("{} (object {}) changed", "{} ({} объект) өзгертілді", "изменён(а) {} (объект {})"),
     ("Unreadable revocation list (CRL)", "Кері қайтарылғандар тізімі (CRL) оқылмайды", "Не удаётся прочитать список отзыва (CRL)"),
@@ -595,12 +588,10 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("Archive timestamp of {}: {}", "{} архивтік уақыт белгісі: {}", "Архивная метка времени от {}: {}"),
     ("An archive timestamp is not valid: {}", "Архивтік уақыт белгісі жарамсыз: {}", "Архивная метка времени недействительна: {}"),
     ("The archive timestamp authority '{}' is not a trusted NCA RK TSA.", "'{}' архивтік уақыт белгісі қызметі ҚР ҰКО-ның сенімді қызметі емес.", "Служба архивной метки времени '{}' не является доверенной службой НУЦ РК."),
-    ("A document card's signatures already keep their revocation answers; a card cannot be extended.", "Құжат карточкасының қолтаңбалары кері қайтарып алу туралы жауаптарды өздері сақтайды; карточканы ұзартуға болмайды.", "Подписи карточки документа уже хранят ответы об отзыве; карточку нельзя расширить."),
     ("This .cms has no embedded document (detached signature). Provide the original file to add an archive timestamp.", "Бұл .cms ішінде құжат жоқ (бөлек қолтаңба). Архивтік уақыт белгісін қосу үшін түпнұсқа файлды көрсетіңіз.", "В этом .cms нет вложенного документа (открепленная подпись). Укажите исходный файл, чтобы добавить архивную метку времени."),
     ("The signature of {} has no timestamp: a long-term signature needs one, so it stays checkable only while the certificate is valid.", "{} қолтаңбасында уақыт белгісі жоқ: ұзақ мерзімді қолтаңбаға ол керек, сондықтан оны тек сертификат жарамды кезде тексеруге болады.", "В подписи {} нет метки времени: она нужна долгосрочной подписи, поэтому подпись можно проверить, только пока сертификат действителен."),
     ("The signature of {} was not extended: {}", "{} қолтаңбасы ұзартылмады: {}", "Подпись {} не расширена: {}"),
     ("No signature could be made long-term: {}", "Бірде-бір қолтаңбаны ұзақ мерзімді ету мүмкін болмады: {}", "Ни одну подпись не удалось сделать долгосрочной: {}"),
-    ("No OCSP answer could be embedded in the signature; the card does not fully meet its specification.", "Қолтаңбаға OCSP жауабын енгізу мүмкін болмады; карточка өз спецификациясына толық сәйкес келмейді.", "Не удалось вложить в подпись ответ OCSP; карточка не полностью соответствует спецификации."),
     ("the timestamp does not match the document (it or the document was changed)", "уақыт белгісі құжатқа сәйкес емес (ол немесе құжат өзгертілген)", "метка времени не соответствует документу (она или документ изменены)"),
     ("A document timestamp is not valid: {}", "Құжаттың уақыт белгісі жарамсыз: {}", "Метка времени документа недействительна: {}"),
     ("The document timestamp authority '{}' is not a trusted NCA RK TSA.", "'{}' құжат уақыт белгісі қызметі ҚР ҰКО-ның сенімді қызметі емес.", "Служба метки времени документа '{}' не является доверенной службой НУЦ РК."),
@@ -633,7 +624,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("An XML signature is inside the document it signs: check the signed XML file alone.", "XML қолтаңбасы өзі қол қойған құжаттың ішінде: қол қойылған XML файлын жалғыз тексеріңіз.", "XML-подпись находится внутри подписанного документа: проверяйте подписанный XML-файл отдельно."),
     ("This XML document's encoding is not supported ({}): use UTF-8, windows-1251, KZ-1048 or ISO-8859-1.", "Бұл XML құжатының кодтауына қолдау көрсетілмейді ({}): UTF-8, windows-1251, KZ-1048 немесе ISO-8859-1 қолданыңыз.", "Кодировка этого XML-документа не поддерживается ({}): используйте UTF-8, windows-1251, KZ-1048 или ISO-8859-1."),
     ("The hash is {} bytes long, but this key signs {}-byte hashes ({}).", "Хэш ұзындығы {} байт, бірақ бұл кілт {} байттық хэштерге қол қояды ({}).", "Длина хэша {} байт, а этот ключ подписывает хэши длиной {} байт ({})."),
-    ("This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file or a card instead.", "Бұл XML құжатына қол қойылған және оның қолтаңбасы ішіндегінің бәрін қамтиды, сондықтан ішіне тағы бір қолтаңба қойылса, ол бұзылады. Өз қолтаңбаңызды .cms файлы немесе карточка ретінде қосыңыз.", "Этот XML-документ уже подписан, и его подпись покрывает всё его содержимое, поэтому ещё одна подпись внутри испортит её. Добавьте свою подпись в виде файла .cms или карточки."),
+    ("This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file instead.", "Бұл XML құжатына қол қойылған және оның қолтаңбасы ішіндегінің бәрін қамтиды, сондықтан ішіне тағы бір қолтаңба қойылса, ол бұзылады. Өз қолтаңбаңызды .cms файлы ретінде қосыңыз.", "Этот XML-документ уже подписан, и его подпись покрывает всё его содержимое, поэтому ещё одна подпись внутри испортит её. Добавьте свою подпись в виде файла .cms."),
     ("This XML document is not valid UTF-8: name its encoding in the XML declaration (windows-1251, KZ-1048 or ISO-8859-1), or save it as UTF-8.", "Бұл XML құжаты дұрыс UTF-8 емес: оның кодтауын XML декларациясында көрсетіңіз (windows-1251, KZ-1048 немесе ISO-8859-1) немесе оны UTF-8 ретінде сақтаңыз.", "Этот XML-документ не является корректным UTF-8: укажите его кодировку в XML-декларации (windows-1251, KZ-1048 или ISO-8859-1) или сохраните его в UTF-8."),
     ("An XML document's signatures are inside it: extend the signed XML file alone, without --data.", "XML құжатының қолтаңбалары оның ішінде: қол қойылған XML файлын --data параметрінсіз жалғыз ұзартыңыз.", "Подписи XML-документа находятся внутри него: продлевайте подписанный XML-файл отдельно, без --data."),
     ("Another signature in this XML document covers this one, so adding validation data to it would break that signature.", "Осы XML құжатындағы басқа қолтаңба бұл қолтаңбаны қамтиды, сондықтан оған тексеру деректерін қосу ол қолтаңбаны бұзады.", "Другая подпись в этом XML-документе покрывает эту, поэтому добавление в неё данных для проверки испортит ту подпись."),

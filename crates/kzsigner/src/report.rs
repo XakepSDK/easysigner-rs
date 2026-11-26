@@ -256,8 +256,6 @@ pub struct VerifyReport {
     pub valid: bool,
     /// The file was a PDF with signatures inside it (the content fields describe the PDF).
     pub is_pdf: bool,
-    /// The file was a document card (ddcard); the name of the original document inside it.
-    pub card_document: Option<String>,
     pub has_content: bool,
     pub content_size: u64,
     pub content_sha256: Option<String>,

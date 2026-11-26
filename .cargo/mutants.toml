@@ -1,11 +1,10 @@
 # cargo-mutants (see .github/workflows/quality.yml). Left out: the drawn icons' geometry, the
-# window's layout code, and the stamp, Who signed page and document card drawing
+# window's layout code, and the stamp and Who signed page drawing
 # (coordinates, sizes and text placement), which tests can only look at, not check.
 exclude_globs = [
     "apps/desktop/src/icons.rs",
     "crates/kzsigner-ffi/src/bin/**",
     "apps/desktop/src/gui/**",
-    "crates/kzsigner/src/pdf/card.rs",
     "crates/kzsigner/src/pdf/stamp.rs",
     "crates/kzsigner/src/pdf/layout.rs",
     "crates/kzsigner/src/pdf/whosigned.rs",

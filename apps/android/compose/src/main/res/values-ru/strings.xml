@@ -200,7 +200,6 @@
     <string name="f_xml">XAdES, подпись внутри XML-документа</string>
     <string name="f_cms">CAdES, документ и подписи внутри .cms</string>
     <string name="f_detached">CAdES, подписи в .cms отдельно от документа</string>
-    <string name="f_card">Карточка документа (PDF с оригиналом и его подписями)</string>
     <string name="f_none">Подписи нет</string>
     <string name="d_time">Время подписи</string>
     <string name="d_time_nca">метка времени НУЦ (TSA)</string>

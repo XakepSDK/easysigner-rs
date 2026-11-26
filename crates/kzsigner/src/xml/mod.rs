@@ -178,7 +178,7 @@ pub fn sign(input: &[u8], key: &Key, tsa_url: Option<&str>, env: &Env) -> Result
         .all(|s| leaves_room(&doc, *s, doc.root_element()))
     {
         return Err(Error::new(tr(
-            "This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file or a card instead.",
+            "This XML document is already signed, and its signature covers everything in it, so another signature inside it would break that one. Add yours as a .cms file instead.",
         )));
     }
     let mut r = SignResult {
