@@ -12,7 +12,7 @@ of its own.
 | `gost` | GOST 34.311-95 and GOST 34.11-2015 (Streebog) hashes as NCA uses them, SHA-1/2; GOST 34.10 signing and checking on the CryptoPro-A, TC26 256-A and 512-A curves, with NCA's little-endian conventions; hedged nonces (RFC 6979 section 3.6) |
 | `keys` | KZ GOST and RSA public and private keys; RSA PKCS#1 v1.5 (blinded) |
 | `p12` | Opening .p12 key files as Kalkan writes them (BER, 3DES, RC2-40, SHA-1 MAC) and PBES2 (AES) |
-| `der`, `time` | ASN.1 reading (DER and Kalkan's BER) and DER writing; ASN.1 times |
+| `time` | ASN.1 times (including looser forms some CAs write), ISO-8601 |
 | `cert` | X.509 certificates: fields, names, key usage, policies, whether a certificate may sign |
 | `cms` | CMS SignedData: reading, writing, CAdES-BES signing as NCALayer does, co-signing |
 | `verify` | One signer's signature, signed attributes and signing-certificate binding |
@@ -21,6 +21,9 @@ of its own.
 | `ocsp` | OCSP requests (with nonce), checking answers: signature, responder, nonce, freshness |
 | `crl` | Revocation lists and delta lists: reading, checking, and what they say about a certificate |
 | `text` | Messages for people: an English template and its arguments |
+
+All formats are read and written with RustCrypto's `der`, `x509-cert`, `cms`, `x509-tsp`,
+`x509-ocsp` and `pkcs12` (BER where Kalkan writes it). Signed parts are kept exactly as encoded.
 
 ## The boundary
 

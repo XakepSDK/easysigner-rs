@@ -7,7 +7,6 @@ use crate::cms::{SignedData, SignerInfo};
 use crate::der;
 use crate::env::Env;
 use crate::i18n::{tr, trf};
-use crate::keys::alg_id;
 use crate::report::{ArchiveStamp, CertStatus, SignerReport, Source};
 use crate::tsp::{self, TstInfo};
 use crate::{Error, Result, crl, gost, ocsp};
@@ -585,7 +584,13 @@ fn check_archive(
     )?;
     let alg = info.imprint_alg.clone();
     let k = der::parse(index)?.items(der::SEQUENCE)?;
-    if k.len() != 4 || alg_id(&k[0])?.0 != alg {
+    let alg_ok = k.first().is_some_and(|a| {
+        a.items(der::SEQUENCE)
+            .ok()
+            .and_then(|i| i.first().map(|o| o.oid()))
+            .is_some_and(|o| o.is_ok_and(|o| o == alg))
+    });
+    if k.len() != 4 || !alg_ok {
         return Err(Error::new(tr(
             "the archive timestamp's hash index is malformed",
         )));

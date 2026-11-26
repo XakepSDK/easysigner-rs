@@ -27,7 +27,6 @@ mod asn1;
 pub mod cert;
 pub mod cms;
 pub mod crl;
-pub mod der;
 pub mod gost;
 pub mod keys;
 pub mod ocsp;

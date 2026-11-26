@@ -6,7 +6,6 @@ use x509_cert::ext::pkix::{
     BasicConstraints, CertificatePolicies, ExtendedKeyUsage, KeyUsage, SubjectKeyIdentifier,
 };
 
-use crate::der::Tlv;
 use crate::keys::PublicKey;
 use crate::prelude::*;
 use crate::text::{Text, tr, trf};
@@ -62,10 +61,6 @@ impl Cert {
     /// Accepts DER, or Base64 / PEM text.
     pub fn parse_any(data: &[u8]) -> Result<Cert> {
         Self::parse(&crate::cms::normalize(data))
-    }
-
-    pub fn from_tlv(t: &Tlv) -> Result<Cert> {
-        Self::parse(t.raw)
     }
 
     /// From DER, read by `x509-cert`. Its `Raw` profile: CAs, NCA's among them, issue serial

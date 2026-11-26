@@ -9,6 +9,7 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 [dependencies]
 # the cryptography, on its own (no_std): crypto/
 kzcrypto = { path = "crypto", version = "0.1.0-dev" }
+der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid"] }
 gost94 = "0.11"
 streebog = "0.11"
 sha1 = "0.11"

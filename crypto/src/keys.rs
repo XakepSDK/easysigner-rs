@@ -9,7 +9,7 @@ use rsa::traits::PublicKeyParts;
 use ::der::asn1::{ObjectIdentifier, OctetString};
 use ::der::{Decode, Tagged};
 
-use crate::der::{self, Tlv};
+use crate::asn1;
 use crate::gost::{self, Scheme};
 use crate::prelude::*;
 use crate::{Error, Result, Rng};
@@ -159,35 +159,21 @@ fn field_len(curve: GostCurveId) -> usize {
     }
 }
 
-fn asn1(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
-}
-
 /// The curve's parameter set: the first OID in a GOST key's algorithm parameters.
 fn param_set(params: Option<&::der::Any>) -> Result<String> {
     let none = || Error::new("GOST key without curve parameters");
-    let items: Vec<::der::Any> = params.ok_or_else(none)?.decode_as().map_err(asn1)?;
+    let items: Vec<::der::Any> = params.ok_or_else(none)?.decode_as().map_err(asn1::err)?;
     let first = items.first().ok_or_else(none)?;
     Ok(first
         .decode_as::<ObjectIdentifier>()
-        .map_err(asn1)?
+        .map_err(asn1::err)?
         .to_string())
-}
-
-/// AlgorithmIdentifier: (OID, parameters).
-pub fn alg_id<'a>(t: &Tlv<'a>) -> Result<(String, Option<Tlv<'a>>)> {
-    let k = t.items(der::SEQUENCE)?;
-    let oid = k
-        .first()
-        .ok_or_else(|| Error::malformed("malformed ASN.1: empty AlgorithmIdentifier"))?
-        .oid()?;
-    Ok((oid, k.get(1).copied()))
 }
 
 impl PublicKey {
     /// From a SubjectPublicKeyInfo.
     pub fn from_spki(spki: &[u8]) -> Result<PublicKey> {
-        let k = spki::SubjectPublicKeyInfoOwned::from_der(spki).map_err(asn1)?;
+        let k = spki::SubjectPublicKeyInfoOwned::from_der(spki).map_err(asn1::err)?;
         let oid = k.algorithm.oid.to_string();
         let bits = k
             .subject_public_key
@@ -195,7 +181,7 @@ impl PublicKey {
             .ok_or_else(|| Error::malformed("malformed ASN.1: SubjectPublicKeyInfo"))?;
         if gost::by_key(&oid).is_some() {
             let curve = curve_id(&param_set(k.algorithm.parameters.as_ref())?)?;
-            let xy = OctetString::from_der(bits).map_err(asn1)?;
+            let xy = OctetString::from_der(bits).map_err(asn1::err)?;
             return Ok(PublicKey::Gost(GostPublic::from_nca_bytes(
                 curve,
                 xy.as_bytes(),
@@ -230,8 +216,11 @@ impl PublicKey {
                 let digest = rsa_digest(sig_alg, digest_alg)?;
                 let h = gost::hash(digest, data)?;
                 // DigestInfo with NULL parameters, or without them (both are seen)
-                let without_null = der::seq(&[&der::seq(&[&der::oid(digest)]), &der::octets(&h)]);
-                Ok([digest_info(digest, &h), without_null]
+                let infos = [
+                    digest_info(digest, &h, Some(::der::asn1::Any::null()))?,
+                    digest_info(digest, &h, None)?,
+                ];
+                Ok(infos
                     .iter()
                     .any(|di| k.verify(Pkcs1v15Sign::new_unprefixed(), di, sig).is_ok()))
             }
@@ -268,30 +257,47 @@ fn rsa_digest<'a>(sig_alg: &str, digest_alg: Option<&'a str>) -> Result<&'a str>
     })
 }
 
-/// PKCS#1 v1.5 DigestInfo prefix + hash.
-fn digest_info(digest_oid: &str, h: &[u8]) -> Vec<u8> {
-    der::seq(&[&der::alg_null(digest_oid), &der::octets(h)])
+/// DigestInfo (RFC 8017 9.2), as PKCS#1 v1.5 signs it.
+#[derive(::der::Sequence)]
+struct DigestInfo {
+    algorithm: spki::AlgorithmIdentifierOwned,
+    digest: OctetString,
+}
+
+/// The DigestInfo of the hash `h` made with `digest_oid`, with these algorithm parameters.
+fn digest_info(
+    digest_oid: &str,
+    h: &[u8],
+    parameters: Option<::der::asn1::Any>,
+) -> Result<Vec<u8>> {
+    asn1::der(&DigestInfo {
+        algorithm: spki::AlgorithmIdentifierOwned {
+            oid: asn1::oid(digest_oid)?,
+            parameters,
+        },
+        digest: OctetString::new(h).map_err(asn1::err)?,
+    })
 }
 
 impl PrivateKey {
     /// From a PKCS#8 PrivateKeyInfo.
     pub fn from_pkcs8(pki: &[u8]) -> Result<PrivateKey> {
         // version, algorithm, key, and whatever follows (attributes, a v2 public key)
-        let k: Vec<::der::Any> = Vec::from_der(pki).map_err(asn1)?;
+        let k: Vec<::der::Any> = Vec::from_der(pki).map_err(asn1::err)?;
         let (Some(alg), Some(key)) = (k.get(1), k.get(2)) else {
             return Err(Error::malformed("malformed PrivateKeyInfo"));
         };
-        let alg: spki::AlgorithmIdentifierOwned = alg.decode_as().map_err(asn1)?;
+        let alg: spki::AlgorithmIdentifierOwned = alg.decode_as().map_err(asn1::err)?;
         let key = zeroize::Zeroizing::new(
             key.decode_as::<OctetString>()
-                .map_err(asn1)?
+                .map_err(asn1::err)?
                 .into_bytes()
                 .into_vec(),
         );
         let oid = alg.oid.to_string();
         if let Some(scheme) = gost::by_key(&oid) {
             let curve = curve_id(&param_set(alg.parameters.as_ref())?)?;
-            let v = ::der::AnyRef::from_der(&key).map_err(asn1)?;
+            let v = ::der::AnyRef::from_der(&key).map_err(asn1::err)?;
             // d little-endian, as long as the field: 2004 keys are a (big-endian) INTEGER,
             // 2015 keys a little-endian OCTET STRING, either maybe shorter
             let mut d = zeroize::Zeroizing::new(match v.tag() {
@@ -369,7 +375,7 @@ impl PrivateKey {
                     .sign_with_rng(
                         &mut r,
                         Pkcs1v15Sign::new_unprefixed(),
-                        &digest_info(gost::H_SHA256, &h),
+                        &digest_info(gost::H_SHA256, &h, Some(::der::asn1::Any::null()))?,
                     )
                     .map_err(|e| Error::new(format!("RSA signing failed: {e}")));
                 match r.failed {
@@ -408,8 +414,8 @@ mod tests {
         let data = b"hello";
         let sign = |digest: &str| {
             let h = gost::hash(digest, data).unwrap();
-            rsa.sign(Pkcs1v15Sign::new_unprefixed(), &digest_info(digest, &h))
-                .unwrap()
+            let di = digest_info(digest, &h, Some(::der::asn1::Any::null())).unwrap();
+            rsa.sign(Pkcs1v15Sign::new_unprefixed(), &di).unwrap()
         };
         for (sig_alg, digest) in [
             ("1.2.840.113549.1.1.5", gost::H_SHA1),
@@ -494,9 +500,10 @@ mod tests {
     fn key_structures() {
         let k = key("alice_gost2015");
         // short SubjectPublicKeyInfo and PrivateKeyInfo
-        let alg = der::alg_null(gost::RSA_ENCRYPTION);
-        assert!(PublicKey::from_spki(&der::seq(&[&alg])).is_err());
-        assert!(PrivateKey::from_pkcs8(&der::seq(&[&der::small_int(0), &alg])).is_err());
+        let alg = asn1::alg_null(gost::RSA_ENCRYPTION).unwrap();
+        let seq = |c: &[u8]| [&[0x30, c.len() as u8][..], c].concat();
+        assert!(PublicKey::from_spki(&seq(&alg)).is_err());
+        assert!(PrivateKey::from_pkcs8(&seq(&[&[2, 1, 0][..], &alg].concat())).is_err());
         // another key on the same curve, or on another curve, does not match
         assert!(
             !k.private_key

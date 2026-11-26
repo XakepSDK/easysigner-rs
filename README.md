@@ -212,12 +212,11 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   * `keys.rs`: KZ GOST and RSA keys; RSA PKCS#1 v1.5 signing and verification with the `rsa`
     crate.
   * `p12.rs`: PKCS#12 key files as Kalkan writes them (BER, 3DES key bag, RC2-40 certificate
-    bag, SHA-1 MAC), and PBES2/AES files. The file structure is read here because Kalkan writes
-    BER, which the RustCrypto `pkcs12`/`der` crates do not read; the key derivation and ciphers
-    are theirs.
-  * `der.rs`: a small ASN.1 reader (DER and BER) and DER writer that keeps raw encodings, so
-    signed parts are hashed and copied byte for byte (NCALayer and Kalkan files are not always
-    strict DER, which the `der` crate requires). `time.rs`: ASN.1 times.
+    bag, SHA-1 MAC), and PBES2/AES files, with RustCrypto's `pkcs12` types and ciphers.
+  * All formats are read and written with RustCrypto's `der`, `x509-cert`, `cms`, `x509-tsp`
+    and `x509-ocsp` (BER where Kalkan writes it). Signed parts are kept as encoded, so they are
+    hashed and copied byte for byte. `asn1.rs`: small shared helpers. `time.rs`: ASN.1 times,
+    including the looser forms some CAs write.
   * `cms.rs`: CAdES-BES signing with the attributes NCALayer writes (content type, signing
     time, signingCertificateV2, message digest), co-signing by merging signers. `verify.rs`:
     one signer's signature and signing-certificate binding.

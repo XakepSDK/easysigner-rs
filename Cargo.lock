@@ -2300,6 +2300,7 @@ dependencies = [
  "cbc",
  "chrono",
  "cipher",
+ "der",
  "des",
  "digest",
  "flate2",
