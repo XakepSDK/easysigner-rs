@@ -285,6 +285,103 @@ pub struct SignResult {
 mod tests {
     use super::*;
 
+    /// Each reason, the most serious first: a report that fails in one way only, then in two.
+    #[test]
+    fn reasons() {
+        let good = SignerReport {
+            cert_der: Some(vec![1]),
+            signature_ok: true,
+            chain_ok: true,
+            cert_valid_at_signing: Some(true),
+            revocation: Some(Answer::Said(CertStatus::Good)),
+            revocation_source: Some(Source::Ocsp),
+            ..Default::default()
+        };
+        let r = |f: &dyn Fn(&mut SignerReport)| {
+            let mut s = good.clone();
+            f(&mut s);
+            s.reason()
+        };
+        assert_eq!(r(&|s| s.valid = true), None);
+        // only an archive timestamp can have failed
+        assert_eq!(r(&|_| {}), Some(Reason::Damaged));
+        assert_eq!(r(&|s| s.cert_der = None), Some(Reason::Damaged));
+        assert_eq!(r(&|s| s.signature_ok = false), Some(Reason::Changed));
+        let revoked = Some(Answer::Said(CertStatus::Revoked));
+        assert_eq!(r(&|s| s.revocation = revoked), Some(Reason::Revoked));
+        assert_eq!(r(&|s| s.chain_ok = false), Some(Reason::NotRecognized));
+        assert_eq!(
+            r(&|s| s.usage_error = Some("x".into())),
+            Some(Reason::NotRecognized)
+        );
+        let unknown = Some(Answer::Said(CertStatus::Unknown));
+        assert_eq!(r(&|s| s.revocation = unknown), Some(Reason::NotRecognized));
+        assert_eq!(r(&|s| s.timestamp_ok = Some(false)), Some(Reason::Damaged));
+        assert_eq!(r(&|s| s.timestamp_ok = Some(true)), Some(Reason::Damaged));
+        assert_eq!(
+            r(&|s| s.cert_valid_at_signing = Some(false)),
+            Some(Reason::ExpiredSince)
+        );
+        assert_eq!(
+            r(&|s| {
+                s.cert_valid_at_signing = Some(false);
+                s.timestamp_ok = Some(true);
+                s.timestamp_trusted = Some(true);
+                s.timestamp_time = Some(1);
+            }),
+            Some(Reason::Expired)
+        );
+        assert_eq!(
+            r(&|s| s.revocation = Some(Answer::NoAnswer)),
+            Some(Reason::NotConfirmed)
+        );
+        assert_eq!(r(&|s| s.revocation = None), Some(Reason::NotConfirmed));
+        assert_eq!(
+            r(&|s| s.revocation_source = Some(Source::KeptOcsp)),
+            Some(Reason::NotConfirmed)
+        );
+        assert_eq!(
+            r(&|s| s.revocation_source = Some(Source::Crl)),
+            Some(Reason::Damaged)
+        );
+        // the more serious first
+        assert_eq!(
+            r(&|s| {
+                s.signature_ok = false;
+                s.revocation = revoked;
+            }),
+            Some(Reason::Changed)
+        );
+        assert_eq!(
+            r(&|s| {
+                s.revocation = revoked;
+                s.chain_ok = false;
+            }),
+            Some(Reason::Revoked)
+        );
+        assert_eq!(
+            r(&|s| {
+                s.chain_ok = false;
+                s.timestamp_ok = Some(false);
+            }),
+            Some(Reason::NotRecognized)
+        );
+        assert_eq!(
+            r(&|s| {
+                s.timestamp_ok = Some(false);
+                s.cert_valid_at_signing = Some(false);
+            }),
+            Some(Reason::Damaged)
+        );
+        assert_eq!(
+            r(&|s| {
+                s.cert_valid_at_signing = Some(false);
+                s.revocation = None;
+            }),
+            Some(Reason::ExpiredSince)
+        );
+    }
+
     #[test]
     fn codes() {
         let all = [Source::Ocsp, Source::Crl, Source::KeptOcsp, Source::KeptCrl];

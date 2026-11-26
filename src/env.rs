@@ -94,3 +94,17 @@ impl std::fmt::Debug for Env {
         f.debug_struct("Env").finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_parts() {
+        let env = Env::new(TrustStore::new(vec![])).with_clock(Arc::new(FixedClock(42)));
+        assert_eq!(env.now_ms(), 42);
+        assert_eq!(format!("{env:?}"), "Env { .. }");
+        let real = SystemClock.now_ms();
+        assert!(real > 1_700_000_000_000 && Env::new(TrustStore::new(vec![])).now_ms() >= real);
+    }
+}
