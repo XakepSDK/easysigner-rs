@@ -13,25 +13,11 @@ kzcrypto = { path = "../kzcrypto", version = "0.1.0-dev" }
 kzcrypto-nca = { path = "../kzcrypto-nca", version = "0.1.0-dev" }
 der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid", "ber", "derive"] }
 spki = { version = "0.8", default-features = false, features = ["alloc"] }
-gost94 = "0.11"
-streebog = "0.11"
-sha1 = "0.11"
-sha2 = "0.11"
-digest = "0.11"
-hmac = "0.13"
-pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
-des = "0.9"
-rc2 = "0.9"
-aes = "0.9"
-cipher = "0.5"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 # dates and the local time zone (the system's zone database; Windows: the bundled one)
 jiff = "0.2"
 ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
-cbc = "0.2.1"
-pkcs12 = { version = "0.2.0-pre.0", default-features = false, features = ["kdf"] }
-rsa = { version = "0.10", default-features = false, features = ["encoding", "std", "pkcs1v15"] }
 lopdf = { version = "0.47", default-features = false }
 # glyph map and metrics of the stamp font (the same crate the GUI text stack uses)
 skrifa = { version = "0.44", default-features = false, features = ["std"] }

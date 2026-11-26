@@ -270,7 +270,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   `crls` (RFC 5940), as the ddcard specification asks. `pdf/qr.rs` turns a signature into QR
   codes (ZIP, Base64, JSON parts; [qrcodegen](https://github.com/nayuki/QR-Code-generator)) and
   back. `pdf/import.rs` shows the document's own pages in the card; `pdf/layout.rs`,
-  `pdf/font.rs` draw the pages in an embedded subset of the bundled Noto Sans (`ttf-parser`).
+  `pdf/font.rs` draw the pages in an embedded subset of the bundled Noto Sans (read with `skrifa`).
 * `apps/desktop/`: the executable: `src/main.rs` the command line, `src/gui/` the window (egui),
   `src/icons.rs` its drawn icons. `output.rs` (core): the text and JSON reports.
 * `crates/kzsigner-ffi`: the core's calls for the Android app (UniFFI): the key vault over the phone's chip,
