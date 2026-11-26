@@ -20,8 +20,6 @@ des = "0.9"
 rc2 = "0.9"
 aes = "0.9"
 cipher = "0.5"
-num-bigint = "0.5"
-num-traits = "0.2"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 ureq = { version = "3.5", default-features = false }

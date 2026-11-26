@@ -1,32 +1,159 @@
 //! Public and private keys (KZ GOST and RSA) and the signatures made with them.
 
-use num_bigint::BigUint;
+use gost3410::signature::hazmat::PrehashVerifier as _;
+use gost3410::{CryptoProA, GostCurve, Signature, SigningKey, Tc26_256A, Tc26_512A, VerifyingKey};
 use rsa::Pkcs1v15Sign;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
 use rsa::traits::PublicKeyParts;
 
 use crate::der::{self, Tlv};
-use crate::gost::{self, Curve, Scheme};
+use crate::gost::{self, Scheme};
 use crate::prelude::*;
 use crate::{Error, Result, Rng};
 
 pub enum PublicKey {
-    Gost {
-        curve: Curve,
-        x: BigUint,
-        y: BigUint,
-    },
+    Gost(GostPublic),
     Rsa(rsa::PublicKey),
     Other(String),
 }
 
 pub enum PrivateKey {
-    Gost {
-        curve: Curve,
-        scheme: Scheme,
-        d: BigUint,
-    },
+    Gost { key: GostPrivate, scheme: Scheme },
     Rsa(rsa::PrivateKey),
+}
+
+/// A GOST public key, on one of NCA's three curves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GostPublic {
+    CryptoProA(VerifyingKey<CryptoProA>),
+    Tc26_256A(VerifyingKey<Tc26_256A>),
+    Tc26_512A(VerifyingKey<Tc26_512A>),
+}
+
+/// A GOST private key, on one of NCA's three curves (wiped when dropped).
+pub enum GostPrivate {
+    CryptoProA(SigningKey<CryptoProA>),
+    Tc26_256A(SigningKey<Tc26_256A>),
+    Tc26_512A(SigningKey<Tc26_512A>),
+}
+
+/// Which of the three curves a parameter-set OID names.
+#[derive(Clone, Copy)]
+enum GostCurveId {
+    CryptoProA,
+    Tc26_256A,
+    Tc26_512A,
+}
+
+fn curve_id(param_set: &str) -> Result<GostCurveId> {
+    let named = |oids: &[&str]| oids.contains(&param_set);
+    if named(CryptoProA::PARAM_SET_OIDS) {
+        Ok(GostCurveId::CryptoProA)
+    } else if named(Tc26_256A::PARAM_SET_OIDS) {
+        Ok(GostCurveId::Tc26_256A)
+    } else if named(Tc26_512A::PARAM_SET_OIDS) {
+        Ok(GostCurveId::Tc26_512A)
+    } else {
+        Err(Error::unsupported(format!(
+            "Unsupported GOST curve parameter set {param_set}"
+        )))
+    }
+}
+
+fn gost_verify<C: GostCurve>(k: &VerifyingKey<C>, hash: &[u8], sig: &[u8]) -> bool {
+    Signature::<C>::from_nca_bytes(sig).is_ok_and(|s| k.verify_prehash(hash, &s).is_ok())
+}
+
+fn gost_sign<C: GostCurve>(k: &SigningKey<C>, hash: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>> {
+    let mut fresh = [0u8; 32];
+    rng.fill(&mut fresh)?;
+    let sig = k
+        .sign_prehash_with_fresh(hash, &fresh)
+        .map_err(|_| Error::new("GOST signing failed"))?;
+    let mut out = [0u8; 128];
+    Ok(sig
+        .to_nca_bytes(&mut out)
+        .map_err(|_| Error::new("GOST signing failed"))?
+        .to_vec())
+}
+
+impl GostPublic {
+    /// From NCA's form: x || y, little-endian.
+    fn from_nca_bytes(curve: GostCurveId, xy: &[u8]) -> Result<GostPublic> {
+        let bad = |_| Error::malformed("malformed GOST public key");
+        Ok(match curve {
+            GostCurveId::CryptoProA => {
+                GostPublic::CryptoProA(VerifyingKey::from_nca_bytes(xy).map_err(bad)?)
+            }
+            GostCurveId::Tc26_256A => {
+                GostPublic::Tc26_256A(VerifyingKey::from_nca_bytes(xy).map_err(bad)?)
+            }
+            GostCurveId::Tc26_512A => {
+                GostPublic::Tc26_512A(VerifyingKey::from_nca_bytes(xy).map_err(bad)?)
+            }
+        })
+    }
+
+    /// Checks NCA's r || s (little-endian) over a hash.
+    pub fn verify_prehash(&self, hash: &[u8], sig: &[u8]) -> bool {
+        match self {
+            GostPublic::CryptoProA(k) => gost_verify(k, hash, sig),
+            GostPublic::Tc26_256A(k) => gost_verify(k, hash, sig),
+            GostPublic::Tc26_512A(k) => gost_verify(k, hash, sig),
+        }
+    }
+
+    /// The curve's name.
+    pub fn curve_name(&self) -> &'static str {
+        match self {
+            GostPublic::CryptoProA(_) => CryptoProA::NAME,
+            GostPublic::Tc26_256A(_) => Tc26_256A::NAME,
+            GostPublic::Tc26_512A(_) => Tc26_512A::NAME,
+        }
+    }
+}
+
+impl GostPrivate {
+    /// From d, little-endian (as long as the curve's field).
+    fn from_le(curve: GostCurveId, d: &[u8]) -> Result<GostPrivate> {
+        let bad = |_| Error::malformed("malformed GOST private key");
+        Ok(match curve {
+            GostCurveId::CryptoProA => {
+                GostPrivate::CryptoProA(SigningKey::from_nca_bytes(d).map_err(bad)?)
+            }
+            GostCurveId::Tc26_256A => {
+                GostPrivate::Tc26_256A(SigningKey::from_nca_bytes(d).map_err(bad)?)
+            }
+            GostCurveId::Tc26_512A => {
+                GostPrivate::Tc26_512A(SigningKey::from_nca_bytes(d).map_err(bad)?)
+            }
+        })
+    }
+
+    /// NCA's r || s (little-endian) over a hash.
+    pub fn sign_prehash(&self, hash: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>> {
+        match self {
+            GostPrivate::CryptoProA(k) => gost_sign(k, hash, rng),
+            GostPrivate::Tc26_256A(k) => gost_sign(k, hash, rng),
+            GostPrivate::Tc26_512A(k) => gost_sign(k, hash, rng),
+        }
+    }
+
+    /// The public key.
+    pub fn public(&self) -> GostPublic {
+        match self {
+            GostPrivate::CryptoProA(k) => GostPublic::CryptoProA(*k.verifying_key()),
+            GostPrivate::Tc26_256A(k) => GostPublic::Tc26_256A(*k.verifying_key()),
+            GostPrivate::Tc26_512A(k) => GostPublic::Tc26_512A(*k.verifying_key()),
+        }
+    }
+}
+
+fn field_len(curve: GostCurveId) -> usize {
+    match curve {
+        GostCurveId::Tc26_512A => 64,
+        _ => 32,
+    }
 }
 
 fn param_set(params: Option<&Tlv>) -> Result<String> {
@@ -58,14 +185,9 @@ impl PublicKey {
         let (oid, params) = alg_id(&k[0])?;
         let bits = k[1].bits()?;
         if gost::by_key(&oid).is_some() {
-            let curve = gost::curve(&param_set(params.as_ref())?)?;
+            let curve = curve_id(&param_set(params.as_ref())?)?;
             let xy = der::parse(bits)?.expect(der::OCTET_STRING)?.content;
-            let n = xy.len() / 2;
-            return Ok(PublicKey::Gost {
-                curve,
-                x: gost::le(&xy[..n]),
-                y: gost::le(&xy[n..2 * n]),
-            });
+            return Ok(PublicKey::Gost(GostPublic::from_nca_bytes(curve, xy)?));
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PublicKey::from_pkcs1_der(bits)
@@ -86,11 +208,11 @@ impl PublicKey {
         sig: &[u8],
     ) -> Result<bool> {
         match self {
-            PublicKey::Gost { curve, x, y } => {
+            PublicKey::Gost(k) => {
                 let sc = gost::by_sig(sig_alg)
                     .ok_or_else(|| Error::new(format!("Key does not match {sig_alg}")))?;
                 let h = gost::hash(sc.digest_oid, data)?;
-                Ok(curve.verify(x, y, &h, sig))
+                Ok(k.verify_prehash(&h, sig))
             }
             PublicKey::Rsa(k) => {
                 let digest = rsa_digest(sig_alg, digest_alg)?;
@@ -149,14 +271,29 @@ impl PrivateKey {
         let (oid, params) = alg_id(&k[1])?;
         let key = k[2].expect(der::OCTET_STRING)?.octets()?;
         if let Some(scheme) = gost::by_key(&oid) {
-            let curve = gost::curve(&param_set(params.as_ref())?)?;
+            let curve = curve_id(&param_set(params.as_ref())?)?;
             let v = der::parse(&key)?;
-            let d = match v.tag {
-                der::INTEGER => BigUint::from_bytes_be(v.uint()?),
-                der::OCTET_STRING => gost::le(&v.octets()?),
+            // d little-endian, as long as the field: 2004 keys are a (big-endian) INTEGER,
+            // 2015 keys a little-endian OCTET STRING, either maybe shorter
+            let mut d = zeroize::Zeroizing::new(match v.tag {
+                der::INTEGER => {
+                    let mut be = v.uint()?.to_vec();
+                    be.reverse();
+                    be
+                }
+                der::OCTET_STRING => v.octets()?.to_vec(),
                 _ => return Err(Error::new("unexpected GOST private key encoding")),
-            };
-            return Ok(PrivateKey::Gost { curve, scheme, d });
+            });
+            let n = field_len(curve);
+            while d.len() > n && d.last() == Some(&0) {
+                d.pop();
+            }
+            if d.len() > n {
+                return Err(Error::malformed("malformed GOST private key"));
+            }
+            d.resize(n, 0);
+            let key = GostPrivate::from_le(curve, &d)?;
+            return Ok(PrivateKey::Gost { key, scheme });
         }
         if oid == gost::RSA_ENCRYPTION {
             let k = rsa::PrivateKey::from_pkcs1_der(&key)
@@ -193,7 +330,7 @@ impl PrivateKey {
     pub fn sign(&self, data: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>> {
         let h = gost::hash(self.digest_oid(), data)?;
         match self {
-            PrivateKey::Gost { curve, scheme, d } => curve.sign(d, &h, scheme.size, rng),
+            PrivateKey::Gost { key, .. } => key.sign_prehash(&h, rng),
             // blinded, with the caller's random source
             PrivateKey::Rsa(k) => {
                 let mut r = crate::RandCore { rng, failed: None };
@@ -215,10 +352,7 @@ impl PrivateKey {
     /// Whether `pub_key` belongs to this private key.
     pub fn matches(&self, pub_key: &PublicKey) -> bool {
         match (self, pub_key) {
-            (PrivateKey::Gost { curve, d, .. }, PublicKey::Gost { curve: c2, x, y }) => {
-                curve.name == c2.name
-                    && curve.public(d).is_some_and(|(px, py)| &px == x && &py == y)
-            }
+            (PrivateKey::Gost { key, .. }, PublicKey::Gost(p)) => &key.public() == p,
             (PrivateKey::Rsa(k), PublicKey::Rsa(p)) => k.n() == p.n() && k.e() == p.e(),
             _ => false,
         }
@@ -320,15 +454,15 @@ mod tests {
         let alg = der::alg_null(gost::RSA_ENCRYPTION);
         assert!(PublicKey::from_spki(&der::seq(&[&alg])).is_err());
         assert!(PrivateKey::from_pkcs8(&der::seq(&[&der::small_int(0), &alg])).is_err());
-        // a point with the same x but another y is another key
-        let PublicKey::Gost { curve, x, y } = k.cert.public_key().unwrap() else {
-            panic!("not GOST");
-        };
-        assert!(!k.private_key.matches(&PublicKey::Gost {
-            curve,
-            x,
-            y: y + 1u32,
-        }));
+        // another key on the same curve, or on another curve, does not match
+        assert!(
+            !k.private_key
+                .matches(&key("bob_gost2015").cert.public_key().unwrap())
+        );
+        assert!(
+            !k.private_key
+                .matches(&key("alice_gost2004").cert.public_key().unwrap())
+        );
         assert!(k.private_key.matches(&k.cert.public_key().unwrap()));
     }
 }
