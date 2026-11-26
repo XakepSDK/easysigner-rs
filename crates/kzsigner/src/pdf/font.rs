@@ -4,41 +4,60 @@
 use std::collections::BTreeMap;
 
 use lopdf::{Dictionary, Object, ObjectId, Stream};
+use skrifa::instance::{LocationRef, Size};
+use skrifa::metrics::{GlyphMetrics, Metrics};
+use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 pub static NOTO_SANS: &[u8] = include_bytes!("../../../../assets/NotoSans-subset.ttf");
 
 pub struct Font {
-    face: ttf_parser::Face<'static>,
+    font: FontRef<'static>,
+    /// Font-wide metrics in font units.
+    metrics: Metrics,
 }
 
 impl Font {
     pub fn noto() -> Font {
-        Font {
-            face: ttf_parser::Face::parse(NOTO_SANS, 0)
-                .expect("the bundled font is a valid TrueType font"),
-        }
+        #[allow(clippy::expect_used)] // the font is compiled in and tested
+        let font = FontRef::new(NOTO_SANS).expect("the bundled font is a valid TrueType font");
+        let metrics = font.metrics(Size::unscaled(), LocationRef::default());
+        Font { font, metrics }
     }
 
-    fn per_1000(&self, v: i32) -> i64 {
-        i64::from(v) * 1000 / i64::from(self.face.units_per_em().max(1))
+    fn glyph_metrics(&self) -> GlyphMetrics<'static> {
+        self.font
+            .glyph_metrics(Size::unscaled(), LocationRef::default())
+    }
+
+    /// `v` font units in 1/1000 of the font size, as PDF measures are.
+    fn per_1000(&self, v: f32) -> i64 {
+        (f64::from(v) * 1000.0 / f64::from(self.metrics.units_per_em.max(1))).trunc() as i64
+    }
+
+    /// Advance width in font units.
+    fn advance(&self, g: u16) -> f32 {
+        self.glyph_metrics()
+            .advance_width(GlyphId::from(g))
+            .unwrap_or(0.0)
     }
 
     /// Advance width in 1/1000 of the font size, as PDF widths are.
     pub fn width_1000(&self, g: u16) -> i64 {
-        let adv = self
-            .face
-            .glyph_hor_advance(ttf_parser::GlyphId(g))
-            .unwrap_or(0);
-        self.per_1000(i32::from(adv))
+        self.per_1000(self.advance(g))
+    }
+
+    fn glyph(&self, c: char) -> Option<u16> {
+        let g = self.font.charmap().map(c)?.to_u32();
+        u16::try_from(g).ok().filter(|&g| g != 0)
     }
 
     /// Glyphs for `s`: characters the font lacks become `?`.
     pub fn shape(&self, s: &str) -> Vec<(u16, char)> {
-        let q = self.face.glyph_index('?').map_or(0, |g| g.0);
+        let q = self.glyph('?').unwrap_or(0);
         s.chars()
-            .map(|c| match self.face.glyph_index(c) {
-                Some(g) if g.0 != 0 => (g.0, c),
-                _ => (q, '?'),
+            .map(|c| match self.glyph(c) {
+                Some(g) => (g, c),
+                None => (q, '?'),
             })
             .collect()
     }
@@ -66,7 +85,8 @@ impl Font {
         let _ = file.compress();
         let file = add(Object::Stream(file));
         let name = "KZSIGN+NotoSans";
-        let bb = self.face.global_bounding_box();
+        let m = &self.metrics;
+        let bb = m.bounds.unwrap_or_default();
         let desc = add(Object::Dictionary(Dictionary::from_iter([
             ("Type", Object::from("FontDescriptor")),
             ("FontName", name.into()),
@@ -76,23 +96,16 @@ impl Font {
                 Object::Array(
                     [bb.x_min, bb.y_min, bb.x_max, bb.y_max]
                         .iter()
-                        .map(|&v| self.per_1000(i32::from(v)).into())
+                        .map(|&v| self.per_1000(v).into())
                         .collect(),
                 ),
             ),
             ("ItalicAngle", 0.into()),
-            (
-                "Ascent",
-                self.per_1000(i32::from(self.face.ascender())).into(),
-            ),
-            (
-                "Descent",
-                self.per_1000(i32::from(self.face.descender())).into(),
-            ),
+            ("Ascent", self.per_1000(m.ascent).into()),
+            ("Descent", self.per_1000(m.descent).into()),
             (
                 "CapHeight",
-                self.per_1000(i32::from(self.face.capital_height().unwrap_or(714)))
-                    .into(),
+                self.per_1000(m.cap_height.unwrap_or(714.0)).into(),
             ),
             ("StemV", 80.into()),
             ("FontFile2", file.into()),
@@ -179,9 +192,10 @@ mod tests {
     fn widths() {
         let f = Font::noto();
         let a = f.shape("A")[0].0;
-        let adv = f.face.glyph_hor_advance(ttf_parser::GlyphId(a)).unwrap();
-        let upem = f.face.units_per_em();
-        assert_eq!(f.width_1000(a), i64::from(adv) * 1000 / i64::from(upem));
+        let adv = f.advance(a) as i64;
+        let upem = i64::from(f.metrics.units_per_em);
+        assert_eq!(upem, 1000);
+        assert_eq!(f.width_1000(a), adv * 1000 / upem);
         assert!(f.width_1000(a) > 100 && f.width_1000(a) < 1000);
         let w = f.width_1000(a) as f64;
         assert_eq!(f.text_width("AA", 12.0), 2.0 * w * 12.0 / 1000.0);

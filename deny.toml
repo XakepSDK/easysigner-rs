@@ -6,13 +6,9 @@
 all-features = false
 
 [advisories]
-# Unmaintained crates we depend on directly fail the check; the ones below are known and have a
-# plan (docs: code health audit, phase B).
+# Unmaintained crates we depend on directly fail the check. Nothing is ignored.
 unmaintained = "workspace"
-ignore = [
-    # ttf-parser: the stamp's font metrics; to move to skrifa
-    { id = "RUSTSEC-2026-0192", reason = "to be replaced, see the code health plan" },
-]
+ignore = []
 
 [bans]
 multiple-versions = "warn"
