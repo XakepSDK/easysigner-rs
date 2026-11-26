@@ -205,10 +205,9 @@ fn compose(
             .unwrap_or_default();
         lines.push((7.0, 0.0, format!("{o}{bin}")));
     }
-    let until = chrono::DateTime::from_timestamp_millis(c.not_after + 5 * 3600 * 1000)
-        .unwrap_or_default()
-        .format("%d.%m.%Y")
-        .to_string();
+    let until = crate::time::astana(c.not_after)
+        .map(|t| t.strftime("%d.%m.%Y").to_string())
+        .unwrap_or_default();
     lines.push((
         6.0,
         0.3,

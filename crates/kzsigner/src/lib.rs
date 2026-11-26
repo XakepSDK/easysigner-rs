@@ -26,6 +26,7 @@ pub mod verify;
 pub(crate) mod xml;
 
 /// The cryptography, for callers that use it directly.
+pub use jiff;
 pub use kzcrypto;
 
 use cert::Cert;

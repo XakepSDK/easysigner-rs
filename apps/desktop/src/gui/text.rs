@@ -88,19 +88,17 @@ const MONTHS: [[&str; 12]; 3] = [
     ],
 ];
 
-fn local(ms: i64) -> Option<chrono::DateTime<chrono::Local>> {
-    use chrono::TimeZone;
-    chrono::Local.timestamp_millis_opt(ms).single()
+fn local(ms: i64) -> Option<kzsigner::jiff::Zoned> {
+    kzsigner::time::local(ms)
 }
 
 /// "24 November 2026", "2026 жылғы 24 қараша", "24 ноября 2026" in this computer's time zone.
 pub fn date(ms: i64) -> String {
-    use chrono::Datelike;
     let Some(d) = local(ms) else {
         return String::new();
     };
     let l = lang();
-    let m = MONTHS[l as usize][d.month0() as usize];
+    let m = MONTHS[l as usize][usize::try_from(d.month() - 1).unwrap_or(0)];
     match l {
         Lang::Kk => format!("{} жылғы {} {m}", d.year(), d.day()),
         _ => format!("{} {m} {}", d.day(), d.year()),
@@ -109,7 +107,6 @@ pub fn date(ms: i64) -> String {
 
 /// [`date`] with the time: "24 November 2026, 16:40".
 pub fn date_time(ms: i64) -> String {
-    use chrono::Timelike;
     let Some(d) = local(ms) else {
         return String::new();
     };

@@ -25,7 +25,6 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 getrandom = "0.4"
 zeroize = "1"
 # dates in the window, in this computer's time zone
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lexopt = "0.3"
 rpassword = "7"
 # file dialogs in the window

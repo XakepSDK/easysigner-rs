@@ -380,10 +380,9 @@ fn signer_box(
         (None, _, Some(i)) => format!("IIN {i}"),
         _ => String::new(),
     };
-    let time = chrono::DateTime::from_timestamp_millis(at + 5 * 3600 * 1000)
-        .unwrap_or_default()
-        .format("%d.%m.%Y %H:%M")
-        .to_string();
+    let time = crate::time::astana(at)
+        .map(|t| t.strftime("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_default();
     let when = if nca_time {
         format!("{time} {NCA}")
     } else {

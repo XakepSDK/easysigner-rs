@@ -275,8 +275,8 @@ struct SigView {
 
 /// "19.05.2021 04:01:52 UTC+5", in Astana's time.
 pub fn astana(ms: i64) -> String {
-    let t = chrono::DateTime::from_timestamp_millis(ms + 5 * 3600 * 1000).unwrap_or_default();
-    format!("{} UTC+5", t.format("%d.%m.%Y %H:%M:%S"))
+    let t = crate::time::astana(ms).unwrap_or_default();
+    format!("{} UTC+5", t.strftime("%d.%m.%Y %H:%M:%S"))
 }
 
 fn dn(name: &[u8]) -> String {

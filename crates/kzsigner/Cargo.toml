@@ -25,7 +25,8 @@ rc2 = "0.9"
 aes = "0.9"
 cipher = "0.5"
 getrandom = { version = "0.4", features = ["sys_rng"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# dates and the local time zone (the system's zone database; Windows: the bundled one)
+jiff = "0.2"
 ureq = { version = "3.5", default-features = false }
 base64 = "0.23"
 cbc = "0.2.1"

@@ -163,10 +163,7 @@ fn by_id<'a, 'i>(doc: &'a Document<'i>, id: &str) -> Option<Node<'a, 'i>> {
 }
 
 fn xsd_time(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .unwrap_or_default()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
+    crate::time::utc_format(ms, "%Y-%m-%dT%H:%M:%SZ")
 }
 
 /// Signs the XML document `input` with an enveloped XAdES signature (B-B, or B-T with a
@@ -609,8 +606,7 @@ fn check_one(
             sr.signing_time = ssp
                 .and_then(|s| child(s, XADES, "SigningTime"))
                 .and_then(|t| t.text())
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
-                .map(|t| t.timestamp_millis());
+                .and_then(crate::time::parse_rfc3339);
             let cert_ref = ssp.map(|s| signing_certificate_matches(s, &c));
             if !whole {
                 sr.signature_error = Some(

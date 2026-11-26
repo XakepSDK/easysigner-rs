@@ -1,63 +1,39 @@
 //! Times as milliseconds since 1970 (UTC): reading and writing the ASN.1 time formats,
 //! including the looser BER forms (no seconds, fractions, offsets) that DER-only parsers
-//! refuse, and ISO-8601 for messages. The calendar is the proleptic Gregorian one.
+//! refuse, and ISO-8601 for messages. The calendar is `jiff`'s; only reading the loose text
+//! forms into their fields is done here.
 
 use ::der::Tag;
+use jiff::Timestamp;
+use jiff::civil::{Date, DateTime, Time};
+use jiff::tz::Offset;
 
 use crate::prelude::*;
 use crate::{Error, Result};
-
-const DAY_MS: i64 = 86_400_000;
 
 fn bad_time() -> Error {
     Error::BadTime
 }
 
-/// Days since 1970-01-01 of a valid date (H. Hinnant's days_from_civil).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// (year, month, day) of a day number since 1970-01-01.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
-fn days_in_month(y: i64, m: i64) -> i64 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        _ if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        _ => 28,
-    }
+/// The UTC date and time of `ms`, or [`Error::BadTime`] outside years -9999 to 9999.
+fn utc(ms: i64) -> Result<DateTime> {
+    Timestamp::from_millisecond(ms)
+        .map(|t| Offset::UTC.to_datetime(t))
+        .map_err(|_| bad_time())
 }
 
 /// The calendar fields of a time: (year, month, day, hour, minute, second, millisecond).
-pub fn fields(ms: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
-    let (y, m, d) = civil_from_days(ms.div_euclid(DAY_MS));
-    let t = ms.rem_euclid(DAY_MS);
-    (
-        y,
-        m,
-        d,
-        t / 3_600_000,
-        t / 60_000 % 60,
-        t / 1000 % 60,
-        t % 1000,
-    )
+pub fn fields(ms: i64) -> Result<(i64, i64, i64, i64, i64, i64, i64)> {
+    let t = utc(ms)?;
+    Ok((
+        t.year().into(),
+        t.month().into(),
+        t.day().into(),
+        t.hour().into(),
+        t.minute().into(),
+        t.second().into(),
+        t.millisecond().into(),
+    ))
 }
 
 /// UTCTime (`YYMMDDHHMM[SS]Z`) or GeneralizedTime (`YYYYMMDDHHMMSS[.fff]Z`, or with an offset).
@@ -113,23 +89,25 @@ pub fn parse_asn1(tag: Tag, content: &[u8]) -> Result<i64> {
         _ => return Err(bad_time()),
     }
     // a real date (no 31 February) and time; seconds 60 and over count as 59
-    if !(1..=12).contains(&mo)
-        || d < 1
-        || d > days_in_month(y, mo)
-        || !(0..24).contains(&h)
-        || !(0..60).contains(&mi)
-        || sec < 0
-    {
-        return Err(bad_time());
-    }
-    let day = days_from_civil(y, mo, d);
-    let t = ((day * 24 + h) * 60 + mi) * 60 + sec.min(59);
-    Ok(t * 1000 + ms - offset_min * 60 * 1000)
+    let small = |n: i64| i8::try_from(n).map_err(|_| bad_time());
+    let date = Date::new(
+        i16::try_from(y).map_err(|_| bad_time())?,
+        small(mo)?,
+        small(d)?,
+    )
+    .map_err(|_| bad_time())?;
+    let time = Time::new(small(h)?, small(mi)?, small(sec.min(59))?, 0).map_err(|_| bad_time())?;
+    let offset = Offset::from_seconds(i32::try_from(offset_min * 60).map_err(|_| bad_time())?)
+        .map_err(|_| bad_time())?;
+    let t = offset
+        .to_timestamp(date.to_datetime(time))
+        .map_err(|_| bad_time())?;
+    Ok(t.as_millisecond() + ms)
 }
 
 /// The DER time NCALayer and Bouncy Castle write: UTCTime for 1950..2049, else GeneralizedTime.
 pub fn encode(ms: i64) -> Result<Vec<u8>> {
-    let (y, m, d, h, mi, s, _) = fields(ms);
+    let (y, m, d, h, mi, s, _) = fields(ms)?;
     if (1950..2050).contains(&y) {
         let t = format!("{:02}{m:02}{d:02}{h:02}{mi:02}{s:02}Z", y % 100);
         tlv(Tag::UtcTime, &t)
@@ -140,7 +118,7 @@ pub fn encode(ms: i64) -> Result<Vec<u8>> {
 
 /// GeneralizedTime in whole seconds (`YYYYMMDDHHMMSSZ`).
 pub fn encode_generalized(ms: i64) -> Result<Vec<u8>> {
-    let (y, m, d, h, mi, s, _) = fields(ms);
+    let (y, m, d, h, mi, s, _) = fields(ms)?;
     if !(0..10_000).contains(&y) {
         return Err(bad_time());
     }
@@ -158,8 +136,11 @@ fn tlv(tag: Tag, text: &str) -> Result<Vec<u8>> {
 }
 
 /// ISO-8601 UTC, like Java's Instant.toString: 2026-11-01T10:00:00Z (with .SSS when not 0).
+/// Outside years -9999 to 9999 it gives the milliseconds themselves.
 pub fn iso(ms: i64) -> String {
-    let (y, m, d, h, mi, s, f) = fields(ms);
+    let Ok((y, m, d, h, mi, s, f)) = fields(ms) else {
+        return format!("{ms} ms");
+    };
     if f == 0 {
         format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
     } else {
@@ -171,8 +152,11 @@ pub fn iso(ms: i64) -> String {
 mod tests {
     use super::*;
 
-    fn year_ms(year: i64) -> i64 {
-        days_from_civil(year, 1, 1) * DAY_MS
+    fn year_ms(year: i16) -> i64 {
+        Offset::UTC
+            .to_timestamp(jiff::civil::date(year, 1, 1).at(0, 0, 0, 0))
+            .unwrap()
+            .as_millisecond()
     }
 
     #[test]
@@ -242,20 +226,26 @@ mod tests {
     }
 
     #[test]
-    fn calendar_matches_day_counts() {
-        // every day from 1900 to 2100 round-trips, and the days are consecutive
-        let mut day = days_from_civil(1900, 1, 1);
-        for y in 1900..2100 {
-            for m in 1..=12 {
-                for d in 1..=days_in_month(y, m) {
-                    assert_eq!(days_from_civil(y, m, d), day);
-                    assert_eq!(civil_from_days(day), (y, m, d));
-                    day += 1;
-                }
-            }
-        }
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
+    fn calendar() {
         assert_eq!(iso(-1), "1969-12-31T23:59:59.999Z");
-        assert_eq!(fields(1_700_000_000_123), (2023, 11, 14, 22, 13, 20, 123));
+        assert_eq!(
+            fields(1_700_000_000_123).unwrap(),
+            (2023, 11, 14, 22, 13, 20, 123)
+        );
+        // every day from 1900 to 2100 reads back from its ASN.1 form
+        let mut d = jiff::civil::date(1900, 1, 1);
+        while d.year() < 2100 {
+            let text = format!("{:04}{:02}{:02}120000Z", d.year(), d.month(), d.day());
+            let ms = parse_asn1(Tag::GeneralizedTime, text.as_bytes()).unwrap();
+            let f = fields(ms).unwrap();
+            assert_eq!(
+                (f.0, f.1, f.2, f.3),
+                (d.year().into(), d.month().into(), d.day().into(), 12)
+            );
+            d = d.tomorrow().unwrap();
+        }
+        // beyond what jiff covers: an error, not a wrong date
+        assert!(encode(i64::MAX).is_err());
+        assert_eq!(iso(i64::MAX), format!("{} ms", i64::MAX));
     }
 }

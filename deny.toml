@@ -10,8 +10,6 @@ all-features = false
 # plan (docs: code health audit, phase B).
 unmaintained = "workspace"
 ignore = [
-    # chrono: replaced by the core's own time code (desktop uses it only for local dates)
-    { id = "RUSTSEC-2026-0543", reason = "to be removed, see the code health plan" },
     # ttf-parser: the stamp's font metrics; to move to skrifa
     { id = "RUSTSEC-2026-0192", reason = "to be replaced, see the code health plan" },
 ]

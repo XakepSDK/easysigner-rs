@@ -678,11 +678,19 @@ fn parse_pdf_date(s: &str) -> Option<i64> {
         return None;
     }
     let pad = format!("{d:0<14}");
-    let num = |r: std::ops::Range<usize>| pad[r].parse::<u32>().ok();
-    let t =
-        chrono::NaiveDate::from_ymd_opt(num(0..4)? as i32, num(4..6)?.max(1), num(6..8)?.max(1))?
-            .and_hms_opt(num(8..10)?, num(10..12)?, num(12..14)?)?;
-    let mut ms = t.and_utc().timestamp_millis();
+    let num = |r: std::ops::Range<usize>| pad.get(r)?.parse::<i16>().ok();
+    let small = |r| i8::try_from(num(r)?).ok();
+    let t = jiff::civil::DateTime::new(
+        num(0..4)?,
+        small(4..6)?.max(1),
+        small(6..8)?.max(1),
+        small(8..10)?,
+        small(10..12)?,
+        small(12..14)?,
+        0,
+    )
+    .ok()?;
+    let mut ms = jiff::tz::Offset::UTC.to_timestamp(t).ok()?.as_millisecond();
     let rest = &s[d.len()..];
     if let Some(sign @ ('+' | '-')) = rest.chars().next() {
         let z: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
