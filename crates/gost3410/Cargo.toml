@@ -18,4 +18,4 @@ zeroize = { version = "1.8", default-features = false }
 
 [dev-dependencies]
 getrandom = { version = "0.4", features = ["sys_rng"] }
-kzcrypto = { path = "../../crypto" }
+hex-literal = "1"
