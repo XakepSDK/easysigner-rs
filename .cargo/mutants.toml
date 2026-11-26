@@ -12,5 +12,5 @@ exclude_globs = [
 ]
 profile = "mutants"
 # The cryptography (crypto/) is tested by its own tests and by the core's, which use it
-# throughout; the C interface (capi/) by its own.
-test_package = ["kzcrypto", "kzsigner", "kzcrypto-capi"]
+# throughout; gost3410 by its own known-answer tests.
+test_package = ["kzcrypto", "kzsigner", "gost3410"]

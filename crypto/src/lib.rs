@@ -15,8 +15,6 @@
 //! Messages for people (errors and statuses) are [`Text`]s: an English template and its
 //! arguments, so that the application can show them in its own language. `Display` gives the
 //! English.
-//!
-//! The C interface is a separate crate, `kzcrypto-capi`.
 
 #![no_std]
 #![forbid(unsafe_code)]

@@ -45,9 +45,8 @@ jobs:
             fi ;;
           esac
           echo "android=$android" | tee -a "$GITHUB_OUTPUT"
-  # The cryptography on its own (crypto/, capi/): it must build with no operating system (a
-  # bare-metal ARM target proves no_std), the C header must match the code, the C test must
-  # pass against the static library, and the sizes are reported in the job summary.
+  # The cryptography on its own (crypto/, crates/gost3410): it must build with no operating
+  # system (a bare-metal ARM target proves no_std).
   crypto:
     runs-on: ubuntu-latest
     steps:
@@ -59,17 +58,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: crypto
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cbindgen@0.29.4
       - name: kzcrypto and gost3410 build without an operating system (no_std)
         run: cargo build --release --locked -p kzcrypto -p gost3410 --target thumbv7em-none-eabihf
-      - name: The C header matches the code
-        run: sh scripts/capi-header.sh --check
-      - name: The C interface, from C
-        run: sh scripts/capi-test.sh
-      - name: Sizes
-        run: sh scripts/crypto-size.sh | tee -a "$GITHUB_STEP_SUMMARY"
   build:
     strategy:
       fail-fast: false
