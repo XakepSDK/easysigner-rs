@@ -216,6 +216,10 @@ impl Words for kzcrypto::Error {
                 &[],
             ),
             E::Random(d) => en("no random numbers from the system: {}", &[d]),
+            E::SelfTestFailed(t) => en(
+                "the cryptography failed its self-test ({}): do not sign or check with this build",
+                &[&format!("{t:?}")],
+            ),
             _ => tr("unknown problem"),
         }
     }

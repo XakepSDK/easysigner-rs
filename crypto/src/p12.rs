@@ -96,6 +96,7 @@ fn pick(
     };
     let kb = keys.get(idx).ok_or(Error::NoPrivateKey)?;
     let private_key = PrivateKey::from_pkcs8(&kb.value)?;
+    private_key.pairwise_check()?;
     let pool: Vec<Cert> = certs.iter().map(|b| b.value.clone()).collect();
     let mut leaf = None;
     for c in &certs {

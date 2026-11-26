@@ -2281,6 +2281,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gost3410",
  "gost94",
+ "hex-literal",
  "hmac",
  "pbkdf2",
  "pkcs12",

@@ -45,6 +45,14 @@ pub fn crypto_version() -> &'static str {
     "kzcrypto (KZ GOST in Rust; hashes, ciphers and RSA from RustCrypto)"
 }
 
+/// kzcrypto's known-answer self-tests ([`kzcrypto::self_test`]), run once per process before
+/// the first key is opened, or anything is signed or checked. When they fail, every such call
+/// fails with [`kzcrypto::Error::SelfTestFailed`].
+pub fn self_test() -> Result<()> {
+    static RESULT: std::sync::OnceLock<kzcrypto::Result<()>> = std::sync::OnceLock::new();
+    Ok(RESULT.get_or_init(kzcrypto::self_test).clone()?)
+}
+
 /// What the command line and the window use: open a key, sign, verify, extract.
 pub struct Engine {
     env: env::Env,
@@ -68,6 +76,7 @@ impl Engine {
     }
 
     pub fn open_key(&self, p12: &[u8], password: &str, alias: Option<&str>) -> Result<Key> {
+        self_test()?;
         Ok(p12::open(p12, password, alias)?)
     }
 
@@ -85,6 +94,7 @@ impl Engine {
     /// Signs as `req` asks. The key is checked first ([`Engine::check_key`]; for revocation
     /// too with an OCSP server); its warnings come first in the result's.
     pub fn sign(&self, req: SignRequest) -> Result<SignResult> {
+        self_test()?;
         let SignRequest {
             input,
             key,
@@ -139,6 +149,7 @@ impl Engine {
         lang: Option<pdf::card::CardLang>,
         qr: Option<bool>,
     ) -> Result<SignResult> {
+        self_test()?;
         let mut r = SignResult {
             // revocation is checked when the card's OCSP answer is fetched
             warnings: self.check_key(&key.cert, None)?,
@@ -187,6 +198,7 @@ impl Engine {
         tsa_url: &str,
         ocsp_url: &str,
     ) -> Result<SignResult> {
+        self_test()?;
         let archive = level == ltv::Level::Lta;
         if pdf::card::read(input).is_some() {
             return Err(Error::new(i18n::tr(
@@ -276,6 +288,7 @@ impl Engine {
         original: &[u8],
         ocsp_url: Option<&str>,
     ) -> Result<VerifyReport> {
+        self_test()?;
         let sigs = pdf::qr::assemble(scans)?;
         let card = pdf::card::Card {
             original: (String::new(), original.to_vec()),
@@ -303,6 +316,7 @@ impl Engine {
         detached_original: Option<&[u8]>,
         ocsp_url: Option<&str>,
     ) -> Result<VerifyReport> {
+        self_test()?;
         if let Some(card) = pdf::card::read(cms) {
             return Ok(pdf::card::verify(&card, &self.env, ocsp_url));
         }

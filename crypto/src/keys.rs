@@ -377,6 +377,31 @@ impl PrivateKey {
     }
 
     /// Whether `pub_key` belongs to this private key.
+    /// The pairwise check of a GOST key: it signs a fixed hash and its own public key checks the
+    /// signature ([`Error::SelfTestFailed`] if not). RSA keys pass (the `rsa` crate checks them
+    /// when they are read).
+    pub fn pairwise_check(&self) -> Result<()> {
+        fn check<C: GostCurve>(k: &SigningKey<C>, n: usize) -> Result<()> {
+            let fail = |_| Error::SelfTestFailed(crate::selftest::SelfTest::KeyPair);
+            let h = [0x5a; 64];
+            let h = h.get(..n).ok_or(fail(()))?;
+            let s = k
+                .sign_prehash_with_fresh(h, &[0; 32])
+                .map_err(|_| fail(()))?;
+            k.verifying_key()
+                .verify_prehash(h, &s)
+                .map_err(|_| fail(()))
+        }
+        match self {
+            PrivateKey::Gost { key, .. } => match key {
+                GostPrivate::CryptoProA(k) => check(k, 32),
+                GostPrivate::Tc26_256A(k) => check(k, 32),
+                GostPrivate::Tc26_512A(k) => check(k, 64),
+            },
+            PrivateKey::Rsa(_) => Ok(()),
+        }
+    }
+
     pub fn matches(&self, pub_key: &PublicKey) -> bool {
         match (self, pub_key) {
             (PrivateKey::Gost { key, .. }, PublicKey::Gost(p)) => &key.public() == p,

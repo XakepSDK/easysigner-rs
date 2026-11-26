@@ -125,6 +125,11 @@ pub enum Error {
     // --- the caller
     /// The caller's random source failed; its diagnostic.
     Random(String),
+
+    // --- the module itself
+    /// A known-answer self-test or a key's pairwise check failed: this build or this machine
+    /// does not compute correctly, and nothing should be signed or checked with it.
+    SelfTestFailed(crate::selftest::SelfTest),
 }
 
 impl Error {
@@ -206,6 +211,7 @@ impl Error {
             E::NotTstInfo => 408,
             E::NoSigningCertAttr => 409,
             E::Random(_) => 500,
+            E::SelfTestFailed(_) => 600,
         }
     }
 }

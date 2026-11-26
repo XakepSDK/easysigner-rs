@@ -60,6 +60,15 @@ caller's process. Library code (this crate, `kzcrypto-nca` and `gost3410`) may n
 slice, `unwrap`, `expect` or `panic!` (clippy's `indexing_slicing`, `unwrap_used`,
 `expect_used` and `panic`, which CI turns into errors). Tests and the `testkit` helpers may.
 
+## Self-tests
+
+`self_test()` runs known-answer tests: GOST 34.311-95, Streebog-256 and -512, SHA-1 and
+SHA-256 on standard vectors, and on each of the three GOST curves a signature made elsewhere
+(by Kalkan, or by kzcrypto's first, independent GOST code) that must check, and a fixed key
+that must sign a fixed hash to a recorded signature. Opening a GOST key runs a pairwise check
+(it signs, and its public key checks the signature). A failure is `Error::SelfTestFailed`. The
+app runs `self_test()` once, before the first key is opened or anything is signed or checked.
+
 ## Size
 
 The release profile uses `opt-level = "z"`, LTO, one codegen unit, `panic = "abort"` and

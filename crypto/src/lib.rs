@@ -47,6 +47,7 @@ pub mod gost;
 pub mod keys;
 pub mod ocsp;
 pub mod p12;
+pub mod selftest;
 pub mod time;
 pub mod trust;
 pub mod tsp;
@@ -66,6 +67,7 @@ use prelude::*;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use error::{Error, ErrorKind, Result};
+pub use selftest::self_test;
 
 /// A source of cryptographically secure random bytes, supplied by the caller (on a computer or
 /// phone: the operating system's generator).
