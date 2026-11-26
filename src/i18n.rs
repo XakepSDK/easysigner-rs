@@ -101,7 +101,7 @@ pub fn trf_in(l: Lang, template: &'static str, args: &[&dyn Display]) -> String 
     out
 }
 
-/// A message (a [`kzcrypto::Text`], or a status from the cryptography) in the current
+/// A message (a [`crate::text::Text`], or a status from the cryptography) in the current
 /// language.
 pub fn text<W: Words + ?Sized>(w: &W) -> String {
     text_in(lang(), w)
@@ -109,7 +109,7 @@ pub fn text<W: Words + ?Sized>(w: &W) -> String {
 
 /// [`text`] in language `l`. Times are shown in this computer's time zone.
 pub fn text_in<W: Words + ?Sized>(l: Lang, w: &W) -> String {
-    use kzcrypto::text::Arg;
+    use crate::text::Arg;
     let t = w.words();
     t.fill(tr_in(l, t.template), &mut |a| match a {
         Arg::Str(s) => s.clone(),
@@ -121,24 +121,24 @@ pub fn text_in<W: Words + ?Sized>(l: Lang, w: &W) -> String {
 /// What the cryptography reports, put in words: an English template and its arguments, which
 /// [`text`] translates.
 pub trait Words {
-    fn words(&self) -> kzcrypto::Text;
+    fn words(&self) -> crate::text::Text;
 }
 
-impl Words for kzcrypto::Text {
-    fn words(&self) -> kzcrypto::Text {
+impl Words for crate::text::Text {
+    fn words(&self) -> crate::text::Text {
         self.clone()
     }
 }
 
 /// A technical detail in English: kept out of the translation table, as developers read it.
-fn en(template: &'static str, args: &[&dyn kzcrypto::text::ToArg]) -> kzcrypto::Text {
-    kzcrypto::trf(template, args)
+fn en(template: &'static str, args: &[&dyn crate::text::ToArg]) -> crate::text::Text {
+    crate::text::trf(template, args)
 }
 
 impl Words for kzcrypto::Error {
-    fn words(&self) -> kzcrypto::Text {
+    fn words(&self) -> crate::text::Text {
+        use crate::text::{tr, trf};
         use kzcrypto::Error as E;
-        use kzcrypto::{tr, trf};
         let detail = |d: &Option<String>| d.as_ref().map(|d| format!(": {d}")).unwrap_or_default();
         match self {
             E::Asn1(d) => en("malformed ASN.1: {}", &[d]),
@@ -222,11 +222,11 @@ impl Words for kzcrypto::Error {
 }
 
 impl Words for kzcrypto::trust::PathStatus {
-    fn words(&self) -> kzcrypto::Text {
-        use kzcrypto::text::Time;
+    fn words(&self) -> crate::text::Text {
+        use crate::text::Time;
+        use crate::text::{tr, trf};
         use kzcrypto::trust::PathStatus as P;
-        use kzcrypto::{tr, trf};
-        let invalid = |why: kzcrypto::Text| trf("Certificate path not valid: {}", &[&why]);
+        let invalid = |why: crate::text::Text| trf("Certificate path not valid: {}", &[&why]);
         match self {
             P::Trusted { ca } => trf("Issued by a trusted CA: {}", &[ca]),
             P::IssuerNotFound { issuer } => trf(
@@ -253,10 +253,10 @@ impl Words for kzcrypto::trust::PathStatus {
 }
 
 impl Words for kzcrypto::crl::ListStatus {
-    fn words(&self) -> kzcrypto::Text {
+    fn words(&self) -> crate::text::Text {
+        use crate::text::Time;
+        use crate::text::{tr, trf};
         use kzcrypto::crl::{ListStatus as L, Unusable as U};
-        use kzcrypto::text::Time;
-        use kzcrypto::{tr, trf};
         match self {
             L::Good { at } => trf(
                 "GOOD (not in the revocation list of {})",
@@ -282,9 +282,9 @@ impl Words for kzcrypto::crl::ListStatus {
 }
 
 impl Words for kzcrypto::cert::SigningRefusal {
-    fn words(&self) -> kzcrypto::Text {
+    fn words(&self) -> crate::text::Text {
+        use crate::text::{tr, trf};
         use kzcrypto::cert::SigningRefusal as R;
-        use kzcrypto::{tr, trf};
         match self {
             R::IsCa => tr(
                 "The certificate belongs to a certification authority, not to a person or organization.",
@@ -309,11 +309,11 @@ impl Words for kzcrypto::cert::SigningRefusal {
 }
 
 impl Words for kzcrypto::ocsp::Status {
-    fn words(&self) -> kzcrypto::Text {
+    fn words(&self) -> crate::text::Text {
+        use crate::text::Time;
+        use crate::text::{tr, trf};
         use kzcrypto::ocsp::{ResponderProblem as R, Status as S};
-        use kzcrypto::text::Time;
-        use kzcrypto::{tr, trf};
-        let error = |why: kzcrypto::Text| trf("ERROR: {}", &[&why]);
+        let error = |why: crate::text::Text| trf("ERROR: {}", &[&why]);
         match self {
             S::Good { checked } => trf("GOOD (not revoked, checked {})", &[&Time(*checked)]),
             S::Revoked { at } => trf("REVOKED on {}", &[&Time(*at)]),
@@ -686,7 +686,7 @@ mod tests {
         for p in files {
             if p.extension().is_none_or(|x| x != "rs")
                 || p.ends_with("i18n.rs")
-                || p.ends_with("crypto/src/text.rs")
+                || p.ends_with("src/text.rs")
             {
                 continue;
             }

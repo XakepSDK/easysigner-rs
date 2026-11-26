@@ -31,7 +31,6 @@ pub mod gost;
 pub mod keys;
 pub mod ocsp;
 pub mod p12;
-pub mod text;
 pub mod time;
 pub mod trust;
 pub mod tsp;
@@ -46,7 +45,6 @@ mod prelude {
 }
 
 use prelude::*;
-pub use text::{Text, tr, trf};
 
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

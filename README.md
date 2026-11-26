@@ -224,10 +224,11 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
     timestamp tokens and revocation lists (with delta lists). `trust.rs`: certificate paths
     built only from trusted certificates (NCA RK's are built in, `crypto/certs/`). `cert.rs`:
     certificates, key usage and certificate policies.
-  * `text.rs`: messages for people (an English template and its arguments).
+  * It has no wording: errors (`error.rs`) and statuses are enums, with data but no sentences.
 * `src/` (crate `kzsigner`, the core) keeps the module names above as re-exports and adds what
   is not cryptography: sending the requests (`http.rs`), caching revocation lists, the clock,
-  reports and their texts. Its own formats (the key store, CAdES long-term data) are written
+  reports and their texts. `i18n.rs` words kzcrypto's errors and statuses (`text.rs`: an
+  English template and its arguments, translated when shown). Its own formats (the key store, CAdES long-term data) are written
   with RustCrypto's `der` too.
 * `crates/der-testkit`: a small hand-made ASN.1 reader and writer for the tests only (they
   build certificates, lists and answers, malformed ones included). Never in a release build.

@@ -17,6 +17,7 @@ pub mod pdf;
 pub mod report;
 pub mod request;
 pub(crate) mod sign;
+pub mod text;
 pub mod time;
 pub mod trust;
 pub mod tsp;

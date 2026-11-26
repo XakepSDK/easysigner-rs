@@ -1,13 +1,12 @@
 //! Messages for people, kept as an English template and its arguments, so that the
 //! application shows them in its own language and time zone.
 //!
-//! `tr("...")` and `trf("... {} ...", &[..])` mirror the application's translation calls: the
-//! application translates [`Text::template`] (its translation table has every template used
-//! here) and fills in the arguments. `Display` gives the English, with times in ISO-8601 UTC.
+//! [`crate::i18n::Words`] puts what kzcrypto reports (errors, statuses) into these: `tr("...")`
+//! and `trf("... {} ...", &[..])` mirror [`crate::i18n`]'s translation calls, and
+//! [`crate::i18n::text`] translates [`Text::template`] and fills in the arguments. `Display`
+//! gives the English, with times in ISO-8601 UTC.
 
 use core::fmt;
-
-use crate::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Text {
@@ -128,7 +127,7 @@ impl Text {
     pub fn english(&self) -> String {
         self.fill(self.template, &mut |a| match a {
             Arg::Str(s) => s.clone(),
-            Arg::Time(Some(ms)) => crate::time::iso(*ms),
+            Arg::Time(Some(ms)) => kzcrypto::time::iso(*ms),
             Arg::Time(None) => "-".into(),
             Arg::Text(t) => t.english(),
         })
