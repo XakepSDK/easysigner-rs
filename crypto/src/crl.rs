@@ -25,6 +25,28 @@ const UNDERSTOOD: [&str; 4] = [
 ];
 const MINUTE: i64 = 60 * 1000;
 
+/// CertificateList (RFC 5280 5.1) from x509-cert's parts. x509-cert's own `TbsCertList` makes
+/// the version mandatory, but RFC 5280 has it OPTIONAL (absent in v1 lists).
+#[derive(::der::Sequence)]
+struct CertificateList {
+    tbs_cert_list: TbsCertList,
+    signature_algorithm: spki::AlgorithmIdentifierOwned,
+    signature: ::der::asn1::BitString,
+}
+
+#[derive(::der::Sequence)]
+struct TbsCertList {
+    #[asn1(optional = "true")]
+    _version: Option<x509_cert::certificate::Version>,
+    _signature: spki::AlgorithmIdentifierOwned,
+    issuer: x509_cert::name::Name,
+    this_update: x509_cert::time::Time,
+    next_update: Option<x509_cert::time::Time>,
+    revoked_certificates: Option<Vec<x509_cert::crl::RevokedCert<x509_cert::certificate::Raw>>>,
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+    crl_extensions: Option<x509_cert::ext::Extensions>,
+}
+
 /// A parsed revocation list.
 pub struct Crl {
     pub issuer: Vec<u8>,
@@ -50,71 +72,50 @@ pub struct Crl {
 }
 
 impl Crl {
+    /// A list in DER, read by `x509-cert` (its `Raw` profile: serial numbers as CAs issue them).
     pub fn parse(data: &[u8]) -> Result<Crl> {
+        use ::der::{Decode, Encode};
         let bad = || Error::of(ErrorKind::Malformed, tr("Unreadable revocation list (CRL)"));
-        let top = der::parse(data)?.items(der::SEQUENCE)?;
-        if top.len() < 3 {
-            return Err(bad());
-        }
-        let tbs = top[0].items(der::SEQUENCE)?;
-        // version (optional), signature, issuer, thisUpdate, nextUpdate?, revoked?, [0] ext?
-        let i = usize::from(tbs.first().is_some_and(|t| t.tag == der::INTEGER)) + 1;
-        let issuer = tbs.get(i).ok_or_else(bad)?.raw.to_vec();
-        let this_update = tbs.get(i + 1).ok_or_else(bad)?.time()?;
-        let mut j = i + 2;
-        let next_update = match tbs.get(j) {
-            Some(t) if t.tag == der::UTC_TIME || t.tag == der::GENERALIZED_TIME => {
-                j += 1;
-                Some(t.time()?)
-            }
-            _ => None,
+        let l = CertificateList::from_der(data).map_err(|_| bad())?;
+        let t = &l.tbs_cert_list;
+        let ms = |t: &x509_cert::time::Time| {
+            i64::try_from(t.to_unix_duration().as_millis()).map_err(|_| bad())
         };
         let mut revoked = Vec::new();
         let mut revoked_from = Vec::new();
-        if let Some(list) = tbs.get(j).filter(|t| t.tag == der::SEQUENCE) {
-            j += 1;
-            for e in list.children()?.iter() {
-                let k = e.items(der::SEQUENCE)?;
-                if k.len() < 2 {
-                    return Err(bad());
-                }
-                let (serial, when) = (k[0].uint()?.to_vec(), k[1].time()?);
-                let from = match k.get(2) {
-                    Some(x) => untrusted_from(x, when)?,
-                    None => when,
-                };
-                revoked_from.push((serial.clone(), from));
-                revoked.push((serial, when));
-            }
+        for e in t.revoked_certificates.iter().flatten() {
+            let serial = strip_zeros(e.serial_number.as_bytes()).to_vec();
+            let when = ms(&e.revocation_date)?;
+            let from = match &e.crl_entry_extensions {
+                Some(x) => untrusted_from(x, when).map_err(|_| bad())?,
+                None => when,
+            };
+            revoked_from.push((serial.clone(), from));
+            revoked.push((serial, when));
         }
         let (mut is_delta, mut freshest, mut unknown_critical) = (false, vec![], None);
-        if let Some(x) = tbs.get(j).filter(|t| t.tag == der::ctx(0)) {
-            for e in x.inner()?.items(der::SEQUENCE)?.iter() {
-                let k = e.items(der::SEQUENCE)?;
-                let oid = k.first().ok_or_else(bad)?.oid()?;
-                let critical = k.len() > 2 && k[1].boolean()?;
-                let value = k.last().ok_or_else(bad)?.expect(der::OCTET_STRING)?.content;
-                match oid.as_str() {
-                    DELTA_CRL_INDICATOR => is_delta = true,
-                    FRESHEST_CRL => freshest = uris_in(value),
-                    o if critical && !UNDERSTOOD.contains(&o) => unknown_critical = Some(oid),
-                    _ => {}
-                }
+        for x in t.crl_extensions.iter().flatten() {
+            let oid = x.extn_id.to_string();
+            match oid.as_str() {
+                DELTA_CRL_INDICATOR => is_delta = true,
+                FRESHEST_CRL => freshest = uris_in(x.extn_value.as_bytes()),
+                o if x.critical && !UNDERSTOOD.contains(&o) => unknown_critical = Some(oid),
+                _ => {}
             }
         }
         Ok(Crl {
-            issuer,
-            this_update,
-            next_update,
+            issuer: t.issuer.to_der().map_err(|_| bad())?,
+            this_update: ms(&t.this_update)?,
+            next_update: t.next_update.as_ref().map(ms).transpose()?,
             revoked,
             revoked_from,
             is_delta,
             freshest,
             unknown_critical,
             raw: data.to_vec(),
-            tbs: top[0].raw.to_vec(),
-            sig_alg: crate::keys::alg_id(&top[1])?.0,
-            signature: top[2].bits()?.to_vec(),
+            tbs: t.to_der().map_err(|_| bad())?,
+            sig_alg: l.signature_algorithm.oid.to_string(),
+            signature: l.signature.as_bytes().ok_or_else(bad)?.to_vec(),
         })
     }
 
@@ -162,21 +163,41 @@ impl Crl {
 
 /// A list entry's extensions: an invalidityDate before `when` moves the moment back, and a
 /// compromise reason means the key was never to be trusted ([`i64::MIN`]).
-fn untrusted_from(exts: &der::Tlv, when: i64) -> Result<i64> {
+fn untrusted_from(exts: &[x509_cert::ext::Extension], when: i64) -> ::der::Result<i64> {
+    use ::der::Decode;
+    use x509_cert::ext::pkix::CrlReason as R;
     let mut from = when;
-    for e in exts.items(der::SEQUENCE)?.iter() {
-        let k = e.items(der::SEQUENCE)?;
-        let (Some(oid), Some(value)) = (k.first(), k.last()) else {
-            continue;
-        };
-        let value = der::parse(value.expect(der::OCTET_STRING)?.content)?;
-        match oid.oid()?.as_str() {
-            REASON_CODE if is_compromise(&value) => return Ok(i64::MIN),
-            INVALIDITY_DATE => from = from.min(value.time()?),
+    for x in exts {
+        let value = x.extn_value.as_bytes();
+        match x.extn_id.to_string().as_str() {
+            REASON_CODE
+                if matches!(
+                    R::from_der(value),
+                    Ok(R::KeyCompromise | R::CaCompromise | R::AaCompromise)
+                ) =>
+            {
+                return Ok(i64::MIN);
+            }
+            INVALIDITY_DATE => {
+                let d = ::der::asn1::GeneralizedTime::from_der(value)?;
+                let d = i64::try_from(d.to_unix_duration().as_millis())
+                    .map_err(|_| ::der::Error::from(::der::ErrorKind::Overflow))?;
+                from = from.min(d);
+            }
             _ => {}
         }
     }
     Ok(from)
+}
+
+/// An INTEGER's content without leading zero bytes (one zero for zero), as [`Cert::serial`].
+fn strip_zeros(mut b: &[u8]) -> &[u8] {
+    while let [0, rest @ ..] = b
+        && !rest.is_empty()
+    {
+        b = rest;
+    }
+    b
 }
 
 /// CRLReason keyCompromise (1), cACompromise (2) or aACompromise (10).
@@ -306,8 +327,10 @@ mod tests {
     fn untrusted_from_entry_extensions() {
         let when = 1_800_000_000_000;
         let from = |exts: &[&[u8]]| {
+            use ::der::Decode;
             let e = der::seq(exts);
-            untrusted_from(&der::parse(&e).unwrap(), when).unwrap()
+            let exts = Vec::<x509_cert::ext::Extension>::from_der(&e).unwrap();
+            untrusted_from(&exts, when).unwrap()
         };
         let reason = |r: u8| ext(REASON_CODE, &der::tlv(der::ENUMERATED, &[r]));
         let invalid = |t: i64| ext(INVALIDITY_DATE, &time::encode_generalized(t));
