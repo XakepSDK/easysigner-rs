@@ -69,6 +69,16 @@ that must sign a fixed hash to a recorded signature. Opening a GOST key runs a p
 (it signs, and its public key checks the signature). A failure is `Error::SelfTestFailed`. The
 app runs `self_test()` once, before the first key is opened or anything is signed or checked.
 
+## Secrets are wiped
+
+Everything secret is wiped when dropped: GOST private keys and nonces (`gost3410`), RSA keys
+(`rsa`), the PKCS#12 password in its BMP form, keys derived from it and the IVs, decrypted
+contents and key bags, and the PKCS#8 key the key store keeps. The hashes, MACs and ciphers are
+built with their `zeroize` feature, so their states and key schedules (the HMAC under the GOST
+nonce, the password-keyed MAC and ciphers) are wiped too. A private key is read in place from
+the decrypted PKCS#8 and written once into a buffer of its final size, so no copy is left
+behind by a growing buffer. The caller wipes what it passes in (the password string).
+
 ## Size
 
 The release profile uses `opt-level = "z"`, LTO, one codegen unit, `panic = "abort"` and

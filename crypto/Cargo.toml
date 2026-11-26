@@ -8,21 +8,23 @@ repository = "https://github.com/XakepSDK/easysigner-rs"
 license = "MIT OR Apache-2.0"
 publish = false
 
+# "zeroize" on the hashes, MACs and ciphers: their states and key schedules are wiped when
+# dropped (they hold password-derived keys and the GOST nonce key).
 # Everything here is no_std + alloc: no files, network, clock or OS random numbers. The caller
 # passes the time and a random source in (see `Rng`), and does all I/O.
 [dependencies]
-gost94 = { version = "0.11", default-features = false }
-streebog = { version = "0.11", default-features = false }
-sha1 = { version = "0.11", default-features = false }
-sha2 = { version = "0.11", default-features = false }
-digest = { version = "0.11", default-features = false }
-hmac = { version = "0.13", default-features = false }
+gost94 = { version = "0.11", default-features = false, features = ["zeroize"] }
+streebog = { version = "0.11", default-features = false, features = ["zeroize"] }
+sha1 = { version = "0.11", default-features = false, features = ["zeroize"] }
+sha2 = { version = "0.11", default-features = false, features = ["zeroize"] }
+digest = { version = "0.11", default-features = false, features = ["zeroize"] }
+hmac = { version = "0.13", default-features = false, features = ["zeroize"] }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
-des = { version = "0.9", default-features = false }
-rc2 = { version = "0.9", default-features = false }
-aes = { version = "0.9", default-features = false }
-cipher = { version = "0.5", default-features = false, features = ["block-padding"] }
-cbc = { version = "0.2.1", default-features = false }
+des = { version = "0.9", default-features = false, features = ["zeroize"] }
+rc2 = { version = "0.9", default-features = false, features = ["zeroize"] }
+aes = { version = "0.9", default-features = false, features = ["zeroize"] }
+cipher = { version = "0.5", default-features = false, features = ["block-padding", "zeroize"] }
+cbc = { version = "0.2.1", default-features = false, features = ["zeroize"] }
 gost3410 = { path = "../crates/gost3410" }
 der = { version = "=0.8.3", default-features = false, features = ["alloc", "oid", "ber", "derive"] }
 spki = { version = "0.8", default-features = false, features = ["alloc"] }

@@ -39,6 +39,9 @@ const X509_CERT: &str = "1.2.840.113549.1.9.22.1";
 const FRIENDLY_NAME: &str = "1.2.840.113549.1.9.20";
 const LOCAL_KEY_ID: &str = "1.2.840.113549.1.9.21";
 
+/// Decrypted bytes (keys, key bags, a password), wiped when dropped.
+type Secret = zeroize::Zeroizing<Vec<u8>>;
+
 struct Bag<T> {
     alias: Option<String>,
     local_id: Option<String>,
@@ -56,22 +59,17 @@ pub fn open_with_pkcs8(
     password: &str,
     wanted_alias: Option<&str>,
 ) -> Result<(Key, zeroize::Zeroizing<Vec<u8>>)> {
-    use zeroize::Zeroize;
     let auth_safe = read_pfx(p12, password)?;
-    let mut keys: Vec<Bag<Vec<u8>>> = Vec::new();
+    let mut keys: Vec<Bag<Secret>> = Vec::new();
     let mut certs: Vec<Bag<Cert>> = Vec::new();
     let read = read_contents(&auth_safe, password, &mut keys, &mut certs);
-    let r = pick(read, &keys, certs, wanted_alias);
-    for k in &mut keys {
-        k.value.zeroize();
-    }
-    r
+    pick(read, &keys, certs, wanted_alias)
 }
 
 /// The wanted key and its certificates out of a read file (see [`open_with_pkcs8`]).
 fn pick(
     read: Result<()>,
-    keys: &[Bag<Vec<u8>>],
+    keys: &[Bag<Secret>],
     certs: Vec<Bag<Cert>>,
     wanted_alias: Option<&str>,
 ) -> Result<(Key, zeroize::Zeroizing<Vec<u8>>)> {
@@ -112,7 +110,7 @@ fn pick(
     }
     let leaf = leaf.ok_or(Error::NoCertificateForKey)?;
     let other_aliases = aliases.iter().filter(|a| **a != alias).cloned().collect();
-    let pkcs8 = zeroize::Zeroizing::new(kb.value.clone());
+    let pkcs8 = kb.value.clone();
     let key = Key {
         alias,
         private_key,
@@ -223,13 +221,13 @@ fn asn1(e: ::der::Error) -> Error {
 fn read_contents(
     auth_safe: &[u8],
     password: &str,
-    keys: &mut Vec<Bag<Vec<u8>>>,
+    keys: &mut Vec<Bag<Secret>>,
     certs: &mut Vec<Bag<Cert>>,
 ) -> Result<()> {
     let safe: AuthenticatedSafe = ber(auth_safe).map_err(asn1)?;
     for ci in safe.iter() {
         let safe_contents = match ci.content_type.to_string().as_str() {
-            DATA => octets(&ci.content).map_err(asn1)?,
+            DATA => Secret::new(octets(&ci.content).map_err(asn1)?),
             ENCRYPTED_DATA => {
                 let enc = ci.content.to_der().map_err(asn1)?;
                 let ed: EncryptedData = ber(&enc).map_err(asn1)?;
@@ -240,9 +238,14 @@ fn read_contents(
             o => return Err(Error::UnsupportedAlgorithm(o.into())),
         };
         let bags: SafeContents = ber(&safe_contents).map_err(asn1)?;
-        for bag in &bags {
-            read_bag(bag, password, keys, certs)?;
+        let read = bags
+            .iter()
+            .try_for_each(|bag| read_bag(bag, password, keys, certs));
+        // a plain key bag's value is the key itself
+        for bag in bags {
+            drop(Secret::new(bag.bag_value));
         }
+        read?;
     }
     Ok(())
 }
@@ -250,7 +253,7 @@ fn read_contents(
 fn read_bag(
     bag: &pkcs12::SafeBag,
     password: &str,
-    keys: &mut Vec<Bag<Vec<u8>>>,
+    keys: &mut Vec<Bag<Secret>>,
     certs: &mut Vec<Bag<Cert>>,
 ) -> Result<()> {
     // bag_value keeps its [0] EXPLICIT wrapper
@@ -291,7 +294,7 @@ fn read_bag(
         KEY_BAG => keys.push(Bag {
             alias: key_alias,
             local_id,
-            value: value.to_vec(),
+            value: Secret::new(value.to_vec()),
         }),
         CERT_BAG => {
             let cb: CertBag = ber(value).map_err(asn1)?;
@@ -331,11 +334,13 @@ fn chain(leaf: &Cert, pool: &[Cert]) -> Vec<Cert> {
 
 // ------------------------------------------------------------------ password-based encryption
 
-fn bmp_password(p: &str) -> Vec<u8> {
+fn bmp_password(p: &str) -> Secret {
     if p.is_empty() {
-        return vec![];
+        return Secret::default();
     }
-    let mut out: Vec<u8> = p.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+    // room for all of it up front: growing would leave copies of the password behind
+    let mut out = Secret::new(Vec::with_capacity(2 * p.len() + 2));
+    out.extend(p.encode_utf16().flat_map(|u| u.to_be_bytes()));
     out.extend([0, 0]);
     out
 }
@@ -356,16 +361,17 @@ fn kdf<D: Digest + FixedOutputReset + BlockSizeUser>(
     iterations: u32,
     id: Pkcs12KeyType,
     n: usize,
-) -> Result<Vec<u8>> {
+) -> Result<Secret> {
     derive_key::<D>(pw, salt, id, iterations.clamp(1, i32::MAX as u32) as i32, n)
+        .map(Secret::new)
         .map_err(|_| Error::BadEncryptionParameters)
 }
 
 /// CBC decryption with PKCS#7 padding (RustCrypto's cbc crate).
-fn cbc_decrypt<C: BlockCipherDecrypt>(c: C, iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+fn cbc_decrypt<C: BlockCipherDecrypt>(c: C, iv: &[u8], data: &[u8]) -> Result<Secret> {
     let d = cbc::Decryptor::<C>::inner_iv_slice_init(c, iv)
         .map_err(|_| Error::BadEncryptionParameters)?;
-    let mut buf = data.to_vec();
+    let mut buf = Secret::new(data.to_vec());
     let n = d
         .decrypt_padded::<Pkcs7>(&mut buf)
         .map_err(|_| Error::DecryptionFailed)?
@@ -379,7 +385,7 @@ fn new_cipher<C: KeyInit>(key: &[u8]) -> Result<C> {
 }
 
 /// Decrypts with a PKCS#12 PBE algorithm or PBES2.
-fn decrypt(alg: &AlgorithmIdentifierOwned, data: &[u8], password: &str) -> Result<Vec<u8>> {
+fn decrypt(alg: &AlgorithmIdentifierOwned, data: &[u8], password: &str) -> Result<Secret> {
     let oid = alg.oid.to_string();
     let params = alg
         .parameters
@@ -427,7 +433,7 @@ struct Pbkdf2Params {
     prf: Option<AlgorithmIdentifierOwned>,
 }
 
-fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
+fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Secret> {
     let p: Pbes2Params = ber(params).map_err(asn1)?;
     let kdf_oid = p.kdf.oid.to_string();
     if kdf_oid != "1.2.840.113549.1.5.12" {
@@ -461,7 +467,7 @@ fn pbes2(params: &[u8], data: &[u8], password: &str) -> Result<Vec<u8>> {
         "1.2.840.113549.3.7" => 24,
         o => return Err(Error::UnsupportedAlgorithm(o.into())),
     };
-    let mut key = zeroize::Zeroizing::new(vec![0u8; key_len]);
+    let mut key = Secret::new(vec![0u8; key_len]);
     let pw = password.as_bytes();
     match prf.as_str() {
         "1.2.840.113549.2.7" => pbkdf2::pbkdf2_hmac::<sha1::Sha1>(pw, salt, iter, &mut key),

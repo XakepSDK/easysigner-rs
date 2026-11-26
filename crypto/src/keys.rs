@@ -277,48 +277,45 @@ impl PrivateKey {
     /// From a PKCS#8 PrivateKeyInfo.
     pub fn from_pkcs8(pki: &[u8]) -> Result<PrivateKey> {
         // version, algorithm, key, and whatever follows (attributes, a v2 public key)
-        let k: Vec<::der::Any> = Vec::from_der(pki).map_err(asn1::err)?;
+        // read in place: no copies of the key to wipe
+        let k: Vec<::der::AnyRef<'_>> = Vec::from_der(pki).map_err(asn1::err)?;
         let (Some(alg), Some(key)) = (k.get(1), k.get(2)) else {
             return Err(Error::BadPrivateKey(None));
         };
         let alg: spki::AlgorithmIdentifierOwned = alg.decode_as().map_err(asn1::err)?;
-        let key = zeroize::Zeroizing::new(
-            key.decode_as::<OctetString>()
-                .map_err(asn1::err)?
-                .into_bytes()
-                .into_vec(),
-        );
+        if key.tag() != ::der::Tag::OctetString {
+            return Err(Error::BadPrivateKey(None));
+        }
+        let key = key.value();
         let oid = alg.oid.to_string();
         if let Some(scheme) = gost::by_key(&oid) {
             let curve = curve_id(&param_set(alg.parameters.as_ref())?)?;
-            let v = ::der::AnyRef::from_der(&key).map_err(asn1::err)?;
+            let v = ::der::AnyRef::from_der(key).map_err(asn1::err)?;
             // d little-endian, as long as the field: 2004 keys are a (big-endian) INTEGER,
             // 2015 keys a little-endian OCTET STRING, either maybe shorter
-            let mut d = zeroize::Zeroizing::new(match v.tag() {
-                ::der::Tag::Integer => {
-                    let mut be = v.value().to_vec();
-                    while be.len() > 1 && be.first() == Some(&0) {
-                        be.remove(0);
-                    }
-                    be.reverse();
-                    be
-                }
-                ::der::Tag::OctetString => v.value().to_vec(),
-                _ => return Err(Error::BadPrivateKey(None)),
-            });
+            // (d is written once into a buffer of its final size: growing one would leave
+            // copies behind)
             let n = field_len(curve);
-            while d.len() > n && d.last() == Some(&0) {
-                d.pop();
+            let mut d = zeroize::Zeroizing::new(vec![0u8; n]);
+            let raw = v.value();
+            let le: &mut dyn Iterator<Item = &u8> = match v.tag() {
+                ::der::Tag::Integer => &mut raw.iter().rev(),
+                ::der::Tag::OctetString => &mut raw.iter(),
+                _ => return Err(Error::BadPrivateKey(None)),
+            };
+            for (i, b) in le.enumerate() {
+                match d.get_mut(i) {
+                    Some(slot) => *slot = *b,
+                    // beyond the field: only zero padding may be there
+                    None if *b == 0 => {}
+                    None => return Err(Error::BadPrivateKey(None)),
+                }
             }
-            if d.len() > n {
-                return Err(Error::BadPrivateKey(None));
-            }
-            d.resize(n, 0);
             let key = GostPrivate::from_le(curve, &d)?;
             return Ok(PrivateKey::Gost { key, scheme });
         }
         if oid == gost::RSA_ENCRYPTION {
-            let k = rsa::PrivateKey::from_pkcs1_der(&key)
+            let k = rsa::PrivateKey::from_pkcs1_der(key)
                 .map_err(|e| Error::BadPrivateKey(Some(format!("{e}"))))?;
             return Ok(PrivateKey::Rsa(k));
         }
