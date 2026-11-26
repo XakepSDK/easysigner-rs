@@ -325,3 +325,53 @@ fn require_same_document(existing: &SignedData, original: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::Env;
+    use crate::trust::TrustStore;
+
+    fn fixture(p: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(p)
+    }
+
+    fn key(name: &str) -> crate::p12::Key {
+        crate::p12::open(&std::fs::read(fixture(name)).unwrap(), "Qwerty12", None).unwrap()
+    }
+
+    fn ca(name: &str) -> Cert {
+        Cert::parse(&std::fs::read(fixture(name)).unwrap()).unwrap()
+    }
+
+    /// Signing with a key whose certificate has expired works, and says so. The warning comes from
+    /// the parsed certificate: only its end date is moved, the signature still carries the real one.
+    #[test]
+    fn warnings_and_counts_from_signing() {
+        let trust = Env::new(TrustStore::new(vec![ca("keys/ca_gost2015.cer")]));
+        let mut k = key("keys/alice_gost2015.p12");
+        k.cert.not_after = 0;
+        let expired = |w: &[String]| w.iter().any(|w| w.contains("expired"));
+        let r = sign(b"hi", &k, false, None, false, None, &trust).unwrap();
+        assert!(
+            expired(&r.warnings) && r.signer_count == 1,
+            "{:?}",
+            r.warnings
+        );
+        let md = gost::hash(gost::H_GOST2015_512, b"hi").unwrap();
+        let r = sign_hash(&md, &k, None, &trust).unwrap();
+        assert!(
+            expired(&r.warnings) && r.signer_count == 1,
+            "{:?}",
+            r.warnings
+        );
+        let pdf = std::fs::read(fixture("pdf/plain.pdf")).unwrap();
+        let r = crate::pdf::sign(&pdf, &k, None, &trust, None).unwrap();
+        assert!(expired(&r.warnings), "{:?}", r.warnings);
+        let r = crate::xml::sign(b"<r>1</r>", &k, None, &trust).unwrap();
+        assert!(expired(&r.warnings), "{:?}", r.warnings);
+        assert_eq!(crate::Error::new("shown as is").to_string(), "shown as is");
+    }
+}

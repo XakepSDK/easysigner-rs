@@ -16,7 +16,7 @@ pub trait Transport: Send + Sync {
     fn get(&self, server: Server, url: &str, limit: u64) -> Result<Vec<u8>>;
 }
 
-/// The network, over HTTP ([`crate::http`]).
+/// The network, over HTTP (plain http, as NCA's servers use).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Http;
 

@@ -225,15 +225,11 @@ fn signing_time_and_signed_files() {
     let e = Engine::new(vec![ca("keys/ca_gost2015.cer")]);
     let before = kzsigner::time::now_ms() / 1000 * 1000;
     let signed = e
-        .sign(
+        .sign(kzsigner::SignRequest::cms(
             b"hello",
             &key("keys/alice_gost2015.p12"),
-            false,
-            None,
-            None,
-            false,
-            None,
-        )
+            kzsigner::Cms::default(),
+        ))
         .unwrap()
         .cms;
     let after = kzsigner::time::now_ms();

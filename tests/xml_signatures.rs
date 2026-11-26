@@ -27,7 +27,10 @@ fn b64(d: &[u8]) -> String {
 fn signed() -> String {
     let doc = b"<?xml version=\"1.0\"?>\n<r Id=\"r\"><a>1</a></r>\n";
     let s = Engine::new(vec![ca()])
-        .sign_xml(doc, &key("keys/alice_gost2015.p12"), None, None)
+        .sign(kzsigner::SignRequest::xml(
+            doc,
+            &key("keys/alice_gost2015.p12"),
+        ))
         .unwrap()
         .cms;
     String::from_utf8(s).unwrap()
@@ -143,7 +146,10 @@ fn document_shapes() {
         "<r\n/>",
         "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"x\">]>\n<r>&e;</r>\n",
     ] {
-        let signed = e.sign_xml(doc.as_bytes(), &alice, None, None).unwrap().cms;
+        let signed = e
+            .sign(kzsigner::SignRequest::xml(doc.as_bytes(), &alice))
+            .unwrap()
+            .cms;
         let text = String::from_utf8(signed.clone()).unwrap();
         assert!(text.trim_end().ends_with("</r>"), "{doc}: {text}");
         let r = e.verify(&signed, None, None).unwrap();
@@ -152,9 +158,15 @@ fn document_shapes() {
         assert!(r.has_content);
     }
     // two signers, numbered in order
-    let one = e.sign_xml(b"<r/>", &alice, None, None).unwrap().cms;
+    let one = e
+        .sign(kzsigner::SignRequest::xml(b"<r/>", &alice))
+        .unwrap()
+        .cms;
     let two = e
-        .sign_xml(&one, &key("keys/bob_gost2015.p12"), None, None)
+        .sign(kzsigner::SignRequest::xml(
+            &one,
+            &key("keys/bob_gost2015.p12"),
+        ))
         .unwrap()
         .cms;
     let r = e.verify(&two, None, None).unwrap();

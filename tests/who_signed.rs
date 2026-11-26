@@ -78,7 +78,11 @@ fn the_first_signer_adds_the_page_and_locks_the_pdf() {
     let plain = fx("pdf/plain.pdf");
     let n = pages(&plain);
     let one = e
-        .sign_pdf_page(&plain, &key(&e, "alice_rsa.p12"), None, None, &page())
+        .sign(kzsigner::SignRequest::pdf_page(
+            &plain,
+            &key(&e, "alice_rsa.p12"),
+            &page(),
+        ))
         .unwrap()
         .cms;
     assert_eq!(pages(&one), n + 1, "one page added at the end");
@@ -110,7 +114,11 @@ fn the_first_signer_adds_the_page_and_locks_the_pdf() {
 
     // the second signer: the next spot, to the right; no new page, still certified once
     let two = e
-        .sign_pdf_page(&one, &key(&e, "bob_gost2015.p12"), None, None, &page())
+        .sign(kzsigner::SignRequest::pdf_page(
+            &one,
+            &key(&e, "bob_gost2015.p12"),
+            &page(),
+        ))
         .unwrap()
         .cms;
     assert_eq!(pages(&two), n + 1);
@@ -129,13 +137,11 @@ fn the_first_signer_adds_the_page_and_locks_the_pdf() {
 fn boxes_go_after_other_apps_stamps() {
     let e = engine();
     let one = e
-        .sign_pdf_page(
+        .sign(kzsigner::SignRequest::pdf_page(
             &fx("pdf/plain.pdf"),
             &key(&e, "alice_rsa.p12"),
-            None,
-            None,
             &page(),
-        )
+        ))
         .unwrap()
         .cms;
     // an NCALayer-style signature widget across the middle of the page, added by hand as an
@@ -172,13 +178,11 @@ fn boxes_go_after_other_apps_stamps() {
     inc.save_to(&mut with_other).unwrap();
 
     let two = e
-        .sign_pdf_page(
+        .sign(kzsigner::SignRequest::pdf_page(
             &with_other,
             &key(&e, "bob_gost2015.p12"),
-            None,
-            None,
             &page(),
-        )
+        ))
         .unwrap()
         .cms;
     let b = boxes(&two);
@@ -198,7 +202,10 @@ fn after_twenty_boxes_one_note_then_invisible() {
     let k = key(&e, "alice_rsa.p12");
     let mut pdf = fx("pdf/plain.pdf");
     for _ in 0..SPOTS + 2 {
-        pdf = e.sign_pdf_page(&pdf, &k, None, None, &page()).unwrap().cms;
+        pdf = e
+            .sign(kzsigner::SignRequest::pdf_page(&pdf, &k, &page()))
+            .unwrap()
+            .cms;
     }
     let b = boxes(&pdf);
     assert_eq!(b.len(), SPOTS + 1, "20 boxes and the note");
@@ -216,11 +223,18 @@ fn a_pdf_signed_elsewhere_gets_an_invisible_signature() {
     let e = engine();
     let plain = fx("pdf/plain.pdf");
     let one = e
-        .sign_pdf(&plain, &key(&e, "alice_rsa.p12"), None, None)
+        .sign(kzsigner::SignRequest::pdf(
+            &plain,
+            &key(&e, "alice_rsa.p12"),
+        ))
         .unwrap()
         .cms;
     let two = e
-        .sign_pdf_page(&one, &key(&e, "bob_gost2015.p12"), None, None, &page())
+        .sign(kzsigner::SignRequest::pdf_page(
+            &one,
+            &key(&e, "bob_gost2015.p12"),
+            &page(),
+        ))
         .unwrap()
         .cms;
     assert_eq!(pages(&two), pages(&plain));
@@ -237,13 +251,11 @@ fn a_pdf_signed_elsewhere_gets_an_invisible_signature() {
 fn changes_after_the_first_signature_are_caught() {
     let e = engine();
     let one = e
-        .sign_pdf_page(
+        .sign(kzsigner::SignRequest::pdf_page(
             &fx("pdf/plain.pdf"),
             &key(&e, "alice_rsa.p12"),
-            None,
-            None,
             &page(),
-        )
+        ))
         .unwrap()
         .cms;
     let doc = Document::load_mem(&one).unwrap();
@@ -278,7 +290,7 @@ fn write_a_sample() {
     let mut pdf = fx("pdf/plain.pdf");
     for k in ["alice_rsa.p12", "bob_gost2015.p12", "bob_rsa.p12"] {
         pdf = e
-            .sign_pdf_page(&pdf, &key(&e, k), None, None, &page())
+            .sign(kzsigner::SignRequest::pdf_page(&pdf, &key(&e, k), &page()))
             .unwrap()
             .cms;
     }

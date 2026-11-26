@@ -9,6 +9,7 @@ use kzsigner::crl::{self, CertStatus, Crl};
 use kzsigner::der;
 use kzsigner::p12::{self, Key};
 use kzsigner::time::{encode_generalized, now_ms};
+use kzsigner::verify::revocation;
 
 const DAY: i64 = 86_400_000;
 
@@ -350,10 +351,12 @@ fn fetched_lists() {
 
     let (base, delta, due) = crl::lists(&c, now, &env).unwrap();
     assert!(base.next_update.is_some() && delta.is_none() && !due);
-    // (check reads the clock itself, a little after `now`: the list is still kept)
-    let (good, status, answer) = crl::check(&c, Some(&ca.cert), &env);
+    // (revocation reads the clock itself, a little after `now`: the list is still kept; OCSP
+    // at a closed port gives no answer, so the list decides)
+    let dead = "http://127.0.0.1:1";
+    let (good, status, answer, _) = revocation(&c, Some(&ca.cert), dead, &env, None);
     assert!(good && answer == Some(CertStatus::Good), "{status}");
-    assert_eq!(crl::check(&c, None, &env).2, None);
+    assert_eq!(revocation(&c, None, dead, &env, None).2, None);
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept");
     crl::lists(&c, now + 59 * MINUTE, &env).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept for the hour");

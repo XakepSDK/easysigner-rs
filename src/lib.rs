@@ -6,22 +6,23 @@ pub mod crl;
 pub mod der;
 pub mod env;
 pub mod gost;
-pub mod http;
+pub(crate) mod http;
 pub mod i18n;
-pub mod keys;
+pub(crate) mod keys;
 pub mod ltv;
 pub mod ocsp;
 pub mod output;
 pub mod p12;
 pub mod pdf;
 pub mod report;
-pub mod sign;
+pub mod request;
+pub(crate) mod sign;
 pub mod time;
 pub mod trust;
 pub mod tsp;
 pub mod vault;
 pub mod verify;
-pub mod xml;
+pub(crate) mod xml;
 
 /// The cryptography, for callers that use it directly.
 pub use kzcrypto;
@@ -29,6 +30,7 @@ pub use kzcrypto;
 use cert::Cert;
 use p12::Key;
 use report::{SignResult, SignerReport, VerifyReport};
+pub use request::{Cms, Form, SignRequest};
 use trust::TrustStore;
 
 pub const DEFAULT_TSA_URL: &str = tsp::DEFAULT_TSA_URL;
@@ -73,112 +75,37 @@ impl Engine {
         cert::key_warnings(c, self.env.now_ms())
     }
 
-    /// Checks the signer's own key before signing; see [`sign::check_key`].
+    /// Checks the signer's own key before signing (Order 500/НҚ p.4): issued by a trusted CA,
+    /// valid now, allowed to sign, and, with `ocsp_url`, not revoked. Returns the warnings
+    /// (e.g. a revocation check that got no answer).
     pub fn check_key(&self, c: &Cert, ocsp_url: Option<&str>) -> Result<Vec<String>> {
         sign::check_key(c, ocsp_url, &self.env)
     }
 
-    /// See [`sign::sign`]. The key is checked first ([`Engine::check_key`]; revocation with
-    /// `ocsp_url`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn sign(
-        &self,
-        input: &[u8],
-        key: &Key,
-        detached: bool,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-        cosign_if_cms: bool,
-        detached_original: Option<&[u8]>,
-    ) -> Result<SignResult> {
-        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = sign::sign(
+    /// Signs as `req` asks. The key is checked first ([`Engine::check_key`]; for revocation
+    /// too with an OCSP server); its warnings come first in the result's.
+    pub fn sign(&self, req: SignRequest) -> Result<SignResult> {
+        let SignRequest {
             input,
             key,
-            detached,
+            form,
             tsa_url,
-            cosign_if_cms,
-            detached_original,
-            &self.env,
-        )?;
-        warnings.append(&mut r.warnings);
-        r.warnings = warnings;
-        Ok(r)
-    }
-
-    /// Signs a PDF inside the PDF (PAdES); see [`pdf::sign`]. The key is checked first.
-    pub fn sign_pdf(
-        &self,
-        input: &[u8],
-        key: &Key,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-    ) -> Result<SignResult> {
-        self.sign_pdf_with(input, key, tsa_url, ocsp_url, None)
-    }
-
-    /// [`Engine::sign_pdf`], with a visible stamp on a page when `stamp` is given.
-    pub fn sign_pdf_with(
-        &self,
-        input: &[u8],
-        key: &Key,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-        stamp: Option<&pdf::stamp::Stamp>,
-    ) -> Result<SignResult> {
+            ocsp_url,
+        } = req;
+        if let Form::Hash = form {
+            sign::check_hash_length(input, key)?;
+        }
         let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = pdf::sign(input, key, tsa_url, &self.env, stamp)?;
-        warnings.append(&mut r.warnings);
-        r.warnings = warnings;
-        Ok(r)
-    }
-
-    /// Signs a PDF with the signer's box on the Who signed page ([`pdf::whosigned`]): the
-    /// first signer adds the page and locks the PDF to signatures and form filling. The key
-    /// is checked first.
-    pub fn sign_pdf_page(
-        &self,
-        input: &[u8],
-        key: &Key,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-        page: &pdf::whosigned::WhoSigned,
-    ) -> Result<SignResult> {
-        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = pdf::sign_with(input, key, tsa_url, &self.env, pdf::Look::WhoSigned(page))?;
-        warnings.append(&mut r.warnings);
-        r.warnings = warnings;
-        Ok(r)
-    }
-
-    /// Signs a document known only by its hash into a detached .cms; see [`sign::sign_hash`].
-    /// The key is checked first.
-    pub fn sign_hash(
-        &self,
-        hash: &[u8],
-        key: &Key,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-    ) -> Result<SignResult> {
-        sign::check_hash_length(hash, key)?;
-        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = sign::sign_hash(hash, key, tsa_url, &self.env)?;
-        warnings.append(&mut r.warnings);
-        r.warnings = warnings;
-        Ok(r)
-    }
-
-    /// Signs an XML document with an enveloped XAdES signature; see [`xml::sign`]. The key is
-    /// checked first.
-    pub fn sign_xml(
-        &self,
-        input: &[u8],
-        key: &Key,
-        tsa_url: Option<&str>,
-        ocsp_url: Option<&str>,
-    ) -> Result<SignResult> {
-        let mut warnings = self.check_key(&key.cert, ocsp_url)?;
-        let mut r = xml::sign(input, key, tsa_url, &self.env)?;
+        let env = &self.env;
+        let mut r = match form {
+            Form::Cms(c) => sign::sign(input, key, c.detached, tsa_url, c.cosign, c.original, env)?,
+            Form::Hash => sign::sign_hash(input, key, tsa_url, env)?,
+            Form::Pdf(stamp) => pdf::sign(input, key, tsa_url, env, stamp)?,
+            Form::PdfPage(page) => {
+                pdf::sign_with(input, key, tsa_url, env, pdf::Look::WhoSigned(page))?
+            }
+            Form::Xml => xml::sign(input, key, tsa_url, env)?,
+        };
         warnings.append(&mut r.warnings);
         r.warnings = warnings;
         Ok(r)
@@ -250,7 +177,7 @@ impl Engine {
     }
 
     /// Makes the signatures in a .cms, a PDF or an XML document long-term (B-LT, or B-LTA with an archive
-    /// timestamp); see [`sign::extend`], [`pdf::extend`] and [`xml::ltv::extend`]. `original`: a detached .cms's
+    /// timestamp); see [`pdf::extend`]. `original`: a detached .cms's
     /// document.
     pub fn extend(
         &self,

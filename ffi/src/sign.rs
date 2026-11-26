@@ -380,10 +380,20 @@ impl Vault {
                 let page = WhoSigned {
                     document: name.clone(),
                 };
-                e.sign_pdf_page(&bytes, &key, tsa, None, &page)
+                e.sign(kzsigner::SignRequest::pdf_page(&bytes, &key, &page).tsa(tsa))
             }
-            Output::InsideXml => e.sign_xml(&bytes, &key, tsa, None),
-            _ => e.sign(&bytes, &key, false, tsa, None, true, None),
+            Output::InsideXml => e.sign(kzsigner::SignRequest::xml(&bytes, &key).tsa(tsa)),
+            _ => e.sign(
+                kzsigner::SignRequest::cms(
+                    &bytes,
+                    &key,
+                    kzsigner::Cms {
+                        cosign: true,
+                        ..Default::default()
+                    },
+                )
+                .tsa(tsa),
+            ),
         }
         .map_err(|x| {
             // NCA's timestamp server not answering; anything else is a failure to show

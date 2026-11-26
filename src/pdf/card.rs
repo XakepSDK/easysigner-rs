@@ -1,10 +1,10 @@
-//! Карточка электронного документа (electronic document card, https://github.com/kaarkz/ddcard):
+//! Карточка электронного документа (electronic document card, <https://github.com/kaarkz/ddcard>):
 //! a PDF that carries the original document and its detached CMS signatures as attachments,
 //! with pages people can read: an information block, the document's own pages (when it is a
 //! PDF), and one page per signature, optionally with the signature as QR codes.
 //!
 //! The layout and texts follow SIGEX's reference implementation, ddc
-//! (https://github.com/sigex-kz/ddc, MIT licence), whose Kazakh texts are reused here, so cards
+//! (<https://github.com/sigex-kz/ddc>, MIT licence), whose Kazakh texts are reused here, so cards
 //! made by kzsigner and by SIGEX look alike and either tool can read the other's.
 
 use crate::env::Env;

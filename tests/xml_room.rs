@@ -24,7 +24,10 @@ fn room_for_another_signature() {
     assert!(!e.xml_has_room(b"<r><a>"), "broken XML");
 
     let signed = e
-        .sign_xml(doc, &key("keys/alice_gost2015.p12"), None, None)
+        .sign(kzsigner::SignRequest::xml(
+            doc,
+            &key("keys/alice_gost2015.p12"),
+        ))
         .unwrap()
         .cms;
     assert!(
@@ -32,7 +35,10 @@ fn room_for_another_signature() {
         "kzsigner's signature leaves the others out"
     );
     let two = e
-        .sign_xml(&signed, &key("keys/bob_gost2015.p12"), None, None)
+        .sign(kzsigner::SignRequest::xml(
+            &signed,
+            &key("keys/bob_gost2015.p12"),
+        ))
         .unwrap();
     assert!(two.cosigned && two.signer_count == 2);
     let rep = e.verify(&two.cms, None, None).unwrap();
@@ -47,8 +53,11 @@ fn room_for_another_signature() {
     let closed = format!("{}{}", &text[..a], &text[b..]);
     assert!(!e.xml_has_room(closed.as_bytes()));
     assert!(
-        e.sign_xml(closed.as_bytes(), &key("keys/bob_gost2015.p12"), None, None)
-            .is_err()
+        e.sign(kzsigner::SignRequest::xml(
+            closed.as_bytes(),
+            &key("keys/bob_gost2015.p12")
+        ))
+        .is_err()
     );
     // a reference to something that does not hold the new signature is no obstacle
     let part = closed.replacen(

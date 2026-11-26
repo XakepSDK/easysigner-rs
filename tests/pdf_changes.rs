@@ -51,10 +51,13 @@ fn changes_after_signing_are_caught() {
     let (rsa, gost) = (key(&e, "alice_rsa.p12"), key(&e, "alice_gost2015.p12"));
     for f in ["plain.pdf", "objstm.pdf", "land.pdf"] {
         let one = e
-            .sign_pdf(&std::fs::read(fx.join(f)).unwrap(), &rsa, None, None)
+            .sign(kzsigner::SignRequest::pdf(
+                &std::fs::read(fx.join(f)).unwrap(),
+                &rsa,
+            ))
             .unwrap()
             .cms;
-        let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
+        let two = e.sign(kzsigner::SignRequest::pdf(&one, &gost)).unwrap().cms;
         let r = e.verify(&two, None, None).unwrap();
         assert_eq!(r.signers.len(), 2);
         for s in &r.signers {
@@ -83,7 +86,7 @@ fn changes_after_signing_are_caught() {
             );
         }
         // and signing on top of the change does not make it pass
-        let three = e.sign_pdf(&evil, &rsa, None, None).unwrap().cms;
+        let three = e.sign(kzsigner::SignRequest::pdf(&evil, &rsa)).unwrap().cms;
         let r = e.verify(&three, None, None).unwrap();
         assert!(!r.signers[0].signature_ok && !r.signers[1].signature_ok);
         assert!(r.signers[2].signature_ok);
@@ -111,7 +114,7 @@ fn certified_pdfs_that_allow_no_changes_are_not_signed() {
         .set("Perms", Object::Dictionary(perms));
     let mut data = Vec::new();
     doc.save_to(&mut data).unwrap();
-    let Err(err) = e.sign_pdf(&data, &rsa, None, None) else {
+    let Err(err) = e.sign(kzsigner::SignRequest::pdf(&data, &rsa)) else {
         panic!("signed a no-changes PDF");
     };
     assert!(err.to_string().contains("DocMDP"), "{}", err.to_string());
@@ -124,7 +127,11 @@ fn a_cms_holding_a_pdf_is_checked_as_a_cms() {
     let rsa = key(&e, "alice_rsa.p12");
     let pdf = std::fs::read(fx.join("plain.pdf")).unwrap();
     let cms = e
-        .sign(&pdf, &rsa, false, None, None, false, None)
+        .sign(kzsigner::SignRequest::cms(
+            &pdf,
+            &rsa,
+            kzsigner::Cms::default(),
+        ))
         .unwrap()
         .cms;
     assert!(!e.is_pdf(&cms));
@@ -214,8 +221,8 @@ fn what_updates_may_change() {
         ("inline", plain.clone()),
         ("indirect", indirect_form(&plain)),
     ] {
-        let one = e.sign_pdf(&pdf, &rsa, None, None).unwrap().cms;
-        let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
+        let one = e.sign(kzsigner::SignRequest::pdf(&pdf, &rsa)).unwrap().cms;
+        let two = e.sign(kzsigner::SignRequest::pdf(&one, &gost)).unwrap().cms;
         let r = e.verify(&two, None, None).unwrap();
         assert!(r.valid, "{form}: {:?}", r.signers);
         assert!(r.is_pdf && r.has_content);
@@ -446,7 +453,10 @@ fn signature_field_names() {
     );
     let mut taken = Vec::new();
     doc.save_to(&mut taken).unwrap();
-    let signed = e.sign_pdf(&taken, &rsa, None, None).unwrap().cms;
+    let signed = e
+        .sign(kzsigner::SignRequest::pdf(&taken, &rsa))
+        .unwrap()
+        .cms;
     let r = e.verify(&signed, None, None).unwrap();
     assert!(r.valid);
     assert_eq!(
@@ -455,7 +465,12 @@ fn signature_field_names() {
     );
 
     // the signature's field moved under a parent field "form" that gives its type
-    let mut doc = Document::load_mem(&e.sign_pdf(&plain, &rsa, None, None).unwrap().cms).unwrap();
+    let mut doc = Document::load_mem(
+        &e.sign(kzsigner::SignRequest::pdf(&plain, &rsa))
+            .unwrap()
+            .cms,
+    )
+    .unwrap();
     let widget = doc
         .catalog()
         .unwrap()
@@ -530,16 +545,16 @@ fn signature_fields_that_do_not_hold() {
     let rsa = key(&e, "alice_rsa.p12");
     let gost = key(&e, "alice_gost2015.p12");
     let signed = e
-        .sign_pdf(
+        .sign(kzsigner::SignRequest::pdf(
             &std::fs::read(fx.join("plain.pdf")).unwrap(),
             &rsa,
-            None,
-            None,
-        )
+        ))
         .unwrap();
     assert_eq!(signed.signer_count, 1);
     assert!(!signed.cosigned);
-    let two = e.sign_pdf(&signed.cms, &gost, None, None).unwrap();
+    let two = e
+        .sign(kzsigner::SignRequest::pdf(&signed.cms, &gost))
+        .unwrap();
     assert!(two.cosigned && two.signer_count == 2);
     let pdf = signed.cms;
     assert!(e.verify(&pdf, None, None).unwrap().valid);
@@ -691,8 +706,8 @@ fn metadata_dss_and_other_objects() {
     let mut pdf = Vec::new();
     doc.save_to(&mut pdf).unwrap();
 
-    let one = e.sign_pdf(&pdf, &rsa, None, None).unwrap().cms;
-    let two = e.sign_pdf(&one, &gost, None, None).unwrap().cms;
+    let one = e.sign(kzsigner::SignRequest::pdf(&pdf, &rsa)).unwrap().cms;
+    let two = e.sign(kzsigner::SignRequest::pdf(&one, &gost)).unwrap().cms;
     let r = e.verify(&two, None, None).unwrap();
     assert!(r.valid, "{:?}", r.signers);
     let signed = Document::load_mem(&two).unwrap();

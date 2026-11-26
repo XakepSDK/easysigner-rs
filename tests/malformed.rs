@@ -135,9 +135,19 @@ fn damaged_pdfs_give_errors_not_crashes() {
         .iter()
         .map(|f| std::fs::read(fx.join(f)).unwrap())
         .collect();
-    let signed = e.sign_pdf(&pdfs[0], &key, None, None).unwrap().cms;
-    let twice = e.sign_pdf(&signed, &key, None, None).unwrap().cms;
-    pdfs.push(e.sign_pdf(&pdfs[1], &key, None, None).unwrap().cms);
+    let signed = e
+        .sign(kzsigner::SignRequest::pdf(&pdfs[0], &key))
+        .unwrap()
+        .cms;
+    let twice = e
+        .sign(kzsigner::SignRequest::pdf(&signed, &key))
+        .unwrap()
+        .cms;
+    pdfs.push(
+        e.sign(kzsigner::SignRequest::pdf(&pdfs[1], &key))
+            .unwrap()
+            .cms,
+    );
     pdfs.push(twice);
     let mut rng = Rng(7);
     for round in 0..1200 {
@@ -146,7 +156,7 @@ fn damaged_pdfs_give_errors_not_crashes() {
             let _ = e.verify(&p, None, None);
             let _ = e.card_original(&p);
             if round % 4 == 0 {
-                let _ = e.sign_pdf(&p, &key, None, None);
+                let _ = e.sign(kzsigner::SignRequest::pdf(&p, &key));
             }
         });
     }

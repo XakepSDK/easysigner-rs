@@ -11,7 +11,7 @@ use crate::env::Env;
 pub use kzcrypto::crl::*;
 
 use crate::cert::Cert;
-use crate::i18n::{self, tr, trf};
+use crate::i18n::{self, tr};
 use crate::{Error, Result};
 
 /// NCA's full lists are large (tens of MB); refuse anything beyond this.
@@ -80,24 +80,4 @@ pub fn lists(c: &Cert, now: i64, env: &Env) -> Result<(Arc<Crl>, Option<Arc<Crl>
     let delta_due = !delta_urls.is_empty();
     let delta = first(&delta_urls, now, env).ok();
     Ok((base, delta, delta_due))
-}
-
-/// Checks `c` against the CRLs its distribution points name (and their delta lists).
-pub fn check(c: &Cert, issuer: Option<&Cert>, env: &Env) -> (bool, String, Option<CertStatus>) {
-    let Some(issuer) = issuer else {
-        return (
-            false,
-            tr("UNKNOWN (issuer certificate not available)").into(),
-            None,
-        );
-    };
-    let now = env.now_ms();
-    match lists(c, now, env) {
-        Ok((base, delta, due)) => evaluate(&base, delta.as_deref(), due, c, issuer, now),
-        Err(e) => (
-            false,
-            trf("ERROR: could not check the revocation list ({})", &[&e]),
-            None,
-        ),
-    }
 }

@@ -1466,7 +1466,7 @@ fn xml() {
         "</ds:Object>",
         &format!(
             "<x xmlns:xades=\"{}\">{sp}</x></ds:Object>",
-            kzsigner::xml::XADES
+            "http://uri.etsi.org/01903/v1.3.2#"
         ),
     );
     std::fs::write(t.path("bad.xml"), wrapped).unwrap();

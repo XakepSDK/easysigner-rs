@@ -190,7 +190,7 @@ Most of the behaviour exists; these are new or different:
 
 ## Where phase 5 ended
 
-- **Who signed page** (`src/pdf/whosigned.rs`, `Engine::sign_pdf_page`): the first signer
+- **Who signed page** (`src/pdf/whosigned.rs`, `SignRequest::pdf_page`): the first signer
   appends an A4 page (trilingual title and note, footer listing the apps as plain text until
   store links exist) and draws their box in the grid's first spot. Later signers take the
   first spot after the last one used, clear of every widget and below the lowest widget

@@ -539,26 +539,33 @@ fn sign(mut o: Opts) -> R<u8> {
             o.qr.then_some(true),
         )?
     } else if o.xml {
-        e.sign_xml(&input, &k, tsa.as_deref(), o.ocsp.as_deref())
-            .map_err(&hint)?
+        e.sign(
+            kzsigner::SignRequest::xml(&input, &k)
+                .tsa(tsa.as_deref())
+                .ocsp(o.ocsp.as_deref()),
+        )
+        .map_err(&hint)?
     } else if o.pdf {
-        e.sign_pdf_with(
-            &input,
-            &k,
-            tsa.as_deref(),
-            o.ocsp.as_deref(),
-            stamp.as_ref(),
+        e.sign(
+            kzsigner::SignRequest::pdf(&input, &k)
+                .stamp(stamp.as_ref())
+                .tsa(tsa.as_deref())
+                .ocsp(o.ocsp.as_deref()),
         )
         .map_err(&hint)?
     } else {
         e.sign(
-            &input,
-            &k,
-            o.detached,
-            tsa.as_deref(),
-            o.ocsp.as_deref(),
-            true,
-            original.as_deref(),
+            kzsigner::SignRequest::cms(
+                &input,
+                &k,
+                kzsigner::Cms {
+                    detached: o.detached,
+                    cosign: true,
+                    original: original.as_deref(),
+                },
+            )
+            .tsa(tsa.as_deref())
+            .ocsp(o.ocsp.as_deref()),
         )
         .map_err(&hint)?
     };
@@ -729,7 +736,11 @@ fn sign_hash(mut o: Opts) -> R<u8> {
         .clone()
         .or_else(|| o.level.map(|_| kzsigner::DEFAULT_TSA_URL.to_string()));
     let mut r = e
-        .sign_hash(&hash, &k, tsa.as_deref(), o.ocsp.as_deref())
+        .sign(
+            kzsigner::SignRequest::hash(&hash, &k)
+                .tsa(tsa.as_deref())
+                .ocsp(o.ocsp.as_deref()),
+        )
         .map_err(tsa_hint(&o))?;
     if let (Some(level), Some(tsa)) = (o.level, &tsa) {
         r = e.extend_new(

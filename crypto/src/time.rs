@@ -58,7 +58,7 @@ pub fn fields(ms: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
     )
 }
 
-/// UTCTime (YYMMDDHHMM[SS]Z) or GeneralizedTime (YYYYMMDDHHMMSS[.fff]Z, or with an offset).
+/// UTCTime (`YYMMDDHHMM[SS]Z`) or GeneralizedTime (`YYYYMMDDHHMMSS[.fff]Z`, or with an offset).
 pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
     let s = core::str::from_utf8(content).map_err(|_| bad_time())?;
     let num = |a: usize, b: usize| -> Result<i64> {

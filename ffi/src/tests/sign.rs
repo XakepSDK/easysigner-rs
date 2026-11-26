@@ -123,7 +123,11 @@ fn inspect_says_what_signing_makes() {
     let key = kzsigner::p12::open(&file("keys/alice_rsa.p12"), "Qwerty12", None).unwrap();
     let e = kzsigner::Engine::new(test_cas());
     let cms = e
-        .sign(&file("pdf/plain.pdf"), &key, false, None, None, false, None)
+        .sign(kzsigner::SignRequest::cms(
+            &file("pdf/plain.pdf"),
+            &key,
+            kzsigner::Cms::default(),
+        ))
         .unwrap()
         .cms;
     let d = inspect("Dogovor.pdf.cms".into(), cms);

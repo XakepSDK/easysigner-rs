@@ -1,5 +1,5 @@
 //! A signature as a set of QR codes, the way the ddcard specification lays it out
-//! (https://github.com/kaarkz/ddcard, «Визуализация ЭЦП»): the CMS is zipped as `<signId>.cms`
+//! (<https://github.com/kaarkz/ddcard>, «Визуализация ЭЦП»): the CMS is zipped as `<signId>.cms`
 //! (DEFLATE), Base64-encoded, and split across QR codes of version 25, level M, each holding
 //! the JSON `{"signId":..,"total":..,"index":..,"data":".."}`.
 
