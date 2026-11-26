@@ -23,6 +23,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod asn1;
 pub mod cert;
 pub mod cms;
 pub mod crl;

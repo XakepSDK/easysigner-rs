@@ -116,7 +116,7 @@ fn new_archive_timestamp() {
     .unwrap();
     let (_, ca, _) = carol();
     let trust = Env::new(TrustStore::only(vec![ca, tsa()]));
-    let sd = SignedData::parse(&sd.encode()).unwrap();
+    let sd = SignedData::parse(&sd.encode().unwrap()).unwrap();
     let stamps = ltv::check_archives(&sd, &sd.signers[0], Some(&content), &trust);
     assert_eq!(stamps.len(), 4);
     for a in &stamps {

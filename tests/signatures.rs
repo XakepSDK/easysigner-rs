@@ -63,7 +63,7 @@ fn signing_certificate_reference() {
         let mut s = si.clone();
         s.signed_attrs = Some(der::sorted_set(
             der::ctx(0),
-            &mut [cms::attribute(oid, &value)],
+            &mut [cms::attribute(oid, &value).unwrap()],
         ));
         s
     };
@@ -125,7 +125,7 @@ fn signing_certificate_reference() {
     let mut sd = SignedData::parse(&signed(b"hello")).unwrap();
     sd.certs = vec![forged(&alice).der];
     let rep = verify(
-        &sd.encode(),
+        &sd.encode().unwrap(),
         Some(b"hello"),
         &Env::new(TrustStore::new(vec![])),
         None,
@@ -174,7 +174,7 @@ fn signature_without_its_document() {
         ("certificate", forged_cert),
         ("attributes", no_attrs),
     ] {
-        let rep = verify_with(&d.encode(), None, &trust, None, true, None).unwrap();
+        let rep = verify_with(&d.encode().unwrap(), None, &trust, None, true, None).unwrap();
         let s = &rep.signers[0];
         assert!(!s.signature_ok, "{name}");
         assert!(

@@ -24,7 +24,7 @@ pub fn stamp(d: &mut SignedData, url: &str, scheme: Option<Scheme>, env: &Env) -
         policy,
         env,
     )?;
-    si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, &token);
+    si.add_unsigned(cms::ATTR_TIMESTAMP_TOKEN, &token)?;
     Ok(())
 }
 
@@ -202,7 +202,13 @@ mod tests {
         let mut sd = SignedData::parse_inner(token).unwrap();
         sd.signers[0].signature[5] ^= 1;
         let mut sr = SignerReport::default();
-        check_token(&mut sr, &live(case, "data.bin"), &sd.encode(), &env).unwrap();
+        check_token(
+            &mut sr,
+            &live(case, "data.bin"),
+            &sd.encode().unwrap(),
+            &env,
+        )
+        .unwrap();
         assert_eq!(sr.timestamp_ok, Some(false));
     }
 }

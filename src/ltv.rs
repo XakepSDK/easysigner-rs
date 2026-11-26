@@ -139,8 +139,10 @@ impl Kept {
             for x in list.iter() {
                 if part.tag == der::ctx(0) {
                     add(&mut self.crls, x.raw);
-                } else if part.tag == der::ctx(1) {
-                    add(&mut self.ocsps, &ocsp::wrap_basic(x.raw));
+                } else if part.tag == der::ctx(1)
+                    && let Ok(o) = ocsp::wrap_basic(x.raw)
+                {
+                    add(&mut self.ocsps, &o);
                 }
             }
         }
@@ -394,15 +396,15 @@ fn ocsp_item(raw: &[u8]) -> Vec<u8> {
 /// Puts `kept` into `sd`: its certificates and `crls`, as ETSI B-LT keeps them, and, for the
 /// signer `idx` when it has none yet and no archive timestamp, the certValues and
 /// revocationValues attributes Order 500/НҚ p.8 names.
-pub fn embed(sd: &mut SignedData, idx: usize, kept: &Kept) {
+pub fn embed(sd: &mut SignedData, idx: usize, kept: &Kept) -> Result<()> {
     sd.add_certs(&kept.certs);
     let mut items = kept.crls.clone();
     items.extend(kept.ocsps.iter().map(|o| ocsp_item(o)));
-    sd.add_crl_items(&items);
+    sd.add_crl_items(&items)?;
     let si = &mut sd.signers[idx];
     let has: Vec<String> = si.unsigned().into_iter().map(|(o, _)| o).collect();
     if has.iter().any(|o| o == ATTR_ARCHIVE_TIMESTAMP_V3) {
-        return;
+        return Ok(());
     }
     if !has.iter().any(|o| o == ATTR_REVOCATION_VALUES) {
         let basics: Vec<Vec<u8>> = kept
@@ -421,13 +423,14 @@ pub fn embed(sd: &mut SignedData, idx: usize, kept: &Kept) {
         }
         if !parts.is_empty() {
             let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
-            si.add_unsigned(ATTR_REVOCATION_VALUES, &der::seq(&refs));
+            si.add_unsigned(ATTR_REVOCATION_VALUES, &der::seq(&refs))?;
         }
     }
     if !has.iter().any(|o| o == ATTR_CERT_VALUES) && !kept.certs.is_empty() {
         let refs: Vec<&[u8]> = kept.certs.iter().map(Vec::as_slice).collect();
-        si.add_unsigned(ATTR_CERT_VALUES, &der::seq(&refs));
+        si.add_unsigned(ATTR_CERT_VALUES, &der::seq(&refs))?;
     }
+    Ok(())
 }
 
 /// The certificates of the TSAs whose timestamps `si` carries (signature and archive
@@ -480,7 +483,7 @@ fn imprint_input(
     Ok(der::cat(&[
         &der::oid(&sd.content_type),
         &gost::hash(alg, content)?,
-        &si.archive_fields(),
+        &si.archive_fields()?,
         index,
     ]))
 }
@@ -507,12 +510,12 @@ pub fn archive(
     if t.signers.len() != 1 {
         return Err(Error::new("time-stamp token signed by multiple signers."));
     }
-    t.signers[0].add_unsigned(ATTR_ATS_HASH_INDEX_V3, &index);
+    t.signers[0].add_unsigned(ATTR_ATS_HASH_INDEX_V3, &index)?;
     t.add_certs(&extra.certs);
     let mut items = extra.crls.clone();
     items.extend(extra.ocsps.iter().map(|o| ocsp_item(o)));
-    t.add_crl_items(&items);
-    sd.signers[idx].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &t.encode());
+    t.add_crl_items(&items)?;
+    sd.signers[idx].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &t.encode()?)?;
     Ok(())
 }
 
@@ -673,7 +676,7 @@ mod tests {
                 issuer: &self.ca.cert,
                 serial: self.carol.serial.clone(),
                 status: match revoked {
-                    Some(t) => der::tlv(der::ctx(1), &encode_generalized(t)),
+                    Some(t) => der::tlv(der::ctx(1), &encode_generalized(t).unwrap()),
                     None => GOOD.to_vec(),
                 },
                 this_update: made,
@@ -698,13 +701,13 @@ mod tests {
                 der::small_int(1),
                 der::alg_null(self.ca.private_key.sig_oid()),
                 issuer.to_vec(),
-                encode_generalized(this),
-                encode_generalized(next),
+                encode_generalized(this).unwrap(),
+                encode_generalized(next).unwrap(),
             ];
             if let Some(t) = revoked {
                 tbs.push(der::seq(&[&der::seq(&[
                     &der::uint(&self.carol.serial),
-                    &encode_generalized(t),
+                    &encode_generalized(t).unwrap(),
                 ])]));
             }
             if delta {
@@ -916,7 +919,7 @@ mod tests {
             .unwrap()
         };
         let mut sd = fresh();
-        embed(&mut sd, 0, &kept);
+        embed(&mut sd, 0, &kept).unwrap();
         assert_eq!(sd.crl_items().len(), 2);
         let back = Kept::from_cms(&sd, None);
         assert_eq!(back.ocsps, kept.ocsps);
@@ -939,7 +942,7 @@ mod tests {
         );
         // embedding again adds no second set of attributes
         let n = sd.signers[0].unsigned_attrs.len();
-        embed(&mut sd, 0, &kept);
+        embed(&mut sd, 0, &kept).unwrap();
         assert_eq!(sd.signers[0].unsigned_attrs.len(), n);
 
         // with an archive timestamp, the data goes only into SignedData's fields, and what the
@@ -954,10 +957,13 @@ mod tests {
             &mut crate::OsRng,
         )
         .unwrap()
-        .encode();
+        .encode()
+        .unwrap();
         let mut sd = fresh();
-        sd.signers[0].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token);
-        embed(&mut sd, 0, &kept);
+        sd.signers[0]
+            .add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token)
+            .unwrap();
+        embed(&mut sd, 0, &kept).unwrap();
         assert_eq!(sd.signers[0].unsigned_attrs.len(), 1);
         let si = sd.signers[0].clone();
         let bare = SignedData {
@@ -978,7 +984,8 @@ mod tests {
                 certs: kept.certs.clone(),
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let types: Vec<String> = sd.signers[0]
             .unsigned()
             .into_iter()
@@ -988,8 +995,9 @@ mod tests {
 
         // the TSAs of a signer's timestamps, signature and archive ones
         let mut si = sd.signers[0].clone();
-        si.add_unsigned(crate::cms::ATTR_TIMESTAMP_TOKEN, &token);
-        si.add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token);
+        si.add_unsigned(crate::cms::ATTR_TIMESTAMP_TOKEN, &token)
+            .unwrap();
+        si.add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &token).unwrap();
         assert_eq!(tsa_certs(&si), vec![f.ca.cert.clone(), f.ca.cert.clone()]);
     }
 

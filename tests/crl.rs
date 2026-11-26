@@ -38,15 +38,15 @@ fn make_by(
 ) -> Vec<u8> {
     let entries: Vec<Vec<u8>> = serials
         .iter()
-        .map(|s| der::seq(&[&der::uint(s), &encode_generalized(this - DAY)]))
+        .map(|s| der::seq(&[&der::uint(s), &encode_generalized(this - DAY).unwrap()]))
         .collect();
     let refs: Vec<&[u8]> = entries.iter().map(Vec::as_slice).collect();
     let mut parts = vec![
         der::small_int(1),
         der::alg_null(signer.private_key.sig_oid()),
         issuer.to_vec(),
-        encode_generalized(this),
-        encode_generalized(next),
+        encode_generalized(this).unwrap(),
+        encode_generalized(next).unwrap(),
     ];
     if !entries.is_empty() {
         parts.push(der::seq(&refs));
@@ -275,15 +275,6 @@ fn which_lists_are_current() {
     );
 }
 
-#[test]
-fn addresses_deep_inside() {
-    let uri = der::tlv(der::ctx_prim(6), b"http://example/x.crl");
-    let nest = |n: usize| (0..n).fold(uri.clone(), |d, _| der::seq(&[&d]));
-    // the address itself sits at depth n
-    assert_eq!(crl::uris_in(&nest(8)), ["http://example/x.crl"]);
-    assert!(crl::uris_in(&nest(9)).is_empty());
-}
-
 /// A local server for revocation lists: answers each GET with `answer()` (None: an error) and
 /// counts the requests. Returns its URL and the count.
 fn serve(
@@ -393,7 +384,7 @@ fn fetched_lists() {
 fn list_forms() {
     let ca = key("ca.p12");
     let now = now_ms() / 1000 * 1000;
-    let utc = |ms: i64| kzsigner::time::encode(ms);
+    let utc = |ms: i64| kzsigner::time::encode(ms).unwrap();
     let list = |parts: &[Vec<u8>]| {
         let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
         let tbs = der::seq(&refs);
@@ -407,7 +398,7 @@ fn list_forms() {
     let alg = der::alg_null(ca.private_key.sig_oid());
     let name = ca.cert.subject.clone();
     let entry = |serial: u8, more: &[Vec<u8>]| {
-        let mut e = vec![der::uint(&[serial]), encode_generalized(now - DAY)];
+        let mut e = vec![der::uint(&[serial]), encode_generalized(now - DAY).unwrap()];
         e.extend(more.iter().cloned());
         let refs: Vec<&[u8]> = e.iter().map(Vec::as_slice).collect();
         der::seq(&refs)
@@ -418,7 +409,7 @@ fn list_forms() {
     let c = Crl::parse(&list(&[
         alg.clone(),
         name.clone(),
-        encode_generalized(now),
+        encode_generalized(now).unwrap(),
         entries.clone(),
     ]))
     .unwrap();

@@ -314,7 +314,12 @@ impl<'a> Tlv<'a> {
 
     /// UTCTime or GeneralizedTime as milliseconds since 1970.
     pub fn time(&self) -> Result<i64> {
-        crate::time::parse_asn1(self.tag, self.content)
+        let tag = match self.tag {
+            UTC_TIME => ::der::Tag::UtcTime,
+            GENERALIZED_TIME => ::der::Tag::GeneralizedTime,
+            _ => ::der::Tag::Null,
+        };
+        crate::time::parse_asn1(tag, self.content)
     }
 
     /// The same element with DER's tag replaced (e.g. `[0] IMPLICIT SET` read as a SET).

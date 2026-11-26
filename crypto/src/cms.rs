@@ -1,8 +1,12 @@
 //! CMS SignedData (.cms files): reading (DER, BER or Base64/PEM), writing DER, new CAdES-BES
 //! signers the way NCALayer makes them, and merging signers (co-signing).
 
+use ::der::asn1::{Any, Int, ObjectIdentifier, OctetString, OctetStringRef, SetOfVec};
+use ::der::{Sequence, Tag, Tagged};
+use x509_cert::attr::Attribute;
+
+use crate::asn1::{self, any, ber};
 use crate::cert::{self, Cert};
-use crate::der;
 use crate::keys::PrivateKey;
 use crate::prelude::*;
 use crate::{Error, ErrorKind, Result, Rng, gost, time};
@@ -64,25 +68,87 @@ pub fn normalize(raw: &[u8]) -> Vec<u8> {
     }
 }
 
-/// Attributes in a SET's content: (type, values as encoded).
-pub fn attributes(set_content: &[u8]) -> Vec<(String, Vec<Vec<u8>>)> {
-    let mut out = Vec::new();
-    let mut rest = set_content;
-    while !rest.is_empty() {
-        let Ok((a, r)) = der::read(rest) else { break };
-        rest = r;
-        if let Ok(k) = a.items(der::SEQUENCE)
-            && k.len() >= 2
-            && let (Ok(oid), Ok(vals)) = (k[0].oid(), k[1].children())
-        {
-            out.push((oid, vals.iter().map(|v| v.raw.to_vec()).collect()));
-        }
-    }
-    out
+/// Each attribute: (type, values as encoded).
+fn attributes<'a>(list: impl IntoIterator<Item = &'a Attribute>) -> Vec<(String, Vec<Vec<u8>>)> {
+    list.into_iter()
+        .map(|a| {
+            let vals = a.values.iter().filter_map(|v| asn1::der(v).ok()).collect();
+            (a.oid.to_string(), vals)
+        })
+        .collect()
 }
 
-pub fn attribute(oid: &str, value: &[u8]) -> Vec<u8> {
-    der::seq(&[&der::oid(oid), &der::tlv(der::SET, value)])
+/// An attribute of type `oid` with the one value `value` (as encoded).
+pub fn attribute(oid: &str, value: &[u8]) -> Result<Vec<u8>> {
+    let values = SetOfVec::try_from(vec![any(value)?]).map_err(asn1::err)?;
+    asn1::der(&Attribute {
+        oid: asn1::oid(oid)?,
+        values,
+    })
+}
+
+/// SignedData (RFC 5652 5.1) for writing, each part as already encoded.
+#[derive(Sequence)]
+struct SdOut {
+    version: u8,
+    digest_algorithms: SetOfVec<Any>,
+    encap_content_info: EncapOut,
+    #[asn1(context_specific = "0", tag_mode = "IMPLICIT", optional = "true")]
+    certificates: Option<SetOfVec<Any>>,
+    crls: Option<Any>,
+    signer_infos: SetOfVec<Any>,
+}
+
+#[derive(Sequence)]
+struct EncapOut {
+    content_type: ObjectIdentifier,
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+    content: Option<OctetString>,
+}
+
+#[derive(Sequence)]
+struct ContentInfoOut {
+    content_type: ObjectIdentifier,
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT")]
+    content: SdOut,
+}
+
+/// SignerInfo (RFC 5652 5.3) for writing, each part as already encoded.
+#[derive(Sequence)]
+struct SiOut {
+    version: Any,
+    sid: Any,
+    digest_alg: Any,
+    signed_attrs: Option<Any>,
+    sig_alg: Any,
+    signature: OctetString,
+    #[asn1(context_specific = "1", tag_mode = "IMPLICIT", optional = "true")]
+    unsigned_attrs: Option<SetOfVec<Any>>,
+}
+
+/// IssuerAndSerialNumber (RFC 5652 10.2.4), the issuer's name as encoded.
+#[derive(Sequence)]
+struct IssuerSerial {
+    issuer: Any,
+    serial: Int,
+}
+
+/// ESSCertIDv2 (RFC 5035) with the default hash (SHA-256) and no issuer and serial, as
+/// NCALayer writes it.
+#[derive(Sequence)]
+struct EssCertIdV2 {
+    cert_hash: OctetString,
+}
+
+/// SigningCertificateV2 (RFC 5035) without policies.
+#[derive(Sequence)]
+struct SigningCertificateV2 {
+    certs: Vec<EssCertIdV2>,
+}
+
+fn set(items: &[Vec<u8>]) -> Result<SetOfVec<Any>> {
+    let v = items.iter().map(|i| any(i)).collect::<Result<Vec<_>>>()?;
+    SetOfVec::try_from(v).map_err(asn1::err)
 }
 
 impl SignedData {
@@ -117,47 +183,61 @@ impl SignedData {
     }
 
     /// DER-encoded ContentInfo.
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         let v3 = self.content_type != ID_DATA
-            || self
-                .signers
-                .iter()
-                .any(|s| s.sid.first() == Some(&der::ctx_prim(0)));
-        let mut encap = der::oid(&self.content_type);
-        if let Some(c) = &self.content {
-            encap.extend(der::tlv(der::ctx(0), &der::octets(c)));
-        }
-        let mut body = der::small_int(if v3 { 3 } else { 1 });
-        body.extend(der::set_of(self.digest_algs.clone()));
-        body.extend(der::tlv(der::SEQUENCE, &encap));
-        if !self.certs.is_empty() {
-            body.extend(der::sorted_set(der::ctx(0), &mut self.certs.clone()));
-        }
-        if let Some(c) = &self.crls {
-            body.extend(c);
-        }
-        body.extend(der::set_of(
-            self.signers.iter().map(SignerInfo::encode).collect(),
-        ));
-        der::seq(&[
-            &der::oid(SIGNED_DATA),
-            &der::tlv(der::ctx(0), &der::tlv(der::SEQUENCE, &body)),
-        ])
+            || self.signers.iter().any(|s| {
+                any(&s.sid).is_ok_and(|a| {
+                    a.tag()
+                        == Tag::ContextSpecific {
+                            constructed: false,
+                            number: ::der::TagNumber(0),
+                        }
+                })
+            });
+        let content = match &self.content {
+            Some(c) => Some(OctetString::new(c.as_slice()).map_err(asn1::err)?),
+            None => None,
+        };
+        let signers = self
+            .signers
+            .iter()
+            .map(SignerInfo::encode)
+            .collect::<Result<Vec<_>>>()?;
+        asn1::der(&ContentInfoOut {
+            content_type: asn1::oid(SIGNED_DATA)?,
+            content: SdOut {
+                version: if v3 { 3 } else { 1 },
+                digest_algorithms: set(&self.digest_algs)?,
+                encap_content_info: EncapOut {
+                    content_type: asn1::oid(&self.content_type)?,
+                    content,
+                },
+                certificates: match self.certs.is_empty() {
+                    true => None,
+                    false => Some(set(&self.certs)?),
+                },
+                crls: self.crls.as_deref().map(any).transpose()?,
+                signer_infos: set(&signers)?,
+            },
+        })
     }
 
     /// The items of the `crls` field (CertificateList, or `[1]` other revocation info such as
     /// an OCSP answer), each as encoded.
     pub fn crl_items(&self) -> Vec<Vec<u8>> {
-        self.crls
-            .as_deref()
-            .and_then(|c| der::parse(c).ok())
-            .and_then(|t| t.children().ok())
-            .map(|k| k.iter().map(|i| i.raw.to_vec()).collect())
+        let Some(c) = &self.crls else {
+            return vec![];
+        };
+        // [1] IMPLICIT SET OF: read as the SET it stands for
+        let mut set = c.clone();
+        set[0] = 0x31;
+        ber::<SetOfVec<Any>>(&set)
+            .map(|s| s.iter().filter_map(|i| asn1::der(i).ok()).collect())
             .unwrap_or_default()
     }
 
     /// Adds `items` to the `crls` field, each once.
-    pub fn add_crl_items(&mut self, items: &[Vec<u8>]) {
+    pub fn add_crl_items(&mut self, items: &[Vec<u8>]) -> Result<()> {
         let mut all = self.crl_items();
         let before = all.len();
         for i in items {
@@ -166,8 +246,9 @@ impl SignedData {
             }
         }
         if all.len() != before {
-            self.crls = Some(der::sorted_set(der::ctx(1), &mut all));
+            self.crls = Some(asn1::implicit(1, asn1::der(&set(&all)?)?));
         }
+        Ok(())
     }
 
     /// Adds certificates, each once.
@@ -205,31 +286,11 @@ mod rc {
     use ::cms::content_info::ContentInfo;
     use ::cms::signed_data::{SignedData as Sd, SignerInfo as Si};
     use ::der::asn1::OctetString;
-    use ::der::{Decode, Encode};
 
     use super::{SIGNED_DATA, SignedData, SignerInfo};
+    use crate::asn1::{ber, der, err as asn1, implicit};
     use crate::prelude::*;
     use crate::{Error, Result};
-
-    fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
-        T::from_der(b).or_else(|_| T::from_ber(b))
-    }
-
-    fn asn1(e: ::der::Error) -> Error {
-        Error::malformed(format!("malformed ASN.1: {e}"))
-    }
-
-    fn der<T: Encode>(t: &T) -> Result<Vec<u8>> {
-        t.to_der().map_err(asn1)
-    }
-
-    /// `content` as `[n] IMPLICIT`: the DER of a SET with its tag replaced.
-    fn implicit(n: u8, mut set: Vec<u8>) -> Vec<u8> {
-        if let Some(t) = set.first_mut() {
-            *t = 0xa0 | n;
-        }
-        set
-    }
 
     pub fn signed_data(data: &[u8]) -> Result<SignedData> {
         let ci: ContentInfo = ber(data).map_err(asn1)?;
@@ -296,33 +357,37 @@ mod rc {
 }
 
 impl SignerInfo {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut b = der::cat(&[&self.version, &self.sid, &self.digest_alg_raw]);
-        if let Some(a) = &self.signed_attrs {
-            b.extend(a);
-        }
-        b.extend(&self.sig_alg_raw);
-        b.extend(der::octets(&self.signature));
-        if !self.unsigned_attrs.is_empty() {
-            b.extend(der::sorted_set(
-                der::ctx(1),
-                &mut self.unsigned_attrs.clone(),
-            ));
-        }
-        der::tlv(der::SEQUENCE, &b)
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        asn1::der(&SiOut {
+            version: any(&self.version)?,
+            sid: any(&self.sid)?,
+            digest_alg: any(&self.digest_alg_raw)?,
+            signed_attrs: self.signed_attrs.as_deref().map(any).transpose()?,
+            sig_alg: any(&self.sig_alg_raw)?,
+            signature: OctetString::new(self.signature.as_slice()).map_err(asn1::err)?,
+            unsigned_attrs: match self.unsigned_attrs.is_empty() {
+                true => None,
+                false => Some(set(&self.unsigned_attrs)?),
+            },
+        })
     }
 
     pub fn signed(&self) -> Vec<(String, Vec<Vec<u8>>)> {
         match &self.signed_attrs {
-            Some(a) => der::parse(a)
-                .map(|t| attributes(t.content))
+            Some(_) => ber::<SetOfVec<Attribute>>(&self.signed_bytes(&[]))
+                .map(|s| attributes(s.iter()))
                 .unwrap_or_default(),
             None => vec![],
         }
     }
 
     pub fn unsigned(&self) -> Vec<(String, Vec<Vec<u8>>)> {
-        attributes(&self.unsigned_attrs.concat())
+        let list: Vec<Attribute> = self
+            .unsigned_attrs
+            .iter()
+            .filter_map(|a| ber(a).ok())
+            .collect();
+        attributes(&list)
     }
 
     /// First value of a signed attribute.
@@ -334,24 +399,28 @@ impl SignerInfo {
     }
 
     pub fn signing_time(&self) -> Option<i64> {
-        let v = self.signed_attr(ATTR_SIGNING_TIME)?;
-        der::parse(&v).ok()?.time().ok()
+        let v = any(&self.signed_attr(ATTR_SIGNING_TIME)?).ok()?;
+        time::parse_asn1(v.tag(), v.value()).ok()
     }
 
     /// Whether `c` is the certificate this signer names.
     pub fn identifies(&self, c: &Cert) -> bool {
-        let Ok(t) = der::parse(&self.sid) else {
+        let Ok(t) = any(&self.sid) else {
             return false;
         };
-        if t.tag == der::ctx_prim(0) {
-            return c.subject_key_id().is_some_and(|k| k == t.content);
+        if t.tag()
+            == (Tag::ContextSpecific {
+                constructed: false,
+                number: ::der::TagNumber(0),
+            })
+        {
+            return c.subject_key_id().is_some_and(|k| k == t.value());
         }
-        let Ok(k) = t.items(der::SEQUENCE) else {
+        let Ok(k) = ber::<IssuerSerial>(&self.sid) else {
             return false;
         };
-        k.len() == 2
-            && cert::names_equal(k[0].raw, &c.issuer)
-            && k[1].uint().is_ok_and(|s| s == c.serial.as_slice())
+        asn1::der(&k.issuer).is_ok_and(|i| cert::names_equal(&i, &c.issuer))
+            && asn1::strip_zeros(k.serial.as_bytes()) == c.serial.as_slice()
     }
 
     /// The bytes the signature covers: the signed attributes as a SET, or else the content.
@@ -359,7 +428,7 @@ impl SignerInfo {
         match &self.signed_attrs {
             Some(a) => {
                 let mut v = a.clone();
-                v[0] = der::SET;
+                v[0] = 0x31; // SET
                 alloc::borrow::Cow::Owned(v)
             }
             None => alloc::borrow::Cow::Borrowed(content),
@@ -368,14 +437,16 @@ impl SignerInfo {
 
     /// The fields an archive-time-stamp-v3 covers (ETSI EN 319 122-1 5.5.3): version, sid,
     /// digestAlgorithm, signedAttrs, signatureAlgorithm and signature, as encoded.
-    pub fn archive_fields(&self) -> Vec<u8> {
-        let mut b = der::cat(&[&self.version, &self.sid, &self.digest_alg_raw]);
+    pub fn archive_fields(&self) -> Result<Vec<u8>> {
+        let mut b = [&self.version[..], &self.sid, &self.digest_alg_raw].concat();
         if let Some(a) = &self.signed_attrs {
             b.extend(a);
         }
         b.extend(&self.sig_alg_raw);
-        b.extend(der::octets(&self.signature));
-        b
+        b.extend(asn1::der(
+            &OctetStringRef::new(&self.signature).map_err(asn1::err)?,
+        )?);
+        Ok(b)
     }
 
     /// Each unsigned attribute value with its attribute's type: (type as encoded, value as
@@ -383,15 +454,11 @@ impl SignerInfo {
     pub fn unsigned_values(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut out = Vec::new();
         for a in &self.unsigned_attrs {
-            let Ok(k) = der::parse(a).and_then(|t| t.items(der::SEQUENCE)) else {
-                continue;
-            };
-            if k.len() < 2 {
-                continue;
-            }
-            if let Ok(vals) = k[1].children() {
-                for v in vals.iter() {
-                    out.push((k[0].raw.to_vec(), v.raw.to_vec()));
+            let Ok(a) = ber::<Attribute>(a) else { continue };
+            let Ok(t) = asn1::der(&a.oid) else { continue };
+            for v in a.values.iter() {
+                if let Ok(v) = asn1::der(v) {
+                    out.push((t.clone(), v));
                 }
             }
         }
@@ -399,8 +466,9 @@ impl SignerInfo {
     }
 
     /// Adds an unsigned attribute (e.g. a signature timestamp).
-    pub fn add_unsigned(&mut self, oid: &str, value: &[u8]) {
-        self.unsigned_attrs.push(attribute(oid, value));
+    pub fn add_unsigned(&mut self, oid: &str, value: &[u8]) -> Result<()> {
+        self.unsigned_attrs.push(attribute(oid, value)?);
+        Ok(())
     }
 }
 
@@ -460,32 +528,39 @@ pub fn sign_digest(
     extra: &[Vec<u8>],
     rng: &mut dyn Rng,
 ) -> Result<SignedData> {
-    der::check_oid(content_type)?;
+    let ct = asn1::oid(content_type)?;
     let digest_oid = key.digest_oid();
     // CAdES-BES signed attributes, the same set NCALayer writes
-    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&gost::sha256(
-        &cert.der,
-    ))])])]);
+    let ess = asn1::der(&SigningCertificateV2 {
+        certs: vec![EssCertIdV2 {
+            cert_hash: OctetString::new(gost::sha256(&cert.der).to_vec()).map_err(asn1::err)?,
+        }],
+    })?;
     let mut attrs = vec![
-        attribute(ATTR_CONTENT_TYPE, &der::oid(content_type)),
-        attribute(ATTR_SIGNING_CERT_V2, &ess),
-        attribute(ATTR_MESSAGE_DIGEST, &der::octets(md)),
+        attribute(ATTR_CONTENT_TYPE, &asn1::der(&ct)?)?,
+        attribute(ATTR_SIGNING_CERT_V2, &ess)?,
+        attribute(
+            ATTR_MESSAGE_DIGEST,
+            &asn1::der(&OctetStringRef::new(md).map_err(asn1::err)?)?,
+        )?,
     ];
     if let Some(t) = signing_time {
-        attrs.push(attribute(ATTR_SIGNING_TIME, &time::encode(t)));
+        attrs.push(attribute(ATTR_SIGNING_TIME, &time::encode(t)?)?);
     }
     attrs.extend(extra.iter().cloned());
-    let signed_set = der::sorted_set(der::SET, &mut attrs);
+    let signed_set = asn1::der(&set(&attrs)?)?;
     let signature = key.sign(&signed_set, rng)?;
-    let mut signed_attrs = signed_set;
-    signed_attrs[0] = der::ctx(0);
+    let signed_attrs = asn1::implicit(0, signed_set);
     let si = SignerInfo {
-        version: der::small_int(1),
-        sid: der::seq(&[&cert.issuer, &der::uint(&cert.serial)]),
-        digest_alg_raw: der::alg_null(digest_oid),
+        version: asn1::der(&1u8)?,
+        sid: asn1::der(&IssuerSerial {
+            issuer: any(&cert.issuer)?,
+            serial: asn1::positive(&cert.serial)?,
+        })?,
+        digest_alg_raw: asn1::alg_null(digest_oid)?,
         digest_alg: digest_oid.to_string(),
         signed_attrs: Some(signed_attrs),
-        sig_alg_raw: der::alg_null(key.sig_oid()),
+        sig_alg_raw: asn1::alg_null(key.sig_oid())?,
         sig_alg: key.sig_oid().to_string(),
         signature,
         unsigned_attrs: vec![],
@@ -505,6 +580,11 @@ mod tests {
     use super::*;
 
     use crate::testing::{OsRng, now_ms};
+    use ::der::{Decode, Encode};
+
+    fn octets(b: &[u8]) -> Vec<u8> {
+        OctetStringRef::new(b).unwrap().to_der().unwrap()
+    }
 
     fn key() -> crate::p12::Key {
         crate::testing::key("alice_gost2015")
@@ -526,11 +606,11 @@ mod tests {
 
     /// The SignedData version (RFC 5652 5.1): 3 for other content than data, or a signer named
     /// by its key identifier; 1 otherwise.
-    fn version(d: &SignedData) -> i64 {
-        let enc = d.encode();
-        let ci = der::parse(&enc).unwrap().items(der::SEQUENCE).unwrap();
-        let sd = ci[1].inner().unwrap().items(der::SEQUENCE).unwrap();
-        sd[0].small_int().unwrap()
+    fn version(d: &SignedData) -> u8 {
+        use ::cms::content_info::ContentInfo;
+        let ci = ContentInfo::from_der(&d.encode().unwrap()).unwrap();
+        let sd: ::cms::signed_data::SignedData = ci.content.decode_as().unwrap();
+        sd.version as u8
     }
 
     #[test]
@@ -541,14 +621,13 @@ mod tests {
         assert_eq!(version(&signed(crate::tsp::TST_INFO)), 3);
         // named by subject key identifier
         let mut ski = d.clone();
-        ski.signers[0].sid = der::tlv(der::ctx_prim(0), &[1, 2, 3]);
+        ski.signers[0].sid = vec![0x80, 3, 1, 2, 3];
         assert_eq!(version(&ski), 3);
         let mut c = k.cert.clone();
         assert!(!ski.signers[0].identifies(&c));
-        c.extensions
-            .push(("2.5.29.14".into(), der::octets(&[1, 2, 3])));
+        c.extensions.push(("2.5.29.14".into(), octets(&[1, 2, 3])));
         assert!(ski.signers[0].identifies(&c));
-        c.extensions.last_mut().unwrap().1 = der::octets(&[1, 2, 4]);
+        c.extensions.last_mut().unwrap().1 = octets(&[1, 2, 4]);
         assert!(!ski.signers[0].identifies(&c));
         assert!(d.signers[0].identifies(&k.cert));
     }
@@ -558,45 +637,48 @@ mod tests {
         // without certificates: the four required fields
         let mut d = signed(ID_DATA);
         d.certs.clear();
-        let back = SignedData::parse_inner(&d.encode()).unwrap();
+        let back = SignedData::parse_inner(&d.encode().unwrap()).unwrap();
         assert_eq!(back.signers.len(), 1);
         assert_eq!(back.content.as_deref(), Some(&b"hello"[..]));
         // a signer without signed attributes: its five fields
         let mut d = signed(ID_DATA);
         d.signers[0].signed_attrs = None;
-        let back = SignedData::parse_inner(&d.encode()).unwrap();
+        let back = SignedData::parse_inner(&d.encode().unwrap()).unwrap();
         assert!(back.signers[0].signed_attrs.is_none());
         assert_eq!(back.signers[0].signature, d.signers[0].signature);
 
         // not SignedData
-        let data = der::seq(&[
-            &der::oid(ID_DATA),
-            &der::tlv(der::ctx(0), &der::octets(b"x")),
-        ]);
+        let data = ::cms::content_info::ContentInfo {
+            content_type: asn1::oid(ID_DATA).unwrap(),
+            content: any(&octets(b"x")).unwrap(),
+        }
+        .to_der()
+        .unwrap();
         let e = SignedData::parse_inner(&data).err().unwrap();
         assert_eq!(e.to_string(), "not SignedData");
-        let bare = der::seq(&[&der::oid(SIGNED_DATA)]);
+        let mut bare = vec![0x30, 11];
+        bare.extend(asn1::oid(SIGNED_DATA).unwrap().to_der().unwrap());
         assert!(SignedData::parse_inner(&bare).is_err());
 
         // unsigned attribute values, by type
         let mut d = signed(ID_DATA);
-        d.signers[0].add_unsigned("1.2.3", &der::null());
+        d.signers[0].add_unsigned("1.2.3", &[5, 0]).unwrap();
         let v = d.signers[0].unsigned_values();
-        assert_eq!(v, vec![(der::oid("1.2.3"), der::null())]);
+        assert_eq!(v, vec![(vec![6, 2, 0x2a, 3], vec![5, 0])]);
     }
 
     #[test]
     fn revocation_items_and_merging() {
         let mut d = signed(ID_DATA);
-        d.add_crl_items(&[]);
+        d.add_crl_items(&[]).unwrap();
         assert!(d.crls.is_none());
-        let (a, b) = (der::seq(&[&der::null()]), der::seq(&[&der::boolean(true)]));
-        d.add_crl_items(std::slice::from_ref(&a));
+        let (a, b) = (vec![0x30, 2, 5, 0], vec![0x30, 3, 1, 1, 0xff]);
+        d.add_crl_items(std::slice::from_ref(&a)).unwrap();
         assert_eq!(d.crl_items(), vec![a.clone()]);
         let before = d.crls.clone();
-        d.add_crl_items(std::slice::from_ref(&a));
+        d.add_crl_items(std::slice::from_ref(&a)).unwrap();
         assert_eq!(d.crls, before);
-        d.add_crl_items(&[b.clone(), a.clone()]);
+        d.add_crl_items(&[b.clone(), a.clone()]).unwrap();
         assert_eq!(d.crl_items().len(), 2);
         assert!(d.crl_items().contains(&b));
 
@@ -605,13 +687,13 @@ mod tests {
         assert_eq!(m.signers.len(), 2);
         assert_eq!(m.digest_algs.len(), 1);
         let mut other = signed(ID_DATA);
-        other.signers[0].digest_alg_raw = der::alg_null(crate::gost::H_SHA256);
+        other.signers[0].digest_alg_raw = asn1::alg_null(crate::gost::H_SHA256).unwrap();
         assert_eq!(d.merge(&other).digest_algs.len(), 2);
     }
 
     #[test]
     fn base64_and_pem() {
-        let der = signed(ID_DATA).encode();
+        let der = signed(ID_DATA).encode().unwrap();
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &der);
         assert_eq!(normalize(&der), der);
         let wrapped: String = b64

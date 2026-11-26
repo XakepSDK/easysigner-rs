@@ -141,7 +141,7 @@ pub fn ocsp_answer(
                 // (tests/fixtures/app) outlives
                 der::tlv(
                     der::ctx(1),
-                    &kzsigner::time::encode_generalized(REVOKED_AT.min(now - 86_400_000)),
+                    &kzsigner::time::encode_generalized(REVOKED_AT.min(now - 86_400_000)).unwrap(),
                 )
             } else {
                 vec![0x80, 0x00]
@@ -149,15 +149,15 @@ pub fn ocsp_answer(
             let single = der::seq(&[
                 &cert_id,
                 &status,
-                &kzsigner::time::encode_generalized(now),
+                &kzsigner::time::encode_generalized(now).unwrap(),
                 &der::tlv(
                     der::ctx(0),
-                    &kzsigner::time::encode_generalized(now + 3_600_000),
+                    &kzsigner::time::encode_generalized(now + 3_600_000).unwrap(),
                 ),
             ]);
             let mut parts: Vec<Vec<u8>> = vec![
                 der::tlv(der::ctx(1), &ca.cert.subject),
-                kzsigner::time::encode_generalized(now),
+                kzsigner::time::encode_generalized(now).unwrap(),
                 der::seq(&[&single]),
             ];
             // echo the nonce
@@ -202,7 +202,7 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
         &der::octets(&req.hash),
     ]));
     info.extend(der::small_int(serial));
-    info.extend(kzsigner::time::encode_generalized(kzsigner::time::now_ms()));
+    info.extend(kzsigner::time::encode_generalized(kzsigner::time::now_ms()).unwrap());
     if let Some(n) = &req.nonce {
         info.extend(der::uint(n));
     }
@@ -217,6 +217,7 @@ fn respond(body: &[u8], key: &kzsigner::p12::Key, serial: u64) -> Option<Vec<u8>
         &mut kzsigner::OsRng,
     )
     .ok()?
-    .encode();
+    .encode()
+    .ok()?;
     Some(der::seq(&[&der::seq(&[&der::small_int(0)]), &token]))
 }

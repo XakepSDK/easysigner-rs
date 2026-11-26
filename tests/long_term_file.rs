@@ -50,7 +50,7 @@ fn an_older_lta_file_verifies() {
     // without the kept data, the same file is no longer long-term
     let mut sd = kzsigner::cms::SignedData::parse(&data).unwrap();
     sd.crls = None;
-    let r = e.verify(&sd.encode(), None, None).unwrap();
+    let r = e.verify(&sd.encode().unwrap(), None, None).unwrap();
     let s = &r.signers[0];
     assert!(!r.valid && s.signature_ok, "{s:#?}");
     assert!(

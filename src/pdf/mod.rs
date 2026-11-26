@@ -187,7 +187,7 @@ pub fn sign_with(
             if let Some(url) = tsa_url {
                 sign::timestamp(&mut sd, url, key, env, &mut r)?;
             }
-            Ok(sd.encode())
+            Ok(sd.encode()?)
         },
     )?;
     r.cms = data;

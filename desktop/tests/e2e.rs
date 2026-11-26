@@ -782,7 +782,7 @@ fn long_term() {
     // taking out kept data an archive timestamp covers is caught
     let mut sd = cms::SignedData::parse(&std::fs::read(t.path("doc.txt.cms")).unwrap()).unwrap();
     sd.certs.retain(|c| *c != tsa_key.cert.der);
-    std::fs::write(t.path("cut.cms"), sd.encode()).unwrap();
+    std::fs::write(t.path("cut.cms"), sd.encode().unwrap()).unwrap();
     let v = kz(&t, &["verify", "cut.cms"]);
     t.check(
         "LTA: removed data is caught",

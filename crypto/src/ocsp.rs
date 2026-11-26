@@ -1,12 +1,13 @@
 //! OCSP (RFC 6960): requests about a certificate, and checking the answers (signature,
 //! responder, nonce, freshness). The caller sends the request and passes the answer back.
 
-use crate::cert::{self, Cert};
-use ::der::asn1::{Any, BitString};
+use ::der::asn1::{Any, BitString, OctetString, OctetStringRef};
 use ::der::{Decode, Encode, Sequence};
+use x509_cert::certificate::Raw;
 use x509_ocsp::{CertStatus as Status, OcspResponse, OcspResponseStatus, ResponseData};
 
-use crate::der;
+use crate::asn1::{self, err as asn1};
+use crate::cert::{self, Cert};
 use crate::prelude::*;
 use crate::text::{Text, Time, tr, trf};
 use crate::trust::TrustStore;
@@ -76,12 +77,14 @@ impl Answer {
 }
 
 /// An OCSPResponse (successful) around a BasicOCSPResponse.
-pub fn wrap_basic(basic: &[u8]) -> Vec<u8> {
-    let bytes = der::seq(&[&der::oid(BASIC), &der::octets(basic)]);
-    der::seq(&[
-        &der::tlv(der::ENUMERATED, &[0]),
-        &der::tlv(der::ctx(0), &bytes),
-    ])
+pub fn wrap_basic(basic: &[u8]) -> Result<Vec<u8>> {
+    asn1::der(&OcspResponse {
+        response_status: OcspResponseStatus::Successful,
+        response_bytes: Some(x509_ocsp::ResponseBytes {
+            response_type: asn1::oid(BASIC)?,
+            response: OctetString::new(basic).map_err(asn1)?,
+        }),
+    })
 }
 
 /// The BasicOCSPResponse inside a successful OCSPResponse.
@@ -106,23 +109,9 @@ struct Basic {
     certs: Option<Vec<Any>>,
 }
 
-fn asn1(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
-}
-
 fn ms(t: &x509_ocsp::OcspGeneralizedTime) -> Result<i64> {
     i64::try_from(t.0.to_unix_duration().as_millis())
         .map_err(|_| Error::malformed("OCSP time out of range"))
-}
-
-/// An INTEGER's content without leading zero bytes (one zero for zero), as [`Cert::serial`].
-fn strip_zeros(mut b: &[u8]) -> &[u8] {
-    while let [0, rest @ ..] = b
-        && !rest.is_empty()
-    {
-        b = rest;
-    }
-    b
 }
 
 /// The hash NCALayer uses in OCSP certificate IDs for this issuer's key type.
@@ -150,22 +139,45 @@ fn issuer_hashes(issuer: &Cert, alg: &str) -> Result<(Vec<u8>, Vec<u8>)> {
 pub fn request(c: &Cert, issuer: &Cert, nonce: &[u8]) -> Result<Vec<u8>> {
     let alg = cert_id_hash(issuer);
     let (name_hash, key_hash) = issuer_hashes(issuer, alg)?;
-    let cert_id = der::seq(&[
-        &der::alg_null(alg),
-        &der::octets(&name_hash),
-        &der::octets(&key_hash),
-        &der::uint(&c.serial),
-    ]);
+    let req_cert = cert_id(alg, name_hash, key_hash, &c.serial)?;
     // RFC 8954: the extension value is the DER of an OCTET STRING holding the nonce
-    let nonce_ext = der::seq(&[&der::seq(&[
-        &der::oid(NONCE),
-        &der::octets(&der::octets(nonce)),
-    ])]);
-    let tbs = der::seq(&[
-        &der::seq(&[&der::seq(&[&cert_id])]),
-        &der::tlv(der::ctx(2), &nonce_ext),
-    ]);
-    Ok(der::seq(&[&tbs]))
+    let nonce = x509_cert::ext::Extension {
+        extn_id: asn1::oid(NONCE)?,
+        critical: false,
+        extn_value: OctetString::new(asn1::der(&OctetStringRef::new(nonce).map_err(asn1)?)?)
+            .map_err(asn1)?,
+    };
+    asn1::der(&x509_ocsp::OcspRequest::<Raw> {
+        tbs_request: x509_ocsp::TbsRequest {
+            version: x509_ocsp::Version::V1,
+            requestor_name: None,
+            request_list: vec![x509_ocsp::Request {
+                req_cert,
+                single_request_extensions: None,
+            }],
+            request_extensions: Some(vec![nonce]),
+        },
+        optional_signature: None,
+    })
+}
+
+/// A CertID (RFC 6960 4.1.1) for the certificate with serial number `serial`.
+fn cert_id(
+    alg: &str,
+    name_hash: Vec<u8>,
+    key_hash: Vec<u8>,
+    serial: &[u8],
+) -> Result<x509_ocsp::CertId<Raw>> {
+    Ok(x509_ocsp::CertId {
+        hash_algorithm: spki::AlgorithmIdentifierOwned {
+            oid: asn1::oid(alg)?,
+            parameters: Some(Any::null()),
+        },
+        issuer_name_hash: OctetString::new(name_hash).map_err(asn1)?,
+        issuer_key_hash: OctetString::new(key_hash).map_err(asn1)?,
+        // through DER, as [`Raw`] reads long serial numbers that it would not make
+        serial_number: Decode::from_der(&asn1::der(&asn1::positive(serial)?)?).map_err(asn1)?,
+    })
 }
 
 /// Checks the server's answer to a [`request`] with `nonce`, received at `now` (milliseconds
@@ -260,7 +272,7 @@ fn evaluate(
     }
     for s in &rd.responses {
         let id = &s.cert_id;
-        if strip_zeros(id.serial_number.as_bytes()) != c.serial.as_slice() {
+        if asn1::strip_zeros(id.serial_number.as_bytes()) != c.serial.as_slice() {
             continue;
         }
         let Ok((nh, kh)) = issuer_hashes(issuer, &id.hash_algorithm.oid.to_string()) else {
@@ -406,32 +418,72 @@ pub mod testkit {
     /// A certificate for `subject`'s key issued by `by`, with the OCSP signing purpose when
     /// `ocsp`.
     pub fn issue(by: &crate::p12::Key, subject: &Cert, ocsp: bool) -> Cert {
-        let alg = der::alg_null(by.private_key.sig_oid());
-        let validity = der::seq(&[
-            &time::encode_generalized(by.cert.not_before),
-            &time::encode_generalized(by.cert.not_after),
-        ]);
-        let mut tbs = vec![
-            der::tlv(der::ctx(0), &der::small_int(2)),
-            der::small_int(99),
-            alg.clone(),
-            by.cert.subject.clone(),
-            validity,
-            der::seq(&[&der::set_of(vec![der::seq(&[
-                &der::oid("2.5.4.3"),
-                &der::tlv(0x0c, b"TEST OCSP RESPONDER"),
-            ])])]),
-            subject.spki.clone(),
-        ];
-        if ocsp {
-            let eku = der::seq(&[&der::oid(cert::EKU_OCSP_SIGNING)]);
-            let ext = der::seq(&[&der::oid("2.5.29.37"), &der::octets(&eku)]);
-            tbs.push(der::tlv(der::ctx(3), &der::seq(&[&ext])));
+        use ::der::asn1::{GeneralizedTime, ObjectIdentifier};
+        use core::str::FromStr;
+        use x509_cert::time::{Time, Validity};
+        let alg = spki::AlgorithmIdentifierOwned {
+            oid: asn1::oid(by.private_key.sig_oid()).unwrap(),
+            parameters: Some(Any::null()),
+        };
+        let time = |ms: i64| {
+            Time::GeneralTime(
+                GeneralizedTime::from_unix_duration(core::time::Duration::from_millis(
+                    u64::try_from(ms).unwrap(),
+                ))
+                .unwrap(),
+            )
+        };
+        let extensions = ocsp.then(|| {
+            let eku = x509_cert::ext::pkix::ExtendedKeyUsage(vec![
+                ObjectIdentifier::new(cert::EKU_OCSP_SIGNING).unwrap(),
+            ]);
+            vec![x509_cert::ext::Extension {
+                extn_id: ObjectIdentifier::new("2.5.29.37").unwrap(),
+                critical: false,
+                extn_value: OctetString::new(eku.to_der().unwrap()).unwrap(),
+            }]
+        });
+        let tbs = Tbs {
+            version: 2,
+            serial_number: 99,
+            signature: alg.clone(),
+            issuer: asn1::any(&by.cert.subject).unwrap(),
+            validity: Validity::<Raw>::new(time(by.cert.not_before), time(by.cert.not_after)),
+            subject: x509_cert::name::Name::from_str("CN=TEST OCSP RESPONDER").unwrap(),
+            subject_public_key_info: asn1::any(&subject.spki).unwrap(),
+            extensions,
         }
-        let refs: Vec<&[u8]> = tbs.iter().map(Vec::as_slice).collect();
-        let tbs = der::seq(&refs);
+        .to_der()
+        .unwrap();
         let sig = by.private_key.sign(&tbs, &mut Os).unwrap();
-        Cert::parse(&der::seq(&[&tbs, &alg, &der::bit_string(&sig)])).unwrap()
+        let c = Certificate {
+            tbs_certificate: asn1::any(&tbs).unwrap(),
+            signature_algorithm: alg,
+            signature: BitString::from_bytes(&sig).unwrap(),
+        };
+        Cert::parse(&c.to_der().unwrap()).unwrap()
+    }
+
+    /// TBSCertificate (RFC 5280 4.1), v3.
+    #[derive(Sequence)]
+    struct Tbs {
+        #[asn1(context_specific = "0", tag_mode = "EXPLICIT")]
+        version: u8,
+        serial_number: u8,
+        signature: spki::AlgorithmIdentifierOwned,
+        issuer: Any,
+        validity: x509_cert::time::Validity<Raw>,
+        subject: x509_cert::name::Name,
+        subject_public_key_info: Any,
+        #[asn1(context_specific = "3", tag_mode = "EXPLICIT", optional = "true")]
+        extensions: Option<Vec<x509_cert::ext::Extension>>,
+    }
+
+    #[derive(Sequence)]
+    struct Certificate {
+        tbs_certificate: Any,
+        signature_algorithm: spki::AlgorithmIdentifierOwned,
+        signature: BitString,
     }
 
     /// An answer about `c`.
@@ -440,57 +492,83 @@ pub mod testkit {
         pub certs: Vec<Cert>,
         pub issuer: &'a Cert,
         pub serial: Vec<u8>,
+        /// CertStatus, as encoded ([`GOOD`], or made to order).
         pub status: Vec<u8>,
         pub this_update: i64,
         pub next_update: Option<i64>,
+        /// The nonce extension's value (octets as sent, or as some servers echo them).
         pub nonce: Option<Vec<u8>>,
+        /// Writes the default version out, as some responders do.
         pub version: bool,
+    }
+
+    /// SingleResponse with the status as encoded.
+    #[derive(Sequence)]
+    struct Single {
+        cert_id: x509_ocsp::CertId<Raw>,
+        status: Any,
+        this_update: Any,
+        #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+        next_update: Option<Any>,
+    }
+
+    /// ResponseData that may write the default version out, and names the responder by its
+    /// name (as encoded).
+    #[derive(Sequence)]
+    struct Data {
+        #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+        version: Option<u8>,
+        #[asn1(context_specific = "1", tag_mode = "EXPLICIT")]
+        responder: Any,
+        produced_at: Any,
+        responses: Vec<Single>,
+        #[asn1(context_specific = "1", tag_mode = "EXPLICIT", optional = "true")]
+        extensions: Option<Vec<x509_cert::ext::Extension>>,
     }
 
     impl Reply<'_> {
         pub fn encode(&self) -> Vec<u8> {
             let alg = gost::H_SHA256;
             let (nh, kh) = issuer_hashes(self.issuer, alg).unwrap();
-            let cert_id = der::seq(&[
-                &der::alg_null(alg),
-                &der::octets(&nh),
-                &der::octets(&kh),
-                &der::uint(&self.serial),
-            ]);
-            let mut single = vec![
-                cert_id,
-                self.status.clone(),
-                time::encode_generalized(self.this_update),
-            ];
-            if let Some(n) = self.next_update {
-                single.push(der::tlv(der::ctx(0), &time::encode_generalized(n)));
+            let gt = |ms: i64| asn1::any(&time::encode_generalized(ms).unwrap()).unwrap();
+            let single = Single {
+                cert_id: cert_id(alg, nh, kh, &self.serial).unwrap(),
+                status: asn1::any(&self.status).unwrap(),
+                this_update: gt(self.this_update),
+                next_update: self.next_update.map(gt),
+            };
+            let extensions = self.nonce.as_ref().map(|n| {
+                vec![x509_cert::ext::Extension {
+                    extn_id: asn1::oid(NONCE).unwrap(),
+                    critical: false,
+                    extn_value: OctetString::new(n.clone()).unwrap(),
+                }]
+            });
+            let rd = Data {
+                version: self.version.then_some(0),
+                responder: asn1::any(&self.signer.cert.subject).unwrap(),
+                produced_at: gt(self.this_update),
+                responses: vec![single],
+                extensions,
             }
-            let refs: Vec<&[u8]> = single.iter().map(Vec::as_slice).collect();
-            let mut rd = vec![];
-            if self.version {
-                rd.push(der::tlv(der::ctx(0), &der::small_int(0)));
-            }
-            rd.push(der::tlv(der::ctx(1), &self.signer.cert.subject));
-            rd.push(time::encode_generalized(self.this_update));
-            rd.push(der::seq(&[&der::seq(&refs)]));
-            if let Some(n) = &self.nonce {
-                let ext = der::seq(&[&der::oid(NONCE), &der::octets(n)]);
-                rd.push(der::tlv(der::ctx(1), &der::seq(&[&ext])));
-            }
-            let refs: Vec<&[u8]> = rd.iter().map(Vec::as_slice).collect();
-            let rd = der::seq(&refs);
+            .to_der()
+            .unwrap();
             let sig = self.signer.private_key.sign(&rd, &mut Os).unwrap();
-            let mut basic = vec![
-                rd,
-                der::alg_null(self.signer.private_key.sig_oid()),
-                der::bit_string(&sig),
-            ];
-            if !self.certs.is_empty() {
-                let c: Vec<&[u8]> = self.certs.iter().map(|c| c.der.as_slice()).collect();
-                basic.push(der::tlv(der::ctx(0), &der::seq(&c)));
-            }
-            let refs: Vec<&[u8]> = basic.iter().map(Vec::as_slice).collect();
-            wrap_basic(&der::seq(&refs))
+            let basic = Basic {
+                tbs_response_data: asn1::any(&rd).unwrap(),
+                signature_algorithm: spki::AlgorithmIdentifierOwned {
+                    oid: asn1::oid(self.signer.private_key.sig_oid()).unwrap(),
+                    parameters: Some(Any::null()),
+                },
+                signature: BitString::from_bytes(&sig).unwrap(),
+                certs: (!self.certs.is_empty()).then(|| {
+                    self.certs
+                        .iter()
+                        .map(|c| asn1::any(&c.der).unwrap())
+                        .collect()
+                }),
+            };
+            wrap_basic(&basic.to_der().unwrap()).unwrap()
         }
     }
 
@@ -504,26 +582,23 @@ mod tests {
     use crate::testing::now_ms;
     use crate::time;
 
+    fn octets(b: &[u8]) -> Vec<u8> {
+        OctetStringRef::new(b).unwrap().to_der().unwrap()
+    }
+
     /// Short or empty pieces in a stored answer are errors, not crashes.
     #[test]
     fn broken_stored_answers_are_errors() {
         let trust = TrustStore::new(vec![]);
         let (_, d) = crate::trust::BUNDLED_CA[4];
         let ca = Cert::parse_any(d).unwrap();
-        let empty = der::seq(&[]);
-        let short = der::seq(&[&der::seq(&[]), &der::seq(&[])]);
-        for basic in [&empty, &short] {
-            assert!(read_embedded(&wrap_basic(basic), &ca, &ca, &trust).is_err());
+        let empty: &[u8] = &[0x30, 0];
+        let short: &[u8] = &[0x30, 4, 0x30, 0, 0x30, 0];
+        for basic in [empty, short] {
+            assert!(read_embedded(&wrap_basic(basic).unwrap(), &ca, &ca, &trust).is_err());
         }
-        assert!(
-            read_embedded(
-                &der::seq(&[&der::tlv(der::ENUMERATED, &[0])]),
-                &ca,
-                &ca,
-                &trust
-            )
-            .is_err()
-        );
+        // successful (ENUMERATED 0) with no response bytes
+        assert!(read_embedded(&[0x30, 3, 0x0a, 1, 0], &ca, &ca, &trust).is_err());
     }
 
     #[test]
@@ -561,7 +636,13 @@ mod tests {
         });
         assert!(a.good, "{}", a.status);
 
-        let revoked = der::tlv(der::ctx(1), &time::encode_generalized(now - 86_400_000));
+        // [1] RevokedInfo { revocationTime }
+        let revoked = asn1::implicit(1, {
+            let t = time::encode_generalized(now - 86_400_000).unwrap();
+            let mut seq = vec![0x30, t.len() as u8];
+            seq.extend(t);
+            seq
+        });
         let a = stored(&Reply {
             status: revoked,
             ..reply()
@@ -595,7 +676,8 @@ mod tests {
             "{}",
             a.status
         );
-        let r = der::seq(&[&der::tlv(der::ENUMERATED, &[3])]);
+        // tryLater (3), with no response bytes
+        let r = [0x30, 3, 0x0a, 1, 3];
         let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
         assert!(
             !a.good && a.status.to_string().contains("status 3"),
@@ -711,7 +793,7 @@ mod tests {
             };
             read_fresh(&r.encode(), &carol, &ca.cert, &sent, &trust, now).unwrap()
         };
-        let nested = der::octets(&sent);
+        let nested = octets(&sent);
         for (name, a, ok) in [
             (
                 "echoed",
@@ -725,7 +807,7 @@ mod tests {
             ),
             (
                 "other nonce",
-                fresh(now, None, Some(der::octets(&[8; 16]))),
+                fresh(now, None, Some(octets(&[8; 16]))),
                 false,
             ),
             (
@@ -768,7 +850,7 @@ mod tests {
                 );
             }
         }
-        let a = fresh(now, None, Some(der::octets(&[8; 16])));
+        let a = fresh(now, None, Some(octets(&[8; 16])));
         assert!(
             a.status.to_string().contains("nonce mismatch"),
             "{}",

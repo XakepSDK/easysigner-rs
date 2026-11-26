@@ -7,7 +7,6 @@
 //! The caller downloads the lists from the addresses [`urls`] and [`delta_urls`] give.
 
 use crate::cert::{self, Cert};
-use crate::der::{self, Tlv};
 pub use crate::ocsp::CertStatus;
 use crate::prelude::*;
 use crate::text::{Text, Time, tr, trf};
@@ -200,11 +199,6 @@ fn strip_zeros(mut b: &[u8]) -> &[u8] {
     b
 }
 
-/// CRLReason keyCompromise (1), cACompromise (2) or aACompromise (10).
-pub fn is_compromise(reason: &der::Tlv) -> bool {
-    reason.tag == der::ENUMERATED && matches!(reason.content, [1] | [2] | [10])
-}
-
 const REASON_CODE: &str = "2.5.29.21";
 const INVALIDITY_DATE: &str = "2.5.29.24";
 
@@ -228,32 +222,28 @@ fn ext_uris(c: &Cert, oid: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The http addresses in a CRL distribution points (or freshest CRL) extension value (DER).
+/// The http addresses in a CRL distribution points (or freshest CRL) extension value (DER):
+/// the uniformResourceIdentifier full names of its distribution points.
 pub fn uris_in(ext: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Ok(t) = der::parse(ext) {
-        collect_uris(&t, &mut out, 0);
-    }
-    out.retain(|u| u.starts_with("http://"));
-    out
-}
-
-/// uniformResourceIdentifier ([6] IA5String) anywhere inside `t`.
-fn collect_uris(t: &Tlv, out: &mut Vec<String>, depth: usize) {
-    if depth > 8 {
-        return;
-    }
-    if t.tag == der::ctx_prim(6) {
-        if let Ok(s) = core::str::from_utf8(t.content) {
-            out.push(s.to_string());
-        }
-    } else if t.constructed()
-        && let Ok(k) = t.children()
-    {
-        for c in k.iter() {
-            collect_uris(c, out, depth + 1);
-        }
-    }
+    use ::der::Decode;
+    use x509_cert::ext::pkix::name::{DistributionPointName, GeneralName};
+    let Ok(dps) = x509_cert::ext::pkix::CrlDistributionPoints::from_der(ext) else {
+        return vec![];
+    };
+    dps.0
+        .iter()
+        .filter_map(|dp| match &dp.distribution_point {
+            Some(DistributionPointName::FullName(names)) => Some(names),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|n| match n {
+            GeneralName::UniformResourceIdentifier(u) => Some(u.as_str()),
+            _ => None,
+        })
+        .filter(|u| u.starts_with("http://"))
+        .map(String::from)
+        .collect()
 }
 
 /// What a full list and, when one is due, a delta list say about `c`: (good, status for
@@ -318,22 +308,25 @@ mod tests {
     use super::*;
     use crate::time;
 
-    fn ext(oid: &str, value: &[u8]) -> Vec<u8> {
-        der::seq(&[&der::oid(oid), &der::tlv(der::OCTET_STRING, value)])
+    fn ext(oid: &str, value: &[u8]) -> x509_cert::ext::Extension {
+        x509_cert::ext::Extension {
+            extn_id: crate::asn1::oid(oid).unwrap(),
+            critical: false,
+            extn_value: ::der::asn1::OctetString::new(value).unwrap(),
+        }
     }
 
     /// A list entry's reason and invalidity date decide from when its key is not trusted.
     #[test]
     fn untrusted_from_entry_extensions() {
         let when = 1_800_000_000_000;
-        let from = |exts: &[&[u8]]| {
-            use ::der::Decode;
-            let e = der::seq(exts);
-            let exts = Vec::<x509_cert::ext::Extension>::from_der(&e).unwrap();
+        let from = |exts: &[&x509_cert::ext::Extension]| {
+            let exts: Vec<_> = exts.iter().map(|&e| e.clone()).collect();
             untrusted_from(&exts, when).unwrap()
         };
-        let reason = |r: u8| ext(REASON_CODE, &der::tlv(der::ENUMERATED, &[r]));
-        let invalid = |t: i64| ext(INVALIDITY_DATE, &time::encode_generalized(t));
+        // ENUMERATED r
+        let reason = |r: u8| ext(REASON_CODE, &[0x0a, 1, r]);
+        let invalid = |t: i64| ext(INVALIDITY_DATE, &time::encode_generalized(t).unwrap());
         assert_eq!(from(&[]), when);
         assert_eq!(from(&[&reason(4)]), when, "superseded");
         for r in [1, 2, 10] {
@@ -342,6 +335,5 @@ mod tests {
         assert_eq!(from(&[&invalid(when - 5000)]), when - 5000);
         assert_eq!(from(&[&invalid(when + 5000)]), when, "never later");
         assert_eq!(from(&[&invalid(when - 5000), &reason(1)]), i64::MIN);
-        assert!(!is_compromise(&der::parse(&der::small_int(1)).unwrap()));
     }
 }

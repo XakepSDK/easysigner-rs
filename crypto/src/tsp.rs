@@ -3,13 +3,13 @@
 
 use crate::cert::{self, Cert};
 use crate::cms::{ATTR_SIGNING_CERT, ATTR_SIGNING_CERT_V2, SignedData};
-use ::der::asn1::{Int, ObjectIdentifier, OctetString};
+use ::der::asn1::OctetString;
 use ::der::{Decode, Encode};
 use spki::AlgorithmIdentifier;
 use x509_tsp::cmpv2::status::PkiStatus;
 use x509_tsp::{MessageImprint, TimeStampReq, TimeStampResp, TspVersion};
 
-use crate::der;
+use crate::asn1::{err as asn1, oid, positive, strip_zeros};
 use crate::gost::{self, Scheme};
 use crate::prelude::*;
 use crate::text::trf;
@@ -46,38 +46,6 @@ impl TstInfo {
     }
 }
 
-fn asn1(e: ::der::Error) -> Error {
-    Error::malformed(format!("malformed ASN.1: {e}"))
-}
-
-/// An INTEGER's content without leading zero bytes (one zero for zero).
-fn strip_zeros(mut b: &[u8]) -> &[u8] {
-    while let [0, rest @ ..] = b
-        && !rest.is_empty()
-    {
-        b = rest;
-    }
-    b
-}
-
-/// An OID that [`der::check_oid`] has accepted.
-fn oid(s: &str) -> Result<ObjectIdentifier> {
-    der::check_oid(s)?;
-    ObjectIdentifier::new(s)
-        .map_err(|_| Error::malformed(trf("'{}' is not an object identifier", &[&s])))
-}
-
-/// A positive INTEGER from unsigned big-endian bytes.
-fn positive(n: &[u8]) -> Result<Int> {
-    let n = strip_zeros(n);
-    let mut b = Vec::with_capacity(n.len() + 1);
-    if n.first().is_none_or(|&x| x & 0x80 != 0) {
-        b.push(0);
-    }
-    b.extend(n);
-    Int::new(&b).map_err(asn1)
-}
-
 /// A timestamp request (TimeStampReq).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
@@ -94,8 +62,8 @@ impl Request {
     /// nonce is a positive INTEGER with no leading zero byte, and reads back exactly as sent.
     /// Fails when `hash_oid` or `policy` is not an object identifier.
     pub fn new(hash_oid: &str, hash: &[u8], policy: &str, nonce: &[u8]) -> Result<Request> {
-        der::check_oid(hash_oid)?;
-        der::check_oid(policy)?;
+        oid(hash_oid)?;
+        oid(policy)?;
         let mut nonce = nonce.to_vec();
         if let Some(b) = nonce.first_mut() {
             *b = (*b & 0x7f) | 0x40;
@@ -372,7 +340,7 @@ mod tests {
         // a token without the TSA's certificate, when the request asked for it
         let mut sd = SignedData::parse_inner(token).unwrap();
         sd.certs.clear();
-        let bare = sd.encode();
+        let bare = sd.encode().unwrap();
         let e = validate(&req(), &bare).unwrap_err();
         assert!(e.to_string().contains("Certificate requested"), "{e}");
         let mut r = req();
@@ -406,16 +374,32 @@ mod tests {
 
         // granted (0) and granted with modifications (1) give the token; anything else is a
         // refusal, even with a token
-        let token = der::seq(&[
-            &der::oid(crate::cms::SIGNED_DATA),
-            &der::tlv(der::ctx(0), &der::null()),
-        ]);
-        for (code, ok) in [(0, true), (1, true), (2, false), (5, false)] {
-            let resp = der::seq(&[&der::seq(&[&der::small_int(code)]), &token]);
-            assert_eq!(read_response(&resp).is_ok(), ok, "status {code}");
+        let token = ::cms::content_info::ContentInfo {
+            content_type: oid(crate::cms::SIGNED_DATA).unwrap(),
+            content: ::der::asn1::Any::null(),
+        };
+        let resp = |status, token: Option<_>| {
+            TimeStampResp {
+                status: x509_tsp::cmpv2::status::PkiStatusInfo {
+                    status,
+                    status_string: None,
+                    fail_info: None,
+                },
+                time_stamp_token: token,
+            }
+            .to_der()
+            .unwrap()
+        };
+        for (code, ok) in [
+            (PkiStatus::Accepted, true),
+            (PkiStatus::GrantedWithMods, true),
+            (PkiStatus::Rejection, false),
+            (PkiStatus::RevocationNotification, false),
+        ] {
+            let r = resp(code, Some(token.clone()));
+            assert_eq!(read_response(&r).is_ok(), ok, "status {code:?}");
         }
-        let resp = der::seq(&[&der::seq(&[&der::small_int(0)])]);
-        assert!(read_response(&resp).is_err());
+        assert!(read_response(&resp(PkiStatus::Accepted, None)).is_err());
 
         assert_eq!(
             hash_and_policy_for(gost::KEY_GOST2004),
@@ -433,19 +417,37 @@ mod tests {
 
     #[test]
     fn tst_info_fields() {
+        /// TSTInfo's required fields, and a nonce.
+        #[derive(::der::Sequence)]
+        struct Body {
+            version: u8,
+            policy: ::der::asn1::ObjectIdentifier,
+            imprint: MessageImprint,
+            serial: u8,
+            gen_time: ::der::asn1::Any,
+            #[asn1(optional = "true")]
+            nonce: Option<::der::asn1::Int>,
+        }
         let body = |nonce: bool| {
-            let mut b = der::small_int(1);
-            b.extend(der::oid("1.2.398.3.3.2.6.2"));
-            b.extend(der::seq(&[
-                &der::seq(&[&der::oid(gost::H_SHA256)]),
-                &der::octets(&[9; 32]),
-            ]));
-            b.extend(der::small_int(77));
-            b.extend(crate::time::encode_generalized(1_700_000_000_000));
-            if nonce {
-                b.extend(der::uint(&[0x42, 1]));
+            Body {
+                version: 1,
+                policy: oid("1.2.398.3.3.2.6.2").unwrap(),
+                imprint: MessageImprint {
+                    hash_algorithm: AlgorithmIdentifier {
+                        oid: oid(gost::H_SHA256).unwrap(),
+                        parameters: None,
+                    },
+                    hashed_message: OctetString::new([9; 32]).unwrap(),
+                },
+                serial: 77,
+                gen_time: crate::asn1::any(
+                    &crate::time::encode_generalized(1_700_000_000_000).unwrap(),
+                )
+                .unwrap(),
+                nonce: nonce.then(|| positive(&[0x42, 1]).unwrap()),
             }
-            der::tlv(der::SEQUENCE, &b)
+            .to_der()
+            .unwrap()
         };
         // the five required fields are enough
         let t = TstInfo::parse(&body(false)).unwrap();
@@ -458,7 +460,8 @@ mod tests {
             TstInfo::parse(&body(true)).unwrap().nonce,
             Some(vec![0x42, 1])
         );
-        let short = der::seq(&[&der::small_int(1), &der::oid("1.2.3")]);
+        // SEQUENCE { 1, 1.2.3 }
+        let short = [0x30, 7, 2, 1, 1, 6, 2, 0x2a, 3];
         assert!(TstInfo::parse(&short).is_err());
     }
 
@@ -479,7 +482,7 @@ mod tests {
         // the TSA's signature broken
         let mut sd = SignedData::parse_inner(token).unwrap();
         sd.signers[0].signature[5] ^= 1;
-        let c = check_token(&live(case, "data.bin"), &sd.encode(), &trust).unwrap();
+        let c = check_token(&live(case, "data.bin"), &sd.encode().unwrap(), &trust).unwrap();
         assert!(c.imprint_ok && !c.signature_ok && !c.ok());
         // a TSA nobody trusts
         let c = check_token(&live(case, "data.bin"), token, &TrustStore::empty()).unwrap();
@@ -508,7 +511,7 @@ mod tests {
                 "{bad}"
             );
         }
-        let mut r = Request::new(gost::H_SHA256, &[1; 32], "2.999.1", &[1]).unwrap();
+        let mut r = Request::new(gost::H_SHA256, &[1; 32], "1.2.3", &[1]).unwrap();
         r.policy = Some("nonsense".into());
         assert!(r.encode().is_err());
     }

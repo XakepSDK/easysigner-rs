@@ -2,6 +2,8 @@
 //! including the looser BER forms (no seconds, fractions, offsets) that DER-only parsers
 //! refuse, and ISO-8601 for messages. The calendar is the proleptic Gregorian one.
 
+use ::der::Tag;
+
 use crate::prelude::*;
 use crate::{Error, ErrorKind, Result};
 
@@ -59,7 +61,7 @@ pub fn fields(ms: i64) -> (i64, i64, i64, i64, i64, i64, i64) {
 }
 
 /// UTCTime (`YYMMDDHHMM[SS]Z`) or GeneralizedTime (`YYYYMMDDHHMMSS[.fff]Z`, or with an offset).
-pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
+pub fn parse_asn1(tag: Tag, content: &[u8]) -> Result<i64> {
     let s = core::str::from_utf8(content).map_err(|_| bad_time())?;
     let num = |a: usize, b: usize| -> Result<i64> {
         s.get(a..b)
@@ -68,11 +70,11 @@ pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
             .ok_or_else(bad_time)
     };
     let (y, rest) = match tag {
-        crate::der::UTC_TIME => {
+        Tag::UtcTime => {
             let yy = num(0, 2)?;
             (if yy < 50 { 2000 + yy } else { 1900 + yy }, 2)
         }
-        crate::der::GENERALIZED_TIME => (num(0, 4)?, 4),
+        Tag::GeneralizedTime => (num(0, 4)?, 4),
         _ => return Err(bad_time()),
     };
     let mo = num(rest, rest + 2)?;
@@ -122,20 +124,33 @@ pub fn parse_asn1(tag: u8, content: &[u8]) -> Result<i64> {
 }
 
 /// The DER time NCALayer and Bouncy Castle write: UTCTime for 1950..2049, else GeneralizedTime.
-pub fn encode(ms: i64) -> Vec<u8> {
+pub fn encode(ms: i64) -> Result<Vec<u8>> {
     let (y, m, d, h, mi, s, _) = fields(ms);
     if (1950..2050).contains(&y) {
         let t = format!("{:02}{m:02}{d:02}{h:02}{mi:02}{s:02}Z", y % 100);
-        crate::der::tlv(crate::der::UTC_TIME, t.as_bytes())
+        tlv(Tag::UtcTime, &t)
     } else {
         encode_generalized(ms)
     }
 }
 
-pub fn encode_generalized(ms: i64) -> Vec<u8> {
+/// GeneralizedTime in whole seconds (`YYYYMMDDHHMMSSZ`).
+pub fn encode_generalized(ms: i64) -> Result<Vec<u8>> {
     let (y, m, d, h, mi, s, _) = fields(ms);
-    let t = format!("{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z");
-    crate::der::tlv(crate::der::GENERALIZED_TIME, t.as_bytes())
+    if !(0..10_000).contains(&y) {
+        return Err(bad_time());
+    }
+    tlv(
+        Tag::GeneralizedTime,
+        &format!("{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z"),
+    )
+}
+
+fn tlv(tag: Tag, text: &str) -> Result<Vec<u8>> {
+    use ::der::Encode;
+    ::der::asn1::AnyRef::new(tag, text.as_bytes())
+        .and_then(|a| a.to_der())
+        .map_err(crate::asn1::err)
 }
 
 /// ISO-8601 UTC, like Java's Instant.toString: 2026-11-01T10:00:00Z (with .SSS when not 0).
@@ -158,29 +173,29 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let t = parse_asn1(crate::der::UTC_TIME, b"261031000029Z").unwrap();
+        let t = parse_asn1(Tag::UtcTime, b"261031000029Z").unwrap();
         assert_eq!(iso(t), "2026-10-31T00:00:29Z");
-        let enc = encode(t);
+        let enc = encode(t).unwrap();
         assert_eq!(&enc[2..], b"261031000029Z");
-        let g = parse_asn1(crate::der::GENERALIZED_TIME, b"20261031000029.5Z").unwrap();
+        let g = parse_asn1(Tag::GeneralizedTime, b"20261031000029.5Z").unwrap();
         assert_eq!(iso(g), "2026-10-31T00:00:29.500Z");
         assert_eq!(iso(0), "1970-01-01T00:00:00Z");
         assert_eq!(
-            iso(parse_asn1(crate::der::UTC_TIME, b"2602031200+0500").unwrap()),
+            iso(parse_asn1(Tag::UtcTime, b"2602031200+0500").unwrap()),
             "2026-02-03T07:00:00Z"
         );
-        assert!(parse_asn1(crate::der::UTC_TIME, b"260231000000Z").is_err());
-        assert_eq!(&encode_generalized(g)[2..], b"20261031000029Z");
-        assert_eq!(&encode(year_ms(2051))[..1], &[crate::der::GENERALIZED_TIME]);
-        assert_eq!(&encode(year_ms(1949))[..1], &[crate::der::GENERALIZED_TIME]);
-        assert_eq!(&encode(year_ms(1950))[..1], &[crate::der::UTC_TIME]);
-        assert_eq!(&encode(year_ms(2049))[2..], b"490101000000Z");
+        assert!(parse_asn1(Tag::UtcTime, b"260231000000Z").is_err());
+        assert_eq!(&encode_generalized(g).unwrap()[2..], b"20261031000029Z");
+        assert_eq!(&encode(year_ms(2051)).unwrap()[..1], &[0x18]);
+        assert_eq!(&encode(year_ms(1949)).unwrap()[..1], &[0x18]);
+        assert_eq!(&encode(year_ms(1950)).unwrap()[..1], &[0x17]);
+        assert_eq!(&encode(year_ms(2049)).unwrap()[2..], b"490101000000Z");
     }
 
     #[test]
     fn time_forms() {
-        let utc = |t: &[u8]| iso(parse_asn1(crate::der::UTC_TIME, t).unwrap());
-        let generalized = |t: &[u8]| iso(parse_asn1(crate::der::GENERALIZED_TIME, t).unwrap());
+        let utc = |t: &[u8]| iso(parse_asn1(Tag::UtcTime, t).unwrap());
+        let generalized = |t: &[u8]| iso(parse_asn1(Tag::GeneralizedTime, t).unwrap());
         // two-digit years: 50 and later are the 1900s
         assert_eq!(utc(b"491231235959Z"), "2049-12-31T23:59:59Z");
         assert_eq!(utc(b"500101000000Z"), "1950-01-01T00:00:00Z");
@@ -196,13 +211,13 @@ mod tests {
         assert_eq!(utc(b"2602031200+05"), "2026-02-03T07:00:00Z");
         // a leap second counts as 59
         assert_eq!(utc(b"161231235960Z"), "2016-12-31T23:59:59Z");
-        assert!(parse_asn1(crate::der::UTC_TIME, b"2602031200X").is_err());
-        assert!(parse_asn1(crate::der::OCTET_STRING, b"2602031200Z").is_err());
+        assert!(parse_asn1(Tag::UtcTime, b"2602031200X").is_err());
+        assert!(parse_asn1(Tag::OctetString, b"2602031200Z").is_err());
     }
 
     #[test]
     fn invalid_dates_and_times() {
-        let bad = |t: &[u8]| parse_asn1(crate::der::GENERALIZED_TIME, t).is_err();
+        let bad = |t: &[u8]| parse_asn1(Tag::GeneralizedTime, t).is_err();
         assert!(bad(b"20260001000000Z"));
         assert!(bad(b"20261301000000Z"));
         assert!(bad(b"20260100000000Z"));
@@ -219,7 +234,7 @@ mod tests {
         assert!(bad(b"202601-1000000Z"));
         assert!(bad(b"20260101 1 0000Z"));
         assert!(bad(b"20260101000000+-100"));
-        assert!(parse_asn1(crate::der::UTC_TIME, b"+60101000000Z").is_err());
+        assert!(parse_asn1(Tag::UtcTime, b"+60101000000Z").is_err());
     }
 
     #[test]

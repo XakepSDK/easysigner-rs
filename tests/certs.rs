@@ -252,8 +252,8 @@ fn issue(issuer: &p12::Key, subject: &Cert) -> Cert {
 fn issue_with(issuer: &p12::Key, subject: &Cert, exts: &[(&str, Vec<u8>)]) -> Cert {
     let alg = der::alg_null(issuer.private_key.sig_oid());
     let validity = der::seq(&[
-        &kzsigner::time::encode_generalized(issuer.cert.not_before),
-        &kzsigner::time::encode_generalized(issuer.cert.not_after),
+        &kzsigner::time::encode_generalized(issuer.cert.not_before).unwrap(),
+        &kzsigner::time::encode_generalized(issuer.cert.not_after).unwrap(),
     ]);
     let mut tbs = vec![
         der::tlv(der::ctx(0), &der::small_int(2)),

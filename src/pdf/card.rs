@@ -193,7 +193,7 @@ pub fn sign_for_card(
     let mime = cms::attribute(
         ATTR_MIME_TYPE,
         &der::tlv(der::UTF8_STRING, mime_type(file_name).as_bytes()),
-    );
+    )?;
     let mut sd = cms::sign_once_with(
         doc,
         cms::ID_DATA,
@@ -238,8 +238,8 @@ pub fn sign_for_card(
             "No OCSP answer could be embedded in the signature; the card does not fully meet its specification.",
         ).into());
     }
-    ltv::embed(&mut sd, 0, &g.kept);
-    Ok(sd.encode())
+    ltv::embed(&mut sd, 0, &g.kept)?;
+    Ok(sd.encode()?)
 }
 
 pub use crate::ltv::{ATTR_CERT_VALUES, ATTR_REVOCATION_VALUES};

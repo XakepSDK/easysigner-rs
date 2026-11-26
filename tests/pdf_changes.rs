@@ -610,7 +610,7 @@ fn signature_fields_that_do_not_hold() {
     };
     der.truncate(head + len);
     let sd = kzsigner::cms::SignedData::parse(&der).unwrap();
-    let doubled = kzsigner::hex(&sd.merge(&sd).encode()).to_uppercase();
+    let doubled = kzsigner::hex(&sd.merge(&sd).encode().unwrap()).to_uppercase();
     assert!(doubled.len() <= gap.len());
     let mut d = pdf.clone();
     d[a as usize + 1..a as usize + 1 + doubled.len()].copy_from_slice(doubled.as_bytes());

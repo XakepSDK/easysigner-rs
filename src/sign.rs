@@ -116,7 +116,7 @@ pub fn sign(
         out = e.merge(&out);
         r.cosigned = true;
     }
-    r.cms = out.encode();
+    r.cms = out.encode()?;
     r.signer_count = out.signers.len();
     Ok(r)
 }
@@ -158,7 +158,7 @@ pub fn sign_hash(hash: &[u8], key: &Key, tsa_url: Option<&str>, env: &Env) -> Re
         timestamp(&mut out, url, key, env, &mut r)?;
     }
     r.signature = out.signers[0].signature.clone();
-    r.cms = out.encode();
+    r.cms = out.encode()?;
     Ok(r)
 }
 
@@ -278,7 +278,7 @@ pub fn extend(
     // the validation data goes in first, so that the archive timestamps cover it
     for (idx, archived, kept) in &todo {
         if !archived {
-            ltv::embed(&mut sd, *idx, kept);
+            ltv::embed(&mut sd, *idx, kept)?;
         }
     }
     if let (true, Some(content)) = (archive, &content) {
@@ -293,7 +293,7 @@ pub fn extend(
         }
         r.timestamped = true;
     }
-    r.cms = sd.encode();
+    r.cms = sd.encode()?;
     Ok(r)
 }
 

@@ -475,7 +475,7 @@ mod tests {
         // a token that is not a timestamp: still says when and by whom
         let mut sd = cms::SignedData::parse_inner(&token).unwrap();
         sd.content_type = cms::ID_DATA.into();
-        let other = crate::base64_encode(&sd.encode());
+        let other = crate::base64_encode(&sd.encode().unwrap());
         let text = signature(&format!(
             "<x141:ArchiveTimeStamp><xades:EncapsulatedTimeStamp>{other}</xades:EncapsulatedTimeStamp></x141:ArchiveTimeStamp>"
         ));
