@@ -36,12 +36,13 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ::der::asn1::{Any, OctetString, OctetStringRef};
+use ::der::{Decode, Encode, Reader, Sequence, SliceReader, Tag, TagNumber, Tagged};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use zeroize::Zeroizing;
 
 use crate::cert::Cert;
-use crate::der::{self, Tlv};
 use crate::i18n::tr;
 use crate::keys::PrivateKey;
 use crate::p12::{self, Key};
@@ -456,64 +457,56 @@ impl Entry {
         record_aad(self.cert(), self.level)
     }
 
-    fn to_der(&self) -> Vec<u8> {
-        let chain: Vec<u8> = self.chain.iter().flat_map(|c| c.der.clone()).collect();
+    fn to_der(&self) -> crate::Result<Vec<u8>> {
         let password = match &self.password {
-            None => der::null(),
-            Some(p) => der::seq(&[
-                &der::octets(&p.salt),
-                &der::small_int(p.kdf.memory as u64),
-                &der::small_int(p.kdf.passes as u64),
-                &der::small_int(p.kdf.lanes as u64),
-            ]),
+            None => Any::null(),
+            Some(p) => Any::encode_from(&PasswordDer {
+                salt: OctetString::new(p.salt.as_slice())?,
+                memory: p.kdf.memory,
+                passes: p.kdf.passes,
+                lanes: p.kdf.lanes,
+            })?,
         };
-        der::seq(&[
-            &der::tlv(der::UTF8_STRING, self.id.as_bytes()),
-            &der::small_int(self.level.code()),
-            &der::small_int(self.security.code()),
-            &der::tlv(der::UTF8_STRING, self.alias.as_bytes()),
-            &der::tlv(der::SEQUENCE, &chain),
-            &password,
-            &der::small_int(self.failures as u64),
-            &der::small_int(self.last_failure),
-            &der::octets(&self.sealed),
-        ])
+        Ok(EntryDer {
+            id: self.id.clone(),
+            level: self.level.code(),
+            security: self.security.code(),
+            alias: self.alias.clone(),
+            chain: self
+                .chain
+                .iter()
+                .map(|c| Any::from_der(&c.der))
+                .collect::<::der::Result<_>>()?,
+            password,
+            failures: self.failures,
+            last_failure: self.last_failure,
+            sealed: OctetString::new(self.sealed.as_slice())?,
+        }
+        .to_der()?)
     }
 
-    fn from_der(t: &Tlv) -> crate::Result<Entry> {
+    fn from_der(e: EntryDer) -> crate::Result<Entry> {
         let bad = || crate::Error::new("damaged key store entry");
-        let k = t.items(der::SEQUENCE)?;
-        let text = |t: &Tlv| -> crate::Result<String> {
-            String::from_utf8(t.expect(der::UTF8_STRING)?.content.to_vec()).map_err(|_| bad())
-        };
-        let small = |t: &Tlv| -> crate::Result<i64> {
-            let v = t.small_int()?;
-            if v < 0 { Err(bad()) } else { Ok(v) }
-        };
-        let id = text(&k[0])?;
-        let level = Level::from_code(small(&k[1])?).ok_or_else(bad)?;
-        let security = Security::from_code(small(&k[2])?).ok_or_else(bad)?;
-        let alias = text(&k[3])?;
-        let chain = k[4]
-            .items(der::SEQUENCE)?
-            .iter()
-            .map(|c| Cert::parse(c.raw))
-            .collect::<kzcrypto::Result<Vec<Cert>>>()?;
+        let code = |c: u64| i64::try_from(c).map_err(|_| bad());
+        let level = Level::from_code(code(e.level)?).ok_or_else(bad)?;
+        let security = Security::from_code(code(e.security)?).ok_or_else(bad)?;
+        let mut chain = Vec::new();
+        for c in &e.chain {
+            chain.push(Cert::parse(&c.to_der()?)?);
+        }
         if chain.is_empty() {
             return Err(bad());
         }
-        let password = if k[5].tag == der::NULL {
+        let password = if e.password.tag() == Tag::Null {
             None
         } else {
-            let p = k[5].items(der::SEQUENCE)?;
-            let num =
-                |t: &Tlv| -> crate::Result<u32> { u32::try_from(small(t)?).map_err(|_| bad()) };
+            let p: PasswordDer = e.password.decode_as()?;
             Some(PasswordLayer {
-                salt: p[0].expect(der::OCTET_STRING)?.octets()?,
+                salt: p.salt.into_bytes().into_vec(),
                 kdf: Kdf {
-                    memory: num(&p[1])?,
-                    passes: num(&p[2])?,
-                    lanes: num(&p[3])?,
+                    memory: p.memory,
+                    passes: p.passes,
+                    lanes: p.lanes,
                 },
             })
         };
@@ -521,25 +514,82 @@ impl Entry {
             return Err(bad());
         }
         Ok(Entry {
-            id,
+            id: e.id,
             level,
             security,
-            alias,
+            alias: e.alias,
             chain,
             password,
-            failures: u32::try_from(small(&k[6])?).map_err(|_| bad())?,
-            last_failure: small(&k[7])? as u64,
-            sealed: k[8].expect(der::OCTET_STRING)?.octets()?,
+            failures: e.failures,
+            last_failure: e.last_failure,
+            sealed: e.sealed.into_bytes().into_vec(),
         })
     }
 }
 
+/// An entry as stored.
+#[derive(Sequence)]
+struct EntryDer {
+    id: String,
+    level: u64,
+    security: u64,
+    alias: String,
+    /// The certificates, as encoded.
+    chain: Vec<Any>,
+    /// NULL, or [`PasswordDer`].
+    password: Any,
+    failures: u32,
+    last_failure: u64,
+    sealed: OctetString,
+}
+
+/// The password layer's salt and key derivation settings.
+#[derive(Sequence)]
+struct PasswordDer {
+    salt: OctetString,
+    memory: u32,
+    passes: u32,
+    lanes: u32,
+}
+
+/// What a hidden list stores in the clear: the chip key's name, the sealed list key and the
+/// encrypted list.
+#[derive(Sequence)]
+struct HiddenDer {
+    chip_key: String,
+    sealed_list_key: OctetString,
+    encrypted_list: OctetString,
+}
+
+/// The file after [`MAGIC`]: the version, then `[0]` the entries, or `[1]` [`HiddenDer`].
+#[derive(Sequence)]
+struct FileDer {
+    version: u64,
+    list: Any,
+}
+
+const OPEN_LIST: Tag = Tag::ContextSpecific {
+    constructed: true,
+    number: TagNumber(0),
+};
+const HIDDEN_LIST: Tag = Tag::ContextSpecific {
+    constructed: true,
+    number: TagNumber(1),
+};
+
+/// The first element of `data`, ignoring what follows (a hidden list's padding).
+fn first<'a, T: Decode<'a, Error = ::der::Error>>(data: &'a [u8]) -> ::der::Result<T> {
+    let mut r = SliceReader::new(data)?;
+    T::decode(&mut r)
+}
+
 fn record_aad(cert: &Cert, level: Level) -> Vec<u8> {
-    der::cat(&[
+    [
         RECORD_AAD,
         &crate::gost::sha256(&cert.der),
         &[level.code() as u8],
-    ])
+    ]
+    .concat()
 }
 
 /// Seconds to wait before the next password attempt after `failures` wrong ones in a row:
@@ -579,7 +629,7 @@ fn encrypt(key: &[u8; 32], plain: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
             aes_gcm::aead::Payload { msg: plain, aad },
         )
         .map_err(|_| VaultError::Failed("AES-GCM encryption failed".into()))?;
-    Ok(der::cat(&[&nonce, &c]))
+    Ok([&nonce[..], &c].concat())
 }
 
 /// Undoes [`encrypt`]; None when the key, data or associated data do not match.
@@ -639,25 +689,22 @@ impl<G: Guard> Store<G> {
         let body = data
             .strip_prefix(MAGIC)
             .ok_or_else(|| crate::Error::new("not a kzsigner key store"))?;
-        let (top, _) = der::read(body)?;
-        let t = top.items(der::SEQUENCE)?;
-        if t[0].small_int()? != VERSION as i64 {
+        let top: FileDer = first(body)?;
+        if top.version != VERSION {
             return Err(crate::Error::new("unknown key store version"));
         }
-        match t[1].tag {
-            x if x == der::ctx(0) => {
-                self.entries = Some(read_index(t[1].content)?);
+        match top.list.tag() {
+            OPEN_LIST => {
+                self.entries = Some(read_index(top.list.value())?);
             }
-            x if x == der::ctx(1) => {
-                let h = t[1].inner()?.items(der::SEQUENCE)?;
-                let name = String::from_utf8(h[0].expect(der::UTF8_STRING)?.content.to_vec())
-                    .map_err(|_| crate::Error::new("damaged key store"))?;
+            HIDDEN_LIST => {
+                let h: HiddenDer = HiddenDer::from_der(top.list.value())?;
                 self.hidden = Some(Hidden {
-                    chip_key: name,
-                    sealed_list_key: h[1].expect(der::OCTET_STRING)?.octets()?,
+                    chip_key: h.chip_key,
+                    sealed_list_key: h.sealed_list_key.into_bytes().into_vec(),
                     list_key: None,
                 });
-                self.encrypted_list = h[2].expect(der::OCTET_STRING)?.octets()?;
+                self.encrypted_list = h.encrypted_list.into_bytes().into_vec();
                 self.entries = None;
             }
             _ => return Err(crate::Error::new("damaged key store")),
@@ -668,36 +715,42 @@ impl<G: Guard> Store<G> {
     /// Writes the store: to a new file first, then renamed over the old one.
     fn save(&self) -> Result<()> {
         let entries = self.entries.as_ref().ok_or(VaultError::Locked)?;
-        let index = Zeroizing::new(der::cat(
-            &entries
-                .iter()
-                .map(Entry::to_der)
-                .collect::<Vec<_>>()
-                .iter()
-                .map(Vec::as_slice)
-                .collect::<Vec<_>>(),
-        ));
+        let mut index = Zeroizing::new(Vec::new());
+        for e in entries {
+            index.extend(e.to_der()?);
+        }
         let choice = match &self.hidden {
-            None => der::tlv(der::ctx(0), &index),
+            None => Any::new(OPEN_LIST, index.as_slice()).map_err(der_failed)?,
             Some(h) => {
                 let key = h.list_key.as_ref().ok_or(VaultError::Locked)?;
                 // SEQUENCE OF Entry, padded to whole buckets
-                let mut list = Zeroizing::new(der::tlv(der::SEQUENCE, &index));
+                let mut list = Zeroizing::new(
+                    Any::new(Tag::Sequence, index.as_slice())
+                        .and_then(|a| a.to_der())
+                        .map_err(der_failed)?,
+                );
                 // nonce and tag make the encrypted list a whole number of buckets
                 let size = (list.len() + 12 + 16).div_ceil(BUCKET) * BUCKET - 12 - 16;
                 list.resize(size, 0);
                 let enc = encrypt(key, &list, LIST_AAD)?;
-                der::tlv(
-                    der::ctx(1),
-                    &der::seq(&[
-                        &der::tlv(der::UTF8_STRING, h.chip_key.as_bytes()),
-                        &der::octets(&h.sealed_list_key),
-                        &der::octets(&enc),
-                    ]),
-                )
+                let hidden = HiddenDer {
+                    chip_key: h.chip_key.clone(),
+                    sealed_list_key: OctetString::new(h.sealed_list_key.as_slice())
+                        .map_err(der_failed)?,
+                    encrypted_list: OctetString::new(enc).map_err(der_failed)?,
+                }
+                .to_der()
+                .map_err(der_failed)?;
+                Any::new(HIDDEN_LIST, hidden).map_err(der_failed)?
             }
         };
-        let file = der::cat(&[MAGIC, &der::seq(&[&der::small_int(VERSION), &choice])]);
+        let body = FileDer {
+            version: VERSION,
+            list: choice,
+        }
+        .to_der()
+        .map_err(der_failed)?;
+        let file = [MAGIC, &body].concat();
         let tmp = self.path.with_extension("tmp");
         let write = || -> std::io::Result<()> {
             use std::io::Write;
@@ -741,17 +794,14 @@ impl<G: Guard> Store<G> {
         );
         let list = decrypt(&key, &self.encrypted_list, LIST_AAD)
             .ok_or_else(|| VaultError::Failed(tr("The key store is damaged").into()))?;
-        let (t, _) = der::read(&list).map_err(|e| {
-            VaultError::Failed(format!(
-                "{}: {}",
-                tr("The key store is damaged"),
-                crate::Error::from(e)
-            ))
-        })?;
-        let entries = read_index(t.expect(der::SEQUENCE).map_err(VaultError::from)?.content)
-            .map_err(|e| {
-                VaultError::Failed(format!("{}: {}", tr("The key store is damaged"), e))
-            })?;
+        let damaged = |e: crate::Error| {
+            VaultError::Failed(format!("{}: {e}", tr("The key store is damaged")))
+        };
+        let t: Any = first(&list).map_err(|e| damaged(e.into()))?;
+        if t.tag() != Tag::Sequence {
+            return Err(damaged(crate::Error::new("not a list")));
+        }
+        let entries = read_index(t.value()).map_err(damaged)?;
         h.list_key = Some(key);
         self.entries = Some(entries);
         Ok(())
@@ -856,7 +906,14 @@ impl<G: Guard> Store<G> {
             return Err(VaultError::Unavailable);
         }
         let aad = record_aad(&chain[0], level);
-        let record = Zeroizing::new(der::seq(&[&der::octets(pkcs8)]));
+        // SEQUENCE { OCTET STRING pkcs8 }
+        let record = Zeroizing::new(
+            Record {
+                pkcs8: OctetStringRef::new(pkcs8).map_err(der_failed)?,
+            }
+            .to_der()
+            .map_err(der_failed)?,
+        );
         let (inner, layer) = if level.needs_password() {
             let password = password
                 .filter(|p| !p.is_empty())
@@ -962,12 +1019,8 @@ impl<G: Guard> Store<G> {
             self.save()?;
         }
         let damaged = || VaultError::Failed(tr("The key store is damaged").into());
-        let t = der::parse(&record).map_err(|_| damaged())?;
-        let pkcs8 = t
-            .items(der::SEQUENCE)
-            .and_then(|r| r[0].expect(der::OCTET_STRING)?.octets())
-            .map_err(|_| damaged())?;
-        Ok(Zeroizing::new(pkcs8))
+        let r = Record::from_der(&record).map_err(|_| damaged())?;
+        Ok(Zeroizing::new(r.pkcs8.as_bytes().to_vec()))
     }
 
     /// Key `id`, ready to sign with: shows the prompt, and checks `password` for a password
@@ -1093,15 +1146,24 @@ impl<G: Guard> Store<G> {
     }
 }
 
+/// The entries, one after another, in `content`.
 fn read_index(content: &[u8]) -> crate::Result<Vec<Entry>> {
     let mut out = Vec::new();
-    let mut rest = content;
-    while !rest.is_empty() && rest[0] != 0 {
-        let (t, r) = der::read(rest)?;
-        out.push(Entry::from_der(&t)?);
-        rest = r;
+    let mut r = SliceReader::new(content)?;
+    while !r.is_finished() {
+        out.push(Entry::from_der(r.decode()?)?);
     }
     Ok(out)
+}
+
+/// A private key record before sealing. Borrowed, so that no unwiped copy of the key is made.
+#[derive(Sequence)]
+struct Record<'a> {
+    pkcs8: &'a OctetStringRef,
+}
+
+fn der_failed(e: ::der::Error) -> VaultError {
+    VaultError::Failed(format!("{}: {e}", tr("The key store is damaged")))
 }
 
 #[cfg(test)]

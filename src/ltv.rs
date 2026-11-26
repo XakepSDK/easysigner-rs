@@ -4,7 +4,9 @@
 
 use crate::cert::Cert;
 use crate::cms::{SignedData, SignerInfo};
-use crate::der;
+use ::der::asn1::{Any, ObjectIdentifier, OctetString};
+use ::der::{Decode, Encode, Sequence, Tag, TagNumber, Tagged};
+
 use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::report::{ArchiveStamp, CertStatus, SignerReport, Source};
@@ -89,10 +91,8 @@ impl Kept {
                 match oid.as_str() {
                     ATTR_REVOCATION_VALUES => k.add_revocation_values(&v),
                     ATTR_CERT_VALUES => {
-                        if let Ok(t) = der::parse(&v).and_then(|t| t.children()) {
-                            for c in t.iter() {
-                                add(&mut k.certs, c.raw);
-                            }
+                        for c in items(&v) {
+                            add(&mut k.certs, &c);
                         }
                     }
                     ATTR_ARCHIVE_TIMESTAMP_V3 => {
@@ -112,15 +112,17 @@ impl Kept {
             add(&mut self.certs, c);
         }
         for item in sd.crl_items() {
-            let Ok(t) = der::parse(&item) else { continue };
-            if t.tag == der::SEQUENCE {
+            let Ok(t) = Any::from_der(&item) else {
+                continue;
+            };
+            if t.tag() == Tag::Sequence {
                 add(&mut self.crls, &item);
-            } else if t.tag == der::ctx(1)
-                && let Ok(k) = t.children()
-                && k.len() == 2
-                && k[0].oid().is_ok_and(|o| o == RI_OCSP)
+            } else if t.tag() == OTHER_REVOCATION_INFO
+                && let Ok(o) = OtherRevocationInfo::from_der(&as_sequence(&item))
+                && o.format.to_string() == RI_OCSP
+                && let Ok(raw) = o.info.to_der()
             {
-                add(&mut self.ocsps, k[1].raw);
+                add(&mut self.ocsps, &raw);
             }
         }
     }
@@ -128,21 +130,21 @@ impl Kept {
     /// RevocationValues: crlVals [0] SEQUENCE OF CertificateList, ocspVals [1] SEQUENCE OF
     /// BasicOCSPResponse.
     fn add_revocation_values(&mut self, v: &[u8]) {
-        let Ok(rv) = der::parse(v).and_then(|t| t.children()) else {
+        let Ok(rv) = ber::<RevocationValues>(v) else {
             return;
         };
-        for part in rv.iter() {
-            let Ok(list) = part.inner().and_then(|i| i.children()) else {
-                continue;
-            };
-            for x in list.iter() {
-                if part.tag == der::ctx(0) {
-                    add(&mut self.crls, x.raw);
-                } else if part.tag == der::ctx(1)
-                    && let Ok(o) = ocsp::wrap_basic(x.raw)
-                {
-                    add(&mut self.ocsps, &o);
-                }
+        for c in rv.crl_vals.iter().flatten() {
+            if let Ok(c) = c.to_der() {
+                add(&mut self.crls, &c);
+            }
+        }
+        for b in rv.ocsp_vals.iter().flatten() {
+            if let Ok(o) = b
+                .to_der()
+                .map_err(Error::from)
+                .and_then(|b| Ok(ocsp::wrap_basic(&b)?))
+            {
+                add(&mut self.ocsps, &o);
             }
         }
     }
@@ -388,8 +390,74 @@ fn revocation(
 }
 
 /// An OCSP answer as an item of SignedData's `crls` (RFC 5940 other revocation info).
-fn ocsp_item(raw: &[u8]) -> Vec<u8> {
-    der::tlv(der::ctx(1), &der::cat(&[&der::oid(RI_OCSP), raw]))
+fn ocsp_item(raw: &[u8]) -> Result<Vec<u8>> {
+    let mut seq = OtherRevocationInfo {
+        format: ObjectIdentifier::new(RI_OCSP)?,
+        info: Any::from_der(raw)?,
+    }
+    .to_der()?;
+    // [1] IMPLICIT
+    seq[0] = 0xa1;
+    Ok(seq)
+}
+
+/// OtherRevocationInfoFormat (RFC 5652 10.2.1), read and written as a SEQUENCE (the `crls`
+/// field tags it `[1] IMPLICIT`).
+#[derive(Sequence)]
+struct OtherRevocationInfo {
+    format: ObjectIdentifier,
+    info: Any,
+}
+
+const OTHER_REVOCATION_INFO: Tag = Tag::ContextSpecific {
+    constructed: true,
+    number: TagNumber(1),
+};
+
+/// `[n] IMPLICIT SEQUENCE` (one whole element) with its SEQUENCE tag back.
+fn as_sequence(item: &[u8]) -> Vec<u8> {
+    let mut v = item.to_vec();
+    if let Some(t) = v.first_mut() {
+        *t = 0x30;
+    }
+    v
+}
+
+/// RevocationValues (EN 319 122-1 A.1.4): CRLs and BasicOCSPResponses, each as encoded.
+#[derive(Sequence)]
+struct RevocationValues {
+    #[asn1(context_specific = "0", tag_mode = "EXPLICIT", optional = "true")]
+    crl_vals: Option<Vec<Any>>,
+    #[asn1(context_specific = "1", tag_mode = "EXPLICIT", optional = "true")]
+    ocsp_vals: Option<Vec<Any>>,
+    #[asn1(context_specific = "2", tag_mode = "EXPLICIT", optional = "true")]
+    other_rev_vals: Option<Any>,
+}
+
+/// ATSHashIndexV3 (EN 319 122-1 5.5.2), with the hash algorithm written out.
+#[derive(Sequence)]
+struct AtsHashIndex {
+    hash_ind_algorithm: spki::AlgorithmIdentifierOwned,
+    certificates_hash_index: Vec<OctetString>,
+    crls_hash_index: Vec<OctetString>,
+    unsigned_attrs_hash_index: Vec<OctetString>,
+}
+
+/// `T` from DER, or else from BER.
+fn ber<'a, T: Decode<'a, Error = ::der::Error>>(b: &'a [u8]) -> ::der::Result<T> {
+    T::from_der(b).or_else(|_| T::from_ber(b))
+}
+
+/// The elements of a SEQUENCE OF, each as encoded (none when `v` is not one).
+fn items(v: &[u8]) -> Vec<Vec<u8>> {
+    ber::<Vec<Any>>(v)
+        .map(|l| l.iter().filter_map(|a| a.to_der().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// The DER of the OID `s`.
+fn oid_der(s: &str) -> Result<Vec<u8>> {
+    Ok(ObjectIdentifier::new(s)?.to_der()?)
 }
 
 /// Puts `kept` into `sd`: its certificates and `crls`, as ETSI B-LT keeps them, and, for the
@@ -398,7 +466,9 @@ fn ocsp_item(raw: &[u8]) -> Vec<u8> {
 pub fn embed(sd: &mut SignedData, idx: usize, kept: &Kept) -> Result<()> {
     sd.add_certs(&kept.certs);
     let mut items = kept.crls.clone();
-    items.extend(kept.ocsps.iter().map(|o| ocsp_item(o)));
+    for o in &kept.ocsps {
+        items.push(ocsp_item(o)?);
+    }
     sd.add_crl_items(&items)?;
     let si = &mut sd.signers[idx];
     let has: Vec<String> = si.unsigned().into_iter().map(|(o, _)| o).collect();
@@ -411,23 +481,32 @@ pub fn embed(sd: &mut SignedData, idx: usize, kept: &Kept) -> Result<()> {
             .iter()
             .filter_map(|o| ocsp::basic_of(o))
             .collect();
-        let mut parts = Vec::new();
-        if !kept.crls.is_empty() {
-            let refs: Vec<&[u8]> = kept.crls.iter().map(Vec::as_slice).collect();
-            parts.push(der::tlv(der::ctx(0), &der::seq(&refs)));
-        }
-        if !basics.is_empty() {
-            let refs: Vec<&[u8]> = basics.iter().map(Vec::as_slice).collect();
-            parts.push(der::tlv(der::ctx(1), &der::seq(&refs)));
-        }
-        if !parts.is_empty() {
-            let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
-            si.add_unsigned(ATTR_REVOCATION_VALUES, &der::seq(&refs))?;
+        let list = |v: &[Vec<u8>]| -> Result<Option<Vec<Any>>> {
+            if v.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(
+                v.iter()
+                    .map(|x| Any::from_der(x))
+                    .collect::<::der::Result<_>>()?,
+            ))
+        };
+        let rv = RevocationValues {
+            crl_vals: list(&kept.crls)?,
+            ocsp_vals: list(&basics)?,
+            other_rev_vals: None,
+        };
+        if rv.crl_vals.is_some() || rv.ocsp_vals.is_some() {
+            si.add_unsigned(ATTR_REVOCATION_VALUES, &rv.to_der()?)?;
         }
     }
     if !has.iter().any(|o| o == ATTR_CERT_VALUES) && !kept.certs.is_empty() {
-        let refs: Vec<&[u8]> = kept.certs.iter().map(Vec::as_slice).collect();
-        si.add_unsigned(ATTR_CERT_VALUES, &der::seq(&refs))?;
+        let certs = kept
+            .certs
+            .iter()
+            .map(|c| Any::from_der(c))
+            .collect::<::der::Result<Vec<_>>>()?;
+        si.add_unsigned(ATTR_CERT_VALUES, &certs.to_der()?)?;
     }
     Ok(())
 }
@@ -448,7 +527,7 @@ pub fn tsa_certs(si: &SignerInfo) -> Vec<Cert> {
 /// ATSHashIndexV3 (EN 319 122-1 5.5.2) for signer `si` of `sd`, with hash `alg`: a hash of
 /// each certificate, each `crls` item and each unsigned attribute value (with its type).
 fn hash_index(sd: &SignedData, si: &SignerInfo, alg: &str) -> Result<Vec<u8>> {
-    let h = |b: &[u8]| -> Result<Vec<u8>> { Ok(der::octets(&gost::hash(alg, b)?)) };
+    let h = |b: &[u8]| -> Result<OctetString> { Ok(OctetString::new(gost::hash(alg, b)?)?) };
     let certs = sd.certs.iter().map(|c| h(c)).collect::<Result<Vec<_>>>()?;
     let crls = sd
         .crl_items()
@@ -458,15 +537,18 @@ fn hash_index(sd: &SignedData, si: &SignerInfo, alg: &str) -> Result<Vec<u8>> {
     let attrs = si
         .unsigned_values()
         .iter()
-        .map(|(t, v)| h(&der::cat(&[t, v])))
+        .map(|(t, v)| h(&[t.as_slice(), v].concat()))
         .collect::<Result<Vec<_>>>()?;
-    let seq_of = |v: &[Vec<u8>]| der::seq(&v.iter().map(Vec::as_slice).collect::<Vec<_>>());
-    Ok(der::seq(&[
-        &der::seq(&[&der::oid(alg)]),
-        &seq_of(&certs),
-        &seq_of(&crls),
-        &seq_of(&attrs),
-    ]))
+    Ok(AtsHashIndex {
+        hash_ind_algorithm: spki::AlgorithmIdentifierOwned {
+            oid: ObjectIdentifier::new(alg)?,
+            parameters: None,
+        },
+        certificates_hash_index: certs,
+        crls_hash_index: crls,
+        unsigned_attrs_hash_index: attrs,
+    }
+    .to_der()?)
 }
 
 /// What an archive-time-stamp-v3's message imprint is the hash of (EN 319 122-1 5.5.3): the
@@ -479,12 +561,13 @@ fn imprint_input(
     alg: &str,
     index: &[u8],
 ) -> Result<Vec<u8>> {
-    Ok(der::cat(&[
-        &der::oid(&sd.content_type),
-        &gost::hash(alg, content)?,
-        &si.archive_fields()?,
-        index,
-    ]))
+    Ok([
+        oid_der(&sd.content_type)?,
+        gost::hash(alg, content)?,
+        si.archive_fields()?,
+        index.to_vec(),
+    ]
+    .concat())
 }
 
 /// Adds an archive timestamp (ETSI B-LTA) from the TSA at `url` to signer `idx` of `sd`, over
@@ -512,7 +595,9 @@ pub fn archive(
     t.signers[0].add_unsigned(ATTR_ATS_HASH_INDEX_V3, &index)?;
     t.add_certs(&extra.certs);
     let mut items = extra.crls.clone();
-    items.extend(extra.ocsps.iter().map(|o| ocsp_item(o)));
+    for o in &extra.ocsps {
+        items.push(ocsp_item(o)?);
+    }
     t.add_crl_items(&items)?;
     sd.signers[idx].add_unsigned(ATTR_ARCHIVE_TIMESTAMP_V3, &t.encode()?)?;
     Ok(())
@@ -526,7 +611,9 @@ pub fn check_archives(
     content: Option<&[u8]>,
     env: &Env,
 ) -> Vec<ArchiveStamp> {
-    let ats = der::oid(ATTR_ARCHIVE_TIMESTAMP_V3);
+    let Ok(ats) = oid_der(ATTR_ARCHIVE_TIMESTAMP_V3) else {
+        return vec![];
+    };
     si.unsigned_values()
         .into_iter()
         .filter(|(t, _)| *t == ats)
@@ -565,7 +652,7 @@ fn check_archive(
         .signers
         .first()
         .ok_or_else(|| Error::new("time-stamp token without a signer"))?;
-    let index_oid = der::oid(ATTR_ATS_HASH_INDEX_V3);
+    let index_oid = oid_der(ATTR_ATS_HASH_INDEX_V3)?;
     let indexes: Vec<Vec<u8>> = tsi
         .unsigned_values()
         .into_iter()
@@ -583,18 +670,12 @@ fn check_archive(
             .ok_or_else(|| Error::new("time stamp without TSTInfo"))?,
     )?;
     let alg = info.imprint_alg.clone();
-    let k = der::parse(index)?.items(der::SEQUENCE)?;
-    let alg_ok = k.first().is_some_and(|a| {
-        a.items(der::SEQUENCE)
-            .ok()
-            .and_then(|i| i.first().map(|o| o.oid()))
-            .is_some_and(|o| o.is_ok_and(|o| o == alg))
-    });
-    if k.len() != 4 || !alg_ok {
+    let k = ber::<AtsHashIndex>(index).ok();
+    let Some(k) = k.filter(|k| k.hash_ind_algorithm.oid.to_string() == alg) else {
         return Err(Error::new(tr(
             "the archive timestamp's hash index is malformed",
         )));
-    }
+    };
     // every value the index lists must still be in the signature
     let hashes = |items: &mut dyn Iterator<Item = Vec<u8>>| -> Result<Vec<Vec<u8>>> {
         items.map(|b| Ok(gost::hash(&alg, &b)?)).collect()
@@ -606,7 +687,7 @@ fn check_archive(
             &mut si
                 .unsigned_values()
                 .into_iter()
-                .map(|(t, v)| der::cat(&[&t, &v])),
+                .map(|(t, v)| [t, v].concat()),
         )?,
     ];
     let gone = [
@@ -614,9 +695,14 @@ fn check_archive(
         tr("a revocation answer the archive timestamp covers is no longer in the signature"),
         tr("an unsigned attribute the archive timestamp covers is no longer in the signature"),
     ];
-    for (n, list) in k[1..].iter().enumerate() {
-        for h in list.children()?.iter() {
-            if !present[n].contains(&h.octets()?) {
+    let listed = [
+        &k.certificates_hash_index,
+        &k.crls_hash_index,
+        &k.unsigned_attrs_hash_index,
+    ];
+    for (n, list) in listed.iter().enumerate() {
+        for h in list.iter() {
+            if !present[n].iter().any(|p| p.as_slice() == h.as_bytes()) {
                 return Err(Error::new(gone[n]));
             }
         }
@@ -651,6 +737,7 @@ fn check_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::der;
     use crate::env::Env;
     use crate::report::Answer;
     use crate::time::encode_generalized;

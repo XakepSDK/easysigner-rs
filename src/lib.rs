@@ -460,6 +460,20 @@ impl From<kzcrypto::Error> for Error {
     }
 }
 
+impl From<::der::oid::Error> for Error {
+    fn from(e: ::der::oid::Error) -> Error {
+        Error::Crypto(kzcrypto::Error::malformed(format!(
+            "bad object identifier: {e}"
+        )))
+    }
+}
+
+impl From<::der::Error> for Error {
+    fn from(e: ::der::Error) -> Error {
+        Error::Crypto(kzcrypto::Error::malformed(format!("malformed ASN.1: {e}")))
+    }
+}
+
 /// Random bytes from the operating system.
 pub fn random(buf: &mut [u8]) -> Result<()> {
     getrandom::fill(buf).map_err(|e| Error::new(format!("no random numbers from the system: {e}")))
