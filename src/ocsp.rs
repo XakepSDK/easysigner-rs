@@ -11,24 +11,23 @@ use crate::i18n::{self, tr, trf};
 pub const DEFAULT_URL: &str = "http://ocsp.pki.gov.kz";
 
 /// Whether the certificate is known not to be revoked, a status line (in English: starting
-/// with GOOD, REVOKED, UNKNOWN or ERROR), and the answer: "good", "revoked", "unknown", or
-/// "" when there was none (no issuer, no network, a broken or untrusted response).
+/// with GOOD, REVOKED, UNKNOWN or ERROR), and the answer, or None when there was none (no issuer, no network, a broken or untrusted response).
 pub fn check(
     c: &Cert,
     issuer: Option<&Cert>,
     url: &str,
     env: &Env,
-) -> (bool, String, &'static str) {
+) -> (bool, String, Option<CertStatus>) {
     let Some(issuer) = issuer else {
         return (
             false,
             tr("UNKNOWN (issuer certificate not available)").into(),
-            "",
+            None,
         );
     };
     match fetch(c, issuer, url, env) {
         Ok(a) => (a.good, i18n::text(&a.status), a.cert_status),
-        Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e]), ""),
+        Err(e) => (false, trf("ERROR: could not check OCSP ({})", &[&e]), None),
     }
 }
 

@@ -8,7 +8,7 @@ use crate::der;
 use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::keys::alg_id;
-use crate::report::{ArchiveStamp, SignerReport};
+use crate::report::{ArchiveStamp, CertStatus, SignerReport, Source};
 use crate::tsp::{self, TstInfo};
 use crate::{Error, Result, crl, gost, ocsp};
 
@@ -177,12 +177,12 @@ impl Kept {
             let Ok(a) = ocsp::read_embedded(raw, c, issuer, trust) else {
                 continue;
             };
-            if a.cert_status.is_empty() {
+            let Some(cert_status) = a.cert_status else {
                 continue;
-            }
+            };
             let fresh = a.this_update.is_some_and(|u| u + 5 * MINUTE >= at);
             let (answer, status) = good_if_later(
-                a.cert_status,
+                cert_status,
                 crate::i18n::text(&a.status),
                 a.revoked_at.zip(a.untrusted_from),
                 at,
@@ -190,12 +190,12 @@ impl Kept {
             let s = KeptStatus {
                 answer,
                 status,
-                source: "ocsp",
+                source: Source::Ocsp,
                 fresh,
                 this_update: a.this_update,
                 responder: a.responder,
             };
-            if fresh || s.answer == "revoked" {
+            if fresh || s.answer == CertStatus::Revoked {
                 return Some(s);
             }
             stale.get_or_insert(s);
@@ -212,13 +212,13 @@ impl Kept {
                 .filter(|l| l.is_delta && l.unusable(c, issuer, at).is_none())
                 .max_by_key(|l| l.this_update);
             let (_, status, answer) = crl::evaluate(base, delta, false, c, issuer, at);
-            let (answer, status) =
-                good_if_later(answer, status, crl_revocation(base, delta, c), at);
-            if !answer.is_empty() {
+            if let Some(answer) = answer {
+                let (answer, status) =
+                    good_if_later(answer, status, crl_revocation(base, delta, c), at);
                 return Some(KeptStatus {
                     answer,
                     status,
-                    source: "crl",
+                    source: Source::Crl,
                     fresh: true,
                     this_update: Some(delta.map_or(base.this_update, |d| d.this_update)),
                     responder: None,
@@ -233,14 +233,14 @@ impl Kept {
 /// checked at, is good there (Order 500/НҚ p.14), unless its key was compromised before.
 /// `revoked`: (revocation date, untrusted from), as [`ocsp::Answer`] and [`crl::Crl`] give them.
 pub(crate) fn good_if_later(
-    answer: &'static str,
+    answer: CertStatus,
     status: String,
     revoked: Option<(i64, i64)>,
     at: i64,
-) -> (&'static str, String) {
+) -> (CertStatus, String) {
     match revoked {
-        Some((when, from)) if answer == "revoked" && from > at => (
-            "good",
+        Some((when, from)) if answer == CertStatus::Revoked && from > at => (
+            CertStatus::Good,
             trf(
                 "GOOD at the signing time (revoked later, on {})",
                 &[&crate::time::fmt(Some(when))],
@@ -262,12 +262,11 @@ pub(crate) fn crl_revocation(
 
 /// A revocation answer found in kept validation data.
 pub struct KeptStatus {
-    /// "good", "revoked" or "unknown".
-    pub answer: &'static str,
+    pub answer: CertStatus,
     /// For people.
     pub status: String,
-    /// "ocsp" or "crl".
-    pub source: &'static str,
+    /// [`Source::Ocsp`] or [`Source::Crl`].
+    pub source: Source,
     /// Made no earlier than the time the signature is checked at (always true for a CRL that
     /// was current then).
     pub fresh: bool,
@@ -346,7 +345,7 @@ fn revocation(
     let mut why = Vec::new();
     if let Some(url) = ocsp_url {
         match ocsp::fetch(c, issuer, url, env) {
-            Ok(a) if a.cert_status == "good" => {
+            Ok(a) if a.cert_status == Some(CertStatus::Good) => {
                 add(&mut g.kept.ocsps, &a.raw);
                 if let Some(r) = &a.responder {
                     add(&mut g.kept.certs, &r.der);
@@ -354,7 +353,7 @@ fn revocation(
                 return;
             }
             // revoked, or unknown to its CA: negative either way (Order 500/НҚ p.19)
-            Ok(a) if !a.cert_status.is_empty() => {
+            Ok(a) if a.cert_status.is_some() => {
                 return refuse(g, &crate::i18n::text(&a.status));
             }
             Ok(a) => why.push(crate::i18n::text(&a.status)),
@@ -365,14 +364,14 @@ fn revocation(
         Ok((base, delta, due)) => {
             let (_, status, answer) = crl::evaluate(&base, delta.as_deref(), due, c, issuer, now);
             match answer {
-                "good" => {
+                Some(CertStatus::Good) => {
                     add(&mut g.kept.crls, &base.raw);
                     if let Some(d) = &delta {
                         add(&mut g.kept.crls, &d.raw);
                     }
                     return;
                 }
-                "revoked" => return refuse(g, &status),
+                Some(CertStatus::Revoked) => return refuse(g, &status),
                 _ => why.push(status),
             }
         }
@@ -645,6 +644,7 @@ fn check_archive(
 mod tests {
     use super::*;
     use crate::env::Env;
+    use crate::report::Answer;
     use crate::time::encode_generalized;
     use crate::trust::TrustStore;
     use kzcrypto::ocsp::testkit::{GOOD, Reply, key};
@@ -747,28 +747,28 @@ mod tests {
         let s = f
             .status(&ocsps(vec![f.ocsp(at - 5 * minute, None)]), at)
             .unwrap();
-        assert!(s.fresh && s.answer == "good" && s.source == "ocsp");
+        assert!(s.fresh && s.answer == CertStatus::Good && s.source == Source::Ocsp);
         assert_eq!(s.this_update, Some(at - 5 * minute));
         assert!(s.responder.is_some());
         let s = f
             .status(&ocsps(vec![f.ocsp(at - 6 * minute, None)]), at)
             .unwrap();
-        assert!(!s.fresh && s.answer == "good");
+        assert!(!s.fresh && s.answer == CertStatus::Good);
 
         // revoked before the time checked at, or after it
         let s = f
             .status(&ocsps(vec![f.ocsp(at, Some(at - DAY))]), at)
             .unwrap();
-        assert_eq!(s.answer, "revoked");
+        assert_eq!(s.answer, CertStatus::Revoked);
         let s = f
             .status(&ocsps(vec![f.ocsp(at + DAY, Some(at + 1000))]), at)
             .unwrap();
-        assert_eq!(s.answer, "good");
+        assert_eq!(s.answer, CertStatus::Good);
         assert!(s.status.contains("revoked later"), "{}", s.status);
         let s = f
             .status(&ocsps(vec![f.ocsp(at + DAY, Some(at))]), at)
             .unwrap();
-        assert_eq!(s.answer, "revoked", "revoked at that very time");
+        assert_eq!(s.answer, CertStatus::Revoked, "revoked at that very time");
 
         // a stale revocation still says revoked; a stale good answer gives way to a fresh one
         let s = f
@@ -777,7 +777,7 @@ mod tests {
                 at,
             )
             .unwrap();
-        assert_eq!(s.answer, "revoked");
+        assert_eq!(s.answer, CertStatus::Revoked);
         let s = f
             .status(&ocsps(vec![f.ocsp(at - DAY, None), f.ocsp(at, None)]), at)
             .unwrap();
@@ -788,7 +788,7 @@ mod tests {
             crls: vec![f.crl(&f.ca.cert.subject, at - DAY, at + DAY, None, false)],
             ..Default::default()
         };
-        assert_eq!(f.status(&k, at).unwrap().source, "crl");
+        assert_eq!(f.status(&k, at).unwrap().source, Source::Crl);
         // answers that can't be read count for nothing
         assert!(f.status(&ocsps(vec![b"junk".to_vec()]), at).is_none());
         assert!(f.status(&Kept::default(), at).is_none());
@@ -805,19 +805,19 @@ mod tests {
         };
         let full = |revoked| f.crl(&name, at - DAY, at + DAY, revoked, false);
         let s = f.status(&lists(vec![full(None)]), at).unwrap();
-        assert!(s.answer == "good" && s.fresh && s.source == "crl");
+        assert!(s.answer == CertStatus::Good && s.fresh && s.source == Source::Crl);
         assert_eq!(s.this_update, Some(at - DAY));
         assert!(s.responder.is_none());
         assert_eq!(
             f.status(&lists(vec![full(Some(at - 1000))]), at)
                 .unwrap()
                 .answer,
-            "revoked"
+            CertStatus::Revoked
         );
         // listed, but revoked after the time checked at
         let s = f.status(&lists(vec![full(Some(at + 1000))]), at).unwrap();
         assert!(
-            s.answer == "good" && s.status.contains("revoked later"),
+            s.answer == CertStatus::Good && s.status.contains("revoked later"),
             "{}",
             s.status
         );
@@ -830,7 +830,7 @@ mod tests {
                 at,
             )
             .unwrap();
-        assert_eq!(s.answer, "revoked");
+        assert_eq!(s.answer, CertStatus::Revoked);
         assert_eq!(s.this_update, Some(at - DAY));
         let s = f
             .status(
@@ -856,7 +856,7 @@ mod tests {
             f.status(&lists(vec![full(None), stale]), at)
                 .unwrap()
                 .answer,
-            "good"
+            CertStatus::Good
         );
         // a list under another CA's name, or only a delta: nothing
         let other = f.crl(&f.carol.subject, at - DAY, at + DAY, None, false);
@@ -1109,9 +1109,9 @@ mod tests {
             issuer: Some(f.ca.cert.clone()),
             ocsp_good: true,
         };
-        let run = |k: &Kept, online: Option<&'static str>, trusted: bool| {
+        let run = |k: &Kept, online: Option<Answer>, trusted: bool| {
             let mut sr = SignerReport {
-                ocsp_answer: online,
+                revocation: online,
                 ..Default::default()
             };
             let mut good = true;
@@ -1133,8 +1133,8 @@ mod tests {
         // no online check
         let (had, good, sr) = run(&fresh, None, false);
         assert!(had && good);
-        assert_eq!(sr.ocsp_answer, Some("good"));
-        assert_eq!(sr.revocation_source, Some("kept-ocsp"));
+        assert_eq!(sr.status(), Some(CertStatus::Good));
+        assert_eq!(sr.revocation_source, Some(Source::KeptOcsp));
         assert!(
             sr.ocsp_status
                 .unwrap()
@@ -1156,22 +1156,25 @@ mod tests {
         };
         assert_eq!(
             run(&list, None, false).2.revocation_source,
-            Some("kept-crl")
+            Some(Source::KeptCrl)
         );
 
         // an online check that got no answer
-        assert!(run(&fresh, Some(""), true).1);
-        assert!(!run(&fresh, Some(""), false).1, "not at a trusted time");
-        assert!(!run(&stale, Some(""), true).1, "not fresh");
-        assert!(!run(&revoked, Some(""), true).1);
+        assert!(run(&fresh, Some(Answer::NoAnswer), true).1);
+        assert!(
+            !run(&fresh, Some(Answer::NoAnswer), false).1,
+            "not at a trusted time"
+        );
+        assert!(!run(&stale, Some(Answer::NoAnswer), true).1, "not fresh");
+        assert!(!run(&revoked, Some(Answer::NoAnswer), true).1);
         // one that did answer stands
-        let (had, good, sr) = run(&revoked, Some("good"), true);
+        let (had, good, sr) = run(&revoked, Some(Answer::Said(CertStatus::Good)), true);
         assert!(had && good);
-        assert_eq!(sr.ocsp_answer, Some("good"));
+        assert_eq!(sr.status(), Some(CertStatus::Good));
         assert!(sr.revocation_source.is_none());
         // nothing kept
         let (had, good, sr) = run(&Kept::default(), None, false);
-        assert!(!had && good && sr.ocsp_answer.is_none());
+        assert!(!had && good && sr.revocation.is_none());
     }
 
     #[test]
@@ -1230,13 +1233,13 @@ mod tests {
         let dead = serve(None);
         let (good, status, answer, source) = revocation(&c, Some(&f.ca.cert), &dead, &f.env, None);
         assert!(
-            good && answer == "good" && source == Some("crl"),
+            good && answer == Some(CertStatus::Good) && source == Some(Source::Crl),
             "{status}"
         );
         assert!(status.contains("(OCSP: "), "{status}");
         // no list either
         let (good, _, answer, source) = revocation(&f.carol, Some(&f.ca.cert), &dead, &f.env, None);
-        assert!(!good && answer.is_empty() && source.is_none());
+        assert!(!good && answer.is_none() && source.is_none());
         let (_, _, _, source) = revocation(&c, None, &dead, &f.env, None);
         assert!(source.is_none());
 
@@ -1257,14 +1260,17 @@ mod tests {
         c.extensions.push(("2.5.29.31".into(), dp));
         let check = |at| revocation(&c, Some(&f.ca.cert), &dead, &f.env, at);
         let (good, status, answer, _) = check(Some(now - 2 * DAY));
-        assert!(good && answer == "good", "{status}");
+        assert!(good && answer == Some(CertStatus::Good), "{status}");
         assert!(
             status.starts_with("GOOD at the signing time (revoked later"),
             "{status}"
         );
         for at in [None, Some(now - DAY), Some(now)] {
             let (good, status, answer, _) = check(at);
-            assert!(!good && answer == "revoked", "{at:?}: {status}");
+            assert!(
+                !good && answer == Some(CertStatus::Revoked),
+                "{at:?}: {status}"
+            );
         }
     }
 
@@ -1321,7 +1327,7 @@ mod tests {
         let check = || revocation(&c, Some(&f.ca.cert), "http://ocsp.test", &env, None);
         let (good, status, answer, source) = check();
         assert!(
-            good && answer == "good" && source == Some("crl"),
+            good && answer == Some(CertStatus::Good) && source == Some(Source::Crl),
             "{status}"
         );
         assert_eq!(net.1.load(Ordering::SeqCst), 1, "OCSP asked first");
@@ -1347,15 +1353,27 @@ mod tests {
     #[test]
     fn revoked_later_unless_compromised() {
         let at = 1_000;
-        let g = |r| good_if_later("revoked", "REVOKED".into(), r, at).0;
-        assert_eq!(g(Some((2_000, 2_000))), "good");
-        assert_eq!(g(Some((1_000, 1_000))), "revoked", "at the same moment");
-        assert_eq!(g(Some((2_000, 500))), "revoked", "invalid since before");
-        assert_eq!(g(Some((2_000, i64::MIN))), "revoked", "key compromise");
-        assert_eq!(g(None), "revoked");
+        let g = |r| good_if_later(CertStatus::Revoked, "REVOKED".into(), r, at).0;
+        assert_eq!(g(Some((2_000, 2_000))), CertStatus::Good);
         assert_eq!(
-            good_if_later("unknown", "?".into(), Some((2_000, 2_000)), at).0,
-            "unknown"
+            g(Some((1_000, 1_000))),
+            CertStatus::Revoked,
+            "at the same moment"
+        );
+        assert_eq!(
+            g(Some((2_000, 500))),
+            CertStatus::Revoked,
+            "invalid since before"
+        );
+        assert_eq!(
+            g(Some((2_000, i64::MIN))),
+            CertStatus::Revoked,
+            "key compromise"
+        );
+        assert_eq!(g(None), CertStatus::Revoked);
+        assert_eq!(
+            good_if_later(CertStatus::Unknown, "?".into(), Some((2_000, 2_000)), at).0,
+            CertStatus::Unknown
         );
     }
 }

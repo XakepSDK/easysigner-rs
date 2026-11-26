@@ -155,7 +155,9 @@ fn an_expired_key_is_expired_or_expired_since() {
         signature_ok: true,
         chain_ok: true,
         cert_valid_at_signing: Some(false),
-        ocsp_answer: Some("good"),
+        revocation: Some(kzsigner::report::Answer::Said(
+            kzsigner::report::CertStatus::Good,
+        )),
         ..Default::default()
     };
     // no NCA time: checked as of today, when the key has expired since
@@ -224,7 +226,7 @@ fn make_app_fixtures() {
             "{what}: {:?} {:?} rev={:?} kept={}",
             c.verdict,
             c.signers.first().map(|s| s.reason),
-            c.signers.first().map(|s| s.revocation_answer.clone()),
+            c.signers.first().map(|s| s.revocation_answer),
             c.signers.first().is_some_and(|s| s.revocation_kept)
         );
     }

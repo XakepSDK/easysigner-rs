@@ -9,7 +9,7 @@ use crate::der;
 use crate::env::Env;
 use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
-use crate::report::{SignerReport, VerifyReport};
+use crate::report::{Answer, Baseline, CertStatus, SignerReport, Source, VerifyReport};
 use crate::{Error, Result, gost, ocsp, time, tsp};
 
 pub fn verify(
@@ -216,7 +216,7 @@ pub fn check_certificate(
         sr.revocation_source = source;
         ocsp_good = good;
         sr.ocsp_status = Some(status);
-        sr.ocsp_answer = Some(answer);
+        sr.revocation = Some(answer.into());
     }
     CertCheck {
         at,
@@ -244,23 +244,19 @@ pub fn apply_kept(
         .as_ref()
         .and_then(|i| kept.status(c, i, env, check.at));
     if let Some(k) = &kept_status
-        && sr.ocsp_answer.is_none_or(str::is_empty)
+        && sr.status().is_none()
     {
         sr.ocsp_status = Some(trf("{} (answer kept in the signature)", &[&k.status]));
-        sr.ocsp_answer = Some(k.answer);
-        sr.revocation_source = Some(if k.source == "ocsp" {
-            "kept-ocsp"
-        } else {
-            "kept-crl"
-        });
+        sr.revocation = Some(Answer::Said(k.answer));
+        sr.revocation_source = Some(k.source.as_kept());
         if !k.fresh {
             sr.warnings
                 .push(tr("The kept OCSP answer is older than the signature's timestamp.").into());
         }
         *ocsp_good = if ocsp_url.is_some() {
-            k.answer == "good" && k.fresh && check.trusted_time
+            k.answer == CertStatus::Good && k.fresh && check.trusted_time
         } else {
-            k.answer != "revoked"
+            k.answer != CertStatus::Revoked
         };
     }
     kept_status.is_some()
@@ -296,21 +292,21 @@ pub fn report_archives(sr: &mut SignerReport) -> bool {
 
 /// The ETSI baseline level a signature reaches: a signature timestamp makes it B-T, kept
 /// revocation data for the signer's certificate B-LT, and archive timestamps B-LTA.
-pub fn level(sr: &SignerReport, kept_revocation: bool) -> &'static str {
+pub fn level(sr: &SignerReport, kept_revocation: bool) -> Baseline {
     if sr.timestamp_time.is_none() {
-        "B-B"
+        Baseline::B
     } else if !kept_revocation {
-        "B-T"
+        Baseline::T
     } else if sr.archive_timestamps.is_empty() {
-        "B-LT"
+        Baseline::Lt
     } else {
-        "B-LTA"
+        Baseline::Lta
     }
 }
 
 /// Whether `c` is revoked, by OCSP at `url`, or, when OCSP gives no answer, by the CA's current
-/// revocation list (Order 500/НҚ p.18-19): (good, status for people, answer "good", "revoked",
-/// "unknown" or "" when there is none, where the answer came from: "ocsp" or "crl").
+/// revocation list (Order 500/НҚ p.18-19): (good, status for people, the answer or None when
+/// there is none, where the answer came from: [`Source::Ocsp`] or [`Source::Crl`]).
 /// `trusted_at`: the time of the signature's trusted timestamp. A certificate revoked after it
 /// still counts as good there (Order 500/НҚ p.14: checked as of the timestamp's time).
 pub fn revocation(
@@ -319,7 +315,7 @@ pub fn revocation(
     url: &str,
     env: &Env,
     trusted_at: Option<i64>,
-) -> (bool, String, &'static str, Option<&'static str>) {
+) -> (bool, String, Option<CertStatus>, Option<Source>) {
     let Some(issuer) = issuer else {
         // the revocation list can't be checked without the CA either: say it once
         let (good, status, answer) = ocsp::check(c, None, url, env);
@@ -335,12 +331,12 @@ pub fn revocation(
         Err(e) => (
             false,
             trf("ERROR: could not check OCSP ({})", &[&e]),
-            "",
+            None,
             None,
         ),
     };
-    let (good, status, answer, source, revoked) = if !answer.is_empty() {
-        (good, status, answer, Some("ocsp"), revoked)
+    let (good, status, answer, source, revoked) = if answer.is_some() {
+        (good, status, answer, Some(Source::Ocsp), revoked)
     } else {
         let now = env.now_ms();
         let (good, crl_status, answer, revoked) = match crate::crl::lists(c, now, env) {
@@ -352,7 +348,7 @@ pub fn revocation(
             Err(e) => (
                 false,
                 trf("ERROR: could not check the revocation list ({})", &[&e]),
-                "",
+                None,
                 None,
             ),
         };
@@ -361,14 +357,14 @@ pub fn revocation(
             good,
             status,
             answer,
-            (!answer.is_empty()).then_some("crl"),
+            answer.is_some().then_some(Source::Crl),
             revoked,
         )
     };
     match trusted_at {
-        Some(t) if answer == "revoked" => {
-            let (answer, status) = ltv::good_if_later(answer, status, revoked, t);
-            (answer == "good", status, answer, source)
+        Some(t) if answer == Some(CertStatus::Revoked) => {
+            let (answer, status) = ltv::good_if_later(CertStatus::Revoked, status, revoked, t);
+            (answer == CertStatus::Good, status, Some(answer), source)
         }
         _ => (good, status, answer, source),
     }

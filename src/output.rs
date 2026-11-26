@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::report::{ArchiveStamp, SignerReport, VerifyReport};
+use crate::report::{ArchiveStamp, Baseline, SignerReport, VerifyReport};
 use crate::time::{fmt, iso};
 
 /// Plain-text verification report. `data`: the original file given for a detached .cms.
@@ -154,13 +154,12 @@ pub fn text(r: &VerifyReport, data: Option<&str>) -> String {
     o
 }
 
-fn level_words(l: &str) -> &'static str {
+fn level_words(l: Baseline) -> &'static str {
     match l {
-        "B-B" => "no timestamp",
-        "B-T" => "timestamped",
-        "B-LT" => "long-term: revocation data kept",
-        "B-LTA" => "long-term with archive timestamp",
-        _ => "",
+        Baseline::B => "no timestamp",
+        Baseline::T => "timestamped",
+        Baseline::Lt => "long-term: revocation data kept",
+        Baseline::Lta => "long-term with archive timestamp",
     }
 }
 
@@ -306,13 +305,13 @@ fn signer(x: &SignerReport) -> J {
         (
             "revocationSource",
             x.revocation_source
-                .map(|v| J::Str(v.into()))
+                .map(|v| J::Str(v.code().into()))
                 .unwrap_or(J::Null),
         ),
         // "B-B", "B-T", "B-LT" or "B-LTA" (ETSI baseline levels)
         (
             "level",
-            x.level.map(|v| J::Str(v.into())).unwrap_or(J::Null),
+            x.level.map(|v| J::Str(v.code().into())).unwrap_or(J::Null),
         ),
         (
             "archiveTimestamps",
@@ -416,11 +415,14 @@ mod tests {
     #[test]
     fn levels_and_archive_stamps() {
         use super::{level_words, stamp};
-        assert_eq!(level_words("B-B"), "no timestamp");
-        assert_eq!(level_words("B-T"), "timestamped");
-        assert_eq!(level_words("B-LT"), "long-term: revocation data kept");
-        assert_eq!(level_words("B-LTA"), "long-term with archive timestamp");
-        assert_eq!(level_words("X"), "");
+        use crate::report::Baseline;
+        assert_eq!(level_words(Baseline::B), "no timestamp");
+        assert_eq!(level_words(Baseline::T), "timestamped");
+        assert_eq!(level_words(Baseline::Lt), "long-term: revocation data kept");
+        assert_eq!(
+            level_words(Baseline::Lta),
+            "long-term with archive timestamp"
+        );
         let mut a = crate::report::ArchiveStamp {
             error: Some("needs the document".into()),
             ..Default::default()

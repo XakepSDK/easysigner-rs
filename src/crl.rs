@@ -26,7 +26,7 @@ pub fn evaluate(
     c: &Cert,
     issuer: &Cert,
     now: i64,
-) -> (bool, String, &'static str) {
+) -> (bool, String, Option<CertStatus>) {
     let (good, status, answer) = kzcrypto::crl::evaluate(base, delta, delta_due, c, issuer, now);
     (good, i18n::text(&status), answer)
 }
@@ -83,12 +83,12 @@ pub fn lists(c: &Cert, now: i64, env: &Env) -> Result<(Arc<Crl>, Option<Arc<Crl>
 }
 
 /// Checks `c` against the CRLs its distribution points name (and their delta lists).
-pub fn check(c: &Cert, issuer: Option<&Cert>, env: &Env) -> (bool, String, &'static str) {
+pub fn check(c: &Cert, issuer: Option<&Cert>, env: &Env) -> (bool, String, Option<CertStatus>) {
     let Some(issuer) = issuer else {
         return (
             false,
             tr("UNKNOWN (issuer certificate not available)").into(),
-            "",
+            None,
         );
     };
     let now = env.now_ms();
@@ -97,7 +97,7 @@ pub fn check(c: &Cert, issuer: Option<&Cert>, env: &Env) -> (bool, String, &'sta
         Err(e) => (
             false,
             trf("ERROR: could not check the revocation list ({})", &[&e]),
-            "",
+            None,
         ),
     }
 }

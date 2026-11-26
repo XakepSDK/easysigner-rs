@@ -36,17 +36,14 @@ pub struct SignerReport {
     pub checked_at: Option<i64>,
     /// None when not checked.
     pub ocsp_status: Option<String>,
-    /// The OCSP answer when checked: "good", "revoked", "unknown", or "" when none came (no
-    /// network, a broken or untrusted response).
-    pub ocsp_answer: Option<&'static str>,
-    /// Where the revocation answer came from: "ocsp", "crl" (OCSP gave none and a current
-    /// revocation list decided), or None when there is no answer.
-    pub revocation_source: Option<&'static str>,
+    /// The CA's revocation answer, when one was looked for (online, or kept in the signature).
+    pub revocation: Option<Answer>,
+    /// Where the revocation answer came from; None when there is no answer.
+    pub revocation_source: Option<Source>,
     pub warnings: Vec<String>,
     pub cert_der: Option<Vec<u8>>,
-    /// The ETSI baseline level the signature reaches: "B-B", "B-T" (signature timestamp),
-    /// "B-LT" (with the revocation data to check it later), "B-LTA" (and archive timestamps).
-    pub level: Option<&'static str>,
+    /// The ETSI baseline level the signature reaches.
+    pub level: Option<Baseline>,
     /// The signature's archive timestamps (CAdES archive-time-stamp-v3, or PDF document
     /// timestamps that cover it).
     pub archive_timestamps: Vec<ArchiveStamp>,
@@ -54,6 +51,105 @@ pub struct SignerReport {
     pub kind: Option<String>,
     /// Facts about the signature that are not problems (e.g. what part of a PDF it covers).
     pub notes: Vec<String>,
+}
+
+pub use kzcrypto::ocsp::CertStatus;
+
+/// A revocation answer looked for: what the CA said, or that nothing usable came (no network, a
+/// broken or untrusted response, no current list).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Answer {
+    Said(CertStatus),
+    NoAnswer,
+}
+
+impl Answer {
+    pub fn status(self) -> Option<CertStatus> {
+        match self {
+            Answer::Said(s) => Some(s),
+            Answer::NoAnswer => None,
+        }
+    }
+
+    /// "good", "revoked", "unknown", or "" for no answer.
+    pub fn code(self) -> &'static str {
+        self.status().map_or("", CertStatus::code)
+    }
+}
+
+impl From<Option<CertStatus>> for Answer {
+    fn from(s: Option<CertStatus>) -> Answer {
+        s.map_or(Answer::NoAnswer, Answer::Said)
+    }
+}
+
+/// Where a revocation answer came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// NCA's OCSP server, asked now.
+    Ocsp,
+    /// A current revocation list, fetched now because OCSP gave no answer.
+    Crl,
+    /// An OCSP answer kept in the signature (B-LT).
+    KeptOcsp,
+    /// A revocation list kept in the signature.
+    KeptCrl,
+}
+
+impl Source {
+    /// "ocsp", "crl", "kept-ocsp" or "kept-crl".
+    pub fn code(self) -> &'static str {
+        match self {
+            Source::Ocsp => "ocsp",
+            Source::Crl => "crl",
+            Source::KeptOcsp => "kept-ocsp",
+            Source::KeptCrl => "kept-crl",
+        }
+    }
+
+    /// Kept in the signature, not asked now.
+    pub fn kept(self) -> bool {
+        matches!(self, Source::KeptOcsp | Source::KeptCrl)
+    }
+
+    /// The same source, kept in the signature.
+    pub fn as_kept(self) -> Source {
+        match self {
+            Source::Ocsp | Source::KeptOcsp => Source::KeptOcsp,
+            Source::Crl | Source::KeptCrl => Source::KeptCrl,
+        }
+    }
+}
+
+/// The ETSI baseline level a signature reaches (EN 319 122-1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Baseline {
+    /// B-B: signed, no timestamp.
+    B,
+    /// B-T: with a signature timestamp.
+    T,
+    /// B-LT: and the revocation data to check it later.
+    Lt,
+    /// B-LTA: and archive timestamps.
+    Lta,
+}
+
+impl Baseline {
+    /// "B-B", "B-T", "B-LT" or "B-LTA".
+    pub fn code(self) -> &'static str {
+        match self {
+            Baseline::B => "B-B",
+            Baseline::T => "B-T",
+            Baseline::Lt => "B-LT",
+            Baseline::Lta => "B-LTA",
+        }
+    }
+}
+
+impl std::fmt::Display for Baseline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
 }
 
 /// Why one signature is not valid, as a code a screen can turn into words: the first that
@@ -88,11 +184,11 @@ impl SignerReport {
         } else if !self.signature_ok {
             // read, but the document doesn't match it
             Reason::Changed
-        } else if self.ocsp_answer == Some("revoked") {
+        } else if self.status() == Some(CertStatus::Revoked) {
             Reason::Revoked
         } else if !self.chain_ok
             || self.usage_error.is_some()
-            || self.ocsp_answer == Some("unknown")
+            || self.status() == Some(CertStatus::Unknown)
         {
             Reason::NotRecognized
         } else if self.timestamp_ok == Some(false) {
@@ -103,17 +199,19 @@ impl SignerReport {
             } else {
                 Reason::ExpiredSince
             }
-        } else if self.ocsp_answer.is_none_or(str::is_empty)
-            || self
-                .revocation_source
-                .is_some_and(|r| r.starts_with("kept"))
-        {
+        } else if self.status().is_none() || self.revocation_source.is_some_and(Source::kept) {
             // no answer now, and none kept in the signature that settles it
             Reason::NotConfirmed
         } else {
             // the CA said good: what failed is an archive timestamp
             Reason::Damaged
         })
+    }
+
+    /// What the CA said about the signer's certificate; None when it was not asked or said
+    /// nothing usable.
+    pub fn status(&self) -> Option<CertStatus> {
+        self.revocation.and_then(Answer::status)
     }
 
     /// The time a valid timestamp from a trusted TSA proves; None when there is none.
@@ -181,4 +279,49 @@ pub struct SignResult {
     /// The new signature's value, which tells it apart from the others in a .cms.
     pub signature: Vec<u8>,
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes() {
+        let all = [Source::Ocsp, Source::Crl, Source::KeptOcsp, Source::KeptCrl];
+        let codes: Vec<_> = all.iter().map(|s| s.code()).collect();
+        assert_eq!(codes, ["ocsp", "crl", "kept-ocsp", "kept-crl"]);
+        let kept: Vec<_> = all.iter().map(|s| s.kept()).collect();
+        assert_eq!(kept, [false, false, true, true]);
+        let as_kept: Vec<_> = all.iter().map(|s| s.as_kept()).collect();
+        assert_eq!(
+            as_kept,
+            [
+                Source::KeptOcsp,
+                Source::KeptCrl,
+                Source::KeptOcsp,
+                Source::KeptCrl
+            ]
+        );
+
+        let levels = [Baseline::B, Baseline::T, Baseline::Lt, Baseline::Lta];
+        let names: Vec<_> = levels.iter().map(|l| l.to_string()).collect();
+        assert_eq!(names, ["B-B", "B-T", "B-LT", "B-LTA"]);
+
+        assert_eq!(Answer::from(None), Answer::NoAnswer);
+        assert_eq!(Answer::NoAnswer.code(), "");
+        let said = Answer::from(Some(CertStatus::Revoked));
+        assert_eq!(
+            (said, said.code()),
+            (Answer::Said(CertStatus::Revoked), "revoked")
+        );
+        assert_eq!(Answer::Said(CertStatus::Good).code(), "good");
+        assert_eq!(Answer::Said(CertStatus::Unknown).code(), "unknown");
+
+        let mut s = SignerReport::default();
+        assert_eq!(s.status(), None);
+        s.revocation = Some(Answer::NoAnswer);
+        assert_eq!(s.status(), None);
+        s.revocation = Some(said);
+        assert_eq!(s.status(), Some(CertStatus::Revoked));
+    }
 }

@@ -46,8 +46,8 @@ pub fn check_key(c: &Cert, ocsp_url: Option<&str>, env: &Env) -> Result<Vec<Stri
         let (_, status, answer, _) =
             crate::verify::revocation(c, chain.issuer.as_ref(), url, env, None);
         match answer {
-            "good" => {}
-            "" => warnings.push(trf(
+            Some(crate::report::CertStatus::Good) => {}
+            None => warnings.push(trf(
                 "Could not check that your key is not revoked: {}",
                 &[&status],
             )),

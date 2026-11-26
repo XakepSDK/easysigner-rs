@@ -8,6 +8,7 @@
 
 use crate::cert::{self, Cert};
 use crate::der::{self, Tlv};
+pub use crate::ocsp::CertStatus;
 use crate::prelude::*;
 use crate::text::{Text, Time, tr, trf};
 use crate::{Error, ErrorKind, Result};
@@ -235,7 +236,7 @@ fn collect_uris(t: &Tlv, out: &mut Vec<String>, depth: usize) {
 }
 
 /// What a full list and, when one is due, a delta list say about `c`: (good, status for
-/// people, answer "good"/"revoked", or "" when they can't be used). `issuer` is `c`'s CA
+/// people, the answer, or None when they can't be used). `issuer` is `c`'s CA
 /// certificate; `now` the moment of checking. A delta is required when `delta_due`.
 pub fn evaluate(
     base: &Crl,
@@ -244,8 +245,8 @@ pub fn evaluate(
     c: &Cert,
     issuer: &Cert,
     now: i64,
-) -> (bool, Text, &'static str) {
-    let no = |s: Text| (false, s, "");
+) -> (bool, Text, Option<CertStatus>) {
+    let no = |s: Text| (false, s, None);
     if base.is_delta {
         return no(tr("ERROR: the revocation list is not a full list"));
     }
@@ -279,15 +280,15 @@ pub fn evaluate(
             "GOOD (not in the revocation list of {})",
             &[&Time(Some(at))],
         ),
-        "good",
+        Some(CertStatus::Good),
     )
 }
 
-fn revoked(when: i64) -> (bool, Text, &'static str) {
+fn revoked(when: i64) -> (bool, Text, Option<CertStatus>) {
     (
         false,
         trf("REVOKED on {} (revocation list)", &[&Time(Some(when))]),
-        "revoked",
+        Some(CertStatus::Revoked),
     )
 }
 

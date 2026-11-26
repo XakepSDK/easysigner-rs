@@ -77,12 +77,13 @@ fn format_name(f: Option<Format>) -> &'static str {
 }
 
 fn revocation(s: &SignerCheck) -> String {
-    let words = match s.revocation_answer.as_deref() {
+    use kzsigner_ffi::RevocationAnswer as A;
+    let words = match s.revocation_answer {
         None => return String::new(),
-        Some("good") => t("Not revoked: NCA confirmed the key"),
-        Some("revoked") => t("Revoked: NCA cancelled this key"),
-        Some("unknown") => t("NCA doesn't know this key"),
-        Some(_) => t("NCA didn't answer"),
+        Some(A::Good) => t("Not revoked: NCA confirmed the key"),
+        Some(A::Revoked) => t("Revoked: NCA cancelled this key"),
+        Some(A::Unknown) => t("NCA doesn't know this key"),
+        Some(A::NoAnswer) => t("NCA didn't answer"),
     };
     if s.revocation_kept {
         format!("{words} ({})", t("NCA's answer kept in the signature"))

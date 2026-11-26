@@ -13,14 +13,35 @@ pub const CONTENT_TYPE: &str = "application/ocsp-request";
 const NONCE: &str = "1.3.6.1.5.5.7.48.1.2";
 const BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 
+/// What a CA says about a certificate, by OCSP or in a revocation list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CertStatus {
+    /// Not revoked.
+    Good,
+    Revoked,
+    /// The CA does not know it (OCSP only).
+    Unknown,
+}
+
+impl CertStatus {
+    /// "good", "revoked" or "unknown".
+    pub fn code(self) -> &'static str {
+        match self {
+            CertStatus::Good => "good",
+            CertStatus::Revoked => "revoked",
+            CertStatus::Unknown => "unknown",
+        }
+    }
+}
+
 /// An OCSP answer about one certificate.
 pub struct Answer {
     /// Known not to be revoked.
     pub good: bool,
     /// For people (in English: starting with GOOD, REVOKED, UNKNOWN or ERROR).
     pub status: Text,
-    /// "good", "revoked" or "unknown" (empty on an error).
-    pub cert_status: &'static str,
+    /// What the server said; None on an error.
+    pub cert_status: Option<CertStatus>,
     pub this_update: Option<i64>,
     /// When the certificate was revoked, for a "revoked" answer.
     pub revoked_at: Option<i64>,
@@ -40,7 +61,7 @@ impl Answer {
         Answer {
             good: false,
             status,
-            cert_status: "",
+            cert_status: None,
             this_update: None,
             revoked_at: None,
             untrusted_from: None,
@@ -269,7 +290,7 @@ fn evaluate(
         let (good, cert_status, status) = match at(&k, 1)?.tag {
             0x80 => (
                 true,
-                "good",
+                CertStatus::Good,
                 trf("GOOD (not revoked, checked {})", &[&Time(checked)]),
             ),
             0xa1 => {
@@ -282,18 +303,22 @@ fn evaluate(
                     .is_some_and(|r| crate::crl::is_compromise(&r));
                 revoked_at = when;
                 untrusted_from = if compromised { Some(i64::MIN) } else { when };
-                (false, "revoked", trf("REVOKED on {}", &[&Time(when)]))
+                (
+                    false,
+                    CertStatus::Revoked,
+                    trf("REVOKED on {}", &[&Time(when)]),
+                )
             }
             _ => (
                 false,
-                "unknown",
+                CertStatus::Unknown,
                 tr("UNKNOWN (the OCSP server does not know this certificate)"),
             ),
         };
         return Ok(Answer {
             good,
             status,
-            cert_status,
+            cert_status: Some(cert_status),
             this_update,
             revoked_at,
             untrusted_from,
@@ -534,7 +559,11 @@ mod tests {
         let stored = |r: &Reply| read_embedded(&r.encode(), &carol, &ca.cert, &trust).unwrap();
 
         let a = stored(&reply());
-        assert!(a.good && a.cert_status == "good", "{}", a.status);
+        assert!(
+            a.good && a.cert_status == Some(CertStatus::Good),
+            "{}",
+            a.status
+        );
         assert!(a.status.to_string().starts_with("GOOD"));
         assert_eq!(a.this_update, Some(now / 1000 * 1000));
         assert_eq!(a.responder.as_ref(), Some(&ca.cert));
@@ -550,13 +579,21 @@ mod tests {
             status: revoked,
             ..reply()
         });
-        assert!(!a.good && a.cert_status == "revoked", "{}", a.status);
+        assert!(
+            !a.good && a.cert_status == Some(CertStatus::Revoked),
+            "{}",
+            a.status
+        );
         assert_eq!(a.revoked_at, Some((now - 86_400_000) / 1000 * 1000));
         let a = stored(&Reply {
             status: vec![0x82, 0],
             ..reply()
         });
-        assert!(!a.good && a.cert_status == "unknown", "{}", a.status);
+        assert!(
+            !a.good && a.cert_status == Some(CertStatus::Unknown),
+            "{}",
+            a.status
+        );
 
         // about another certificate, or from a CA in trouble
         let a = stored(&Reply {

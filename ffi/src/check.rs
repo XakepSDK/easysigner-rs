@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use kzsigner::cert::{Cert, get, rdns};
 use kzsigner::i18n::Lang;
-use kzsigner::report::{SignerReport, VerifyReport};
+use kzsigner::report::{Answer, CertStatus, SignerReport, Source, VerifyReport};
 
 use crate::sign::{DocKind, Nca, inner_name, kind_of};
 
@@ -79,15 +79,37 @@ pub struct SignerCheck {
     pub issuer: Option<String>,
     /// The core's own revocation text (for "Copy details").
     pub revocation: Option<String>,
-    /// NCA's revocation answer: "good", "revoked", "unknown", or "" for none; None when not
-    /// asked. For the details screen's plain words.
-    pub revocation_answer: Option<String>,
+    /// NCA's revocation answer; None when not asked. For the details screen's plain words.
+    pub revocation_answer: Option<RevocationAnswer>,
     /// The answer was kept in the signature (B-LT), not asked now.
     pub revocation_kept: bool,
     /// "B-B", "B-T", "B-LT", "B-LTA".
     pub level: Option<String>,
     /// What the core found, in that language: for "Copy details".
     pub problems: Vec<String>,
+}
+
+/// What NCA said about the signer's key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RevocationAnswer {
+    /// Not revoked.
+    Good,
+    Revoked,
+    /// NCA doesn't know this key.
+    Unknown,
+    /// Asked, but no usable answer came.
+    NoAnswer,
+}
+
+impl From<Answer> for RevocationAnswer {
+    fn from(a: Answer) -> Self {
+        match a {
+            Answer::Said(CertStatus::Good) => RevocationAnswer::Good,
+            Answer::Said(CertStatus::Revoked) => RevocationAnswer::Revoked,
+            Answer::Said(CertStatus::Unknown) => RevocationAnswer::Unknown,
+            Answer::NoAnswer => RevocationAnswer::NoAnswer,
+        }
+    }
 }
 
 /// A checked file.
@@ -254,7 +276,7 @@ fn signer(s: &SignerReport) -> SignerCheck {
     problems.extend(s.warnings.iter().cloned());
     // the core's revocation text, when it isn't a plain "good"
     if let Some(r) = &s.ocsp_status
-        && s.ocsp_answer != Some("good")
+        && s.status() != Some(CertStatus::Good)
     {
         problems.push(r.clone());
     }
@@ -273,9 +295,9 @@ fn signer(s: &SignerReport) -> SignerCheck {
         serial: s.serial_hex.clone(),
         issuer: s.issuer_cn.clone(),
         revocation: s.ocsp_status.clone(),
-        revocation_answer: s.ocsp_answer.map(str::to_string),
-        revocation_kept: s.revocation_source.is_some_and(|r| r.starts_with("kept")),
-        level: s.level.map(str::to_string),
+        revocation_answer: s.revocation.map(RevocationAnswer::from),
+        revocation_kept: s.revocation_source.is_some_and(Source::kept),
+        level: s.level.map(|l| l.code().to_string()),
         problems,
     }
 }

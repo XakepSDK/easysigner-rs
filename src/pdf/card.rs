@@ -232,7 +232,7 @@ pub fn sign_for_card(
     let kept_ocsp = g
         .kept
         .status(&key.cert, issuer, env, env.now_ms())
-        .is_some_and(|k| k.source == "ocsp");
+        .is_some_and(|k| k.source == crate::report::Source::Ocsp);
     if !kept_ocsp {
         r.warnings.push(tr(
             "No OCSP answer could be embedded in the signature; the card does not fully meet its specification.",
@@ -397,11 +397,11 @@ fn view(cms: &[u8], env: &Env) -> Result<SigView> {
     let at = v.tsp_ms.unwrap_or_else(|| env.now_ms());
     if let Some(issuer) = trust.check(&c, at).issuer
         && let Some(a) = ltv::Kept::from_cms(&sd, Some(si)).status(&c, &issuer, env, at)
-        && a.source == "ocsp"
+        && a.source == crate::report::Source::Ocsp
     {
         let r = a.responder.as_ref();
         v.ocsp = Some((
-            a.answer.to_string(),
+            a.answer.code().to_string(),
             a.this_update.map(astana).unwrap_or_default(),
             r.map(Cert::serial_hex).unwrap_or_default(),
             r.map(|c| dn(&c.subject)).unwrap_or_default(),

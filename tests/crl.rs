@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use kzsigner::crl::{self, Crl};
+use kzsigner::crl::{self, CertStatus, Crl};
 use kzsigner::der;
 use kzsigner::p12::{self, Key};
 use kzsigner::time::{encode_generalized, now_ms};
@@ -97,20 +97,20 @@ fn revocation_lists_decide_only_when_current_and_from_the_ca() {
     };
 
     let (good, status, answer) = check(&make(&ca, &[b"\x01\x02"], now - DAY, now + DAY));
-    assert!(good && answer == "good", "{status}");
+    assert!(good && answer == Some(CertStatus::Good), "{status}");
 
     let (good, status, answer) = check(&make(&ca, &[&carol.cert.serial], now - DAY, now + DAY));
-    assert!(!good && answer == "revoked", "{status}");
+    assert!(!good && answer == Some(CertStatus::Revoked), "{status}");
 
     // past its nextUpdate: no answer, whatever it lists (p.18)
     let (good, _, answer) = check(&make(&ca, &[], now - 3 * DAY, now - DAY));
-    assert!(!good && answer.is_empty());
+    assert!(!good && answer.is_none());
 
     // under the CA's name but signed with carol's key
     let forged = make_by(&carol, &ca.cert.subject, &[], now - DAY, now + DAY, &[]);
     let (good, status, answer) = check(&forged);
     assert!(
-        !good && answer.is_empty() && status.contains("signature"),
+        !good && answer.is_none() && status.contains("signature"),
         "{status}"
     );
     // a changed byte breaks the signature of a real one too
@@ -118,12 +118,12 @@ fn revocation_lists_decide_only_when_current_and_from_the_ca() {
     let n = real.len();
     real[n - 1] ^= 1;
     let (good, _, answer) = check(&real);
-    assert!(!good && answer.is_empty());
+    assert!(!good && answer.is_none());
 
     // from a CA other than the certificate's: no answer
     let (good, status, answer) = check(&make(&carol, &[], now - DAY, now + DAY));
     assert!(
-        !good && answer.is_empty() && status.contains("CA"),
+        !good && answer.is_none() && status.contains("CA"),
         "{status}"
     );
 }
@@ -146,10 +146,16 @@ fn unknown_critical_extensions_make_a_list_unusable() {
     };
     // a critical issuingDistributionPoint (a partial list): no answer
     let (good, _, answer) = eval(&[("2.5.29.28", true, der::seq(&[]))]);
-    assert!(!good && answer.is_empty());
+    assert!(!good && answer.is_none());
     // the same not critical, and a critical cRLNumber, are fine
-    assert_eq!(eval(&[("2.5.29.28", false, der::seq(&[]))]).2, "good");
-    assert_eq!(eval(&[("2.5.29.20", true, der::small_int(7))]).2, "good");
+    assert_eq!(
+        eval(&[("2.5.29.28", false, der::seq(&[]))]).2,
+        Some(CertStatus::Good)
+    );
+    assert_eq!(
+        eval(&[("2.5.29.20", true, der::small_int(7))]).2,
+        Some(CertStatus::Good)
+    );
 }
 
 #[test]
@@ -181,17 +187,17 @@ fn delta_lists_are_read_with_the_full_list() {
     // revoked since the full list: the delta decides
     let delta = crl_of(&[&carol.cert.serial], std::slice::from_ref(&ind));
     assert!(delta.is_delta);
-    assert_eq!(eval(&base, Some(&delta), true).2, "revoked");
+    assert_eq!(eval(&base, Some(&delta), true).2, Some(CertStatus::Revoked));
     // in neither: good
     assert_eq!(
         eval(&base, Some(&crl_of(&[], std::slice::from_ref(&ind))), true).2,
-        "good"
+        Some(CertStatus::Good)
     );
     // a delta is named but couldn't be read: no answer
-    assert_eq!(eval(&base, None, true).2, "");
+    assert_eq!(eval(&base, None, true).2, None);
     // a full list given as the delta, or a delta given as the full list: no answer
-    assert_eq!(eval(&base, Some(&crl_of(&[], &[])), true).2, "");
-    assert_eq!(eval(&delta, None, false).2, "");
+    assert_eq!(eval(&base, Some(&crl_of(&[], &[])), true).2, None);
+    assert_eq!(eval(&delta, None, false).2, None);
 }
 
 #[test]
@@ -245,10 +251,10 @@ fn which_lists_are_current() {
         .2
     };
     // made a little ahead (clock skew up to 5 minutes), or due for renewal this very moment
-    assert_eq!(eval(now + 5 * MINUTE, now + DAY), "good");
-    assert_eq!(eval(now + 6 * MINUTE, now + DAY), "");
-    assert_eq!(eval(now - DAY, now), "good");
-    assert_eq!(eval(now - DAY, now - 1000), "");
+    assert_eq!(eval(now + 5 * MINUTE, now + DAY), Some(CertStatus::Good));
+    assert_eq!(eval(now + 6 * MINUTE, now + DAY), None);
+    assert_eq!(eval(now - DAY, now), Some(CertStatus::Good));
+    assert_eq!(eval(now - DAY, now - 1000), None);
 
     // the list must be from the certificate's CA and from the issuer given
     let alice = p12::open(
@@ -346,8 +352,8 @@ fn fetched_lists() {
     assert!(base.next_update.is_some() && delta.is_none() && !due);
     // (check reads the clock itself, a little after `now`: the list is still kept)
     let (good, status, answer) = crl::check(&c, Some(&ca.cert), &env);
-    assert!(good && answer == "good", "{status}");
-    assert_eq!(crl::check(&c, None, &env).2, "");
+    assert!(good && answer == Some(CertStatus::Good), "{status}");
+    assert_eq!(crl::check(&c, None, &env).2, None);
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept");
     crl::lists(&c, now + 59 * MINUTE, &env).unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1, "kept for the hour");

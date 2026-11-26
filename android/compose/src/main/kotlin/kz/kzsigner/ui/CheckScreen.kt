@@ -45,6 +45,7 @@ import kz.kzsigner.R
 import kz.kzsigner.core.Checked
 import kz.kzsigner.core.Format
 import kz.kzsigner.core.Reason
+import kz.kzsigner.core.RevocationAnswer
 import kz.kzsigner.core.SignerCheck
 import kz.kzsigner.core.Verdict
 
@@ -395,10 +396,10 @@ fun CheckDetailsScreen(model: KeysModel, onBack: () -> Unit) {
         s.revocationAnswer?.let { a ->
             val words = stringResource(
                 when (a) {
-                    "good" -> R.string.rev_good
-                    "revoked" -> R.string.rev_revoked
-                    "unknown" -> R.string.rev_unknown
-                    else -> R.string.rev_none
+                    RevocationAnswer.GOOD -> R.string.rev_good
+                    RevocationAnswer.REVOKED -> R.string.rev_revoked
+                    RevocationAnswer.UNKNOWN -> R.string.rev_unknown
+                    RevocationAnswer.NO_ANSWER -> R.string.rev_none
                 }
             )
             rows += stringResource(R.string.d_revocation) to

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use kzsigner::cert::{self, Cert, get, rdns};
 use kzsigner::i18n::Lang;
 use kzsigner::pdf::whosigned::WhoSigned;
+use kzsigner::report::CertStatus;
 use kzsigner::report::{SignResult, SignerReport};
 use kzsigner::vault::VaultError;
 use kzsigner::{Engine, ltv};
@@ -314,10 +315,10 @@ fn check(nca: &Nca, c: &Cert) -> Result<(), SignError> {
     let (_, _, answer, _) =
         kzsigner::verify::revocation(c, chain.issuer.as_ref(), &nca.ocsp, env, None);
     match answer {
-        "good" => Ok(()),
-        "revoked" => Err(refuse(CantSign::Revoked)),
-        "" => Err(SignError::NoAnswer),
-        _ => Err(refuse(CantSign::NotRecognized)),
+        Some(CertStatus::Good) => Ok(()),
+        Some(CertStatus::Revoked) => Err(refuse(CantSign::Revoked)),
+        Some(CertStatus::Unknown) => Err(refuse(CantSign::NotRecognized)),
+        None => Err(SignError::NoAnswer),
     }
 }
 

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use kzsigner::cert::Cert;
 use kzsigner::cms::SignedData;
 use kzsigner::env::Env;
+use kzsigner::report::CertStatus;
 use kzsigner::trust::TrustStore;
 use kzsigner::{gost, ltv, ocsp, p12, tsp};
 
@@ -44,20 +45,20 @@ fn ocsp_check() {
     let (c, ca, trust) = carol();
     let (good, status, answer) = ocsp::check(&c, Some(&ca), &nca::fake_ocsp(false), &trust);
     assert!(good, "{status}");
-    assert_eq!(answer, "good");
+    assert_eq!(answer, Some(CertStatus::Good));
     assert!(status.starts_with("GOOD"), "{status}");
 
     let (good, status, answer) = ocsp::check(&c, Some(&ca), &nca::fake_ocsp(true), &trust);
     assert!(!good);
-    assert_eq!(answer, "revoked");
+    assert_eq!(answer, Some(CertStatus::Revoked));
     assert!(status.starts_with("REVOKED"), "{status}");
 
     let (good, status, answer) = ocsp::check(&c, None, &nca::fake_ocsp(false), &trust);
-    assert!(!good && answer.is_empty());
+    assert!(!good && answer.is_none());
     assert!(status.starts_with("UNKNOWN"), "{status}");
 
     let (good, status, answer) = ocsp::check(&c, Some(&ca), &down(), &trust);
-    assert!(!good && answer.is_empty());
+    assert!(!good && answer.is_none());
     assert!(status.starts_with("ERROR"), "{status}");
 }
 

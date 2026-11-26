@@ -27,8 +27,12 @@ fn an_older_lta_file_verifies() {
     let r = e.verify(&data, None, None).unwrap();
     let s = &r.signers[0];
     assert!(r.valid && r.signers.len() == 1, "{s:#?}");
-    assert_eq!(s.level, Some("B-LTA"));
-    assert_eq!(s.ocsp_answer, Some("good"), "{s:#?}");
+    assert_eq!(s.level, Some(kzsigner::report::Baseline::Lta));
+    assert_eq!(
+        s.status(),
+        Some(kzsigner::report::CertStatus::Good),
+        "{s:#?}"
+    );
     assert_eq!(s.archive_timestamps.len(), 3);
     for a in &s.archive_timestamps {
         assert!(

@@ -21,7 +21,7 @@ use crate::der;
 use crate::i18n::{tr, trf};
 use crate::ltv::{self, Kept};
 use crate::p12::Key;
-use crate::report::{ArchiveStamp, SignResult, SignerReport, VerifyReport};
+use crate::report::{ArchiveStamp, Baseline, SignResult, SignerReport, VerifyReport};
 use crate::tsp;
 use crate::{Error, Result, gost, sign, time, verify};
 
@@ -866,8 +866,8 @@ pub fn verify(data: &[u8], env: &Env, ocsp_url: Option<&str>) -> Result<VerifyRe
             .filter(|(_, e)| e > end)
             .map(|(a, _)| a.clone())
             .collect();
-        if s.level == Some("B-LT") && covering.iter().any(|a| a.valid) {
-            s.level = Some("B-LTA");
+        if s.level == Some(Baseline::Lt) && covering.iter().any(|a| a.valid) {
+            s.level = Some(Baseline::Lta);
         }
         s.archive_timestamps.extend(covering);
     }

@@ -710,9 +710,9 @@ pub unsafe extern "C" fn kz_ocsp_read(
             now_ms,
         )?;
         status.write(match a.cert_status {
-            "good" if a.good => KzOcspStatus::Good,
-            "revoked" => KzOcspStatus::Revoked,
-            "unknown" => KzOcspStatus::Unknown,
+            Some(ocsp::CertStatus::Good) if a.good => KzOcspStatus::Good,
+            Some(ocsp::CertStatus::Revoked) => KzOcspStatus::Revoked,
+            Some(ocsp::CertStatus::Unknown) => KzOcspStatus::Unknown,
             _ => KzOcspStatus::Error,
         });
         if !revoked_at_ms.is_null()
