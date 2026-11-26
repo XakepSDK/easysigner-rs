@@ -4,12 +4,11 @@
 use ::der::asn1::{Any, BitString, OctetString, OctetStringRef};
 use ::der::{Decode, Encode, Sequence};
 use x509_cert::certificate::Raw;
-use x509_ocsp::{CertStatus as Status, OcspResponse, OcspResponseStatus, ResponseData};
+use x509_ocsp::{CertStatus as X, OcspResponse, OcspResponseStatus, ResponseData};
 
 use crate::asn1::{self, err as asn1};
 use crate::cert::{self, Cert};
 use crate::prelude::*;
-use crate::text::{Text, Time, tr, trf};
 use crate::trust::TrustStore;
 use crate::{Error, Result, gost};
 
@@ -38,12 +37,49 @@ impl CertStatus {
     }
 }
 
+/// What an OCSP answer says, or why it can't be used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Status {
+    /// Not revoked; `checked`: when that was known (the time of checking, for a fresh answer).
+    Good {
+        checked: Option<i64>,
+    },
+    Revoked {
+        at: Option<i64>,
+    },
+    /// The server does not know the certificate.
+    Unknown,
+    /// The answer says nothing about this certificate.
+    NoAnswerForCert,
+    /// The server answered with this error status (RFC 6960 4.2.1).
+    ServerError(u8),
+    /// The answer's signer can't be accepted.
+    Responder(ResponderProblem),
+    /// The answer is not for this request (another nonce).
+    NonceMismatch,
+    /// The answer is too old, or made too far ahead.
+    OutOfDate,
+}
+
+/// Why an OCSP answer's signer can't be accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResponderProblem {
+    /// Neither the CA nor a certificate it issued signed it.
+    BadSignature,
+    NotIssuedByCa,
+    /// The responder's certificate is not for OCSP signing (extended key usage).
+    NotForOcspSigning,
+    /// The responder's certificate path is not good.
+    Untrusted(crate::trust::PathStatus),
+}
+
 /// An OCSP answer about one certificate.
 pub struct Answer {
     /// Known not to be revoked.
     pub good: bool,
-    /// For people (in English: starting with GOOD, REVOKED, UNKNOWN or ERROR).
-    pub status: Text,
+    pub status: Status,
     /// What the server said; None on an error.
     pub cert_status: Option<CertStatus>,
     pub this_update: Option<i64>,
@@ -61,7 +97,7 @@ pub struct Answer {
 }
 
 impl Answer {
-    fn error(status: Text, raw: &[u8]) -> Answer {
+    fn error(status: Status, raw: &[u8]) -> Answer {
         Answer {
             good: false,
             status,
@@ -211,10 +247,7 @@ fn evaluate(
     let resp = OcspResponse::from_der(body).map_err(asn1)?;
     if resp.response_status != OcspResponseStatus::Successful {
         return Ok(Answer::error(
-            trf(
-                "ERROR: OCSP server answered status {}",
-                &[&(resp.response_status as u8 as i64)],
-            ),
+            Status::ServerError(resp.response_status as u8),
             body,
         ));
     }
@@ -248,7 +281,7 @@ fn evaluate(
     let responder = match check_responder(&tbs, &sig_alg, sig, &certs, issuer, trust, responder_at)
     {
         Ok(r) => r,
-        Err(problem) => return Ok(Answer::error(trf("ERROR: {}", &[&problem]), body)),
+        Err(problem) => return Ok(Answer::error(Status::Responder(problem), body)),
     };
 
     let mut nonce_ok = false;
@@ -263,10 +296,7 @@ fn evaluate(
         // accept the RFC form (nested OCTET STRING) and the bare nonce some responders echo
         let nested = ::der::asn1::OctetString::from_der(echoed).ok();
         if echoed != nonce && nested.as_ref().map(|n| n.as_bytes()) != Some(nonce) {
-            return Ok(Answer::error(
-                tr("ERROR: OCSP response is not for this request (nonce mismatch)"),
-                body,
-            ));
+            return Ok(Answer::error(Status::NonceMismatch, body));
         }
         nonce_ok = true;
     }
@@ -293,7 +323,7 @@ fn evaluate(
                 None => nonce_ok || this_update.is_some_and(|t| t >= now - 3600 * 1000),
             };
             if !fresh || this_update.is_some_and(|t| t > now + skew) {
-                return Ok(Answer::error(tr("ERROR: OCSP answer is out of date"), body));
+                return Ok(Answer::error(Status::OutOfDate, body));
             }
         }
         let checked = match fresh {
@@ -302,12 +332,8 @@ fn evaluate(
         };
         let (mut revoked_at, mut untrusted_from) = (None, None);
         let (good, cert_status, status) = match &s.cert_status {
-            Status::Good(_) => (
-                true,
-                CertStatus::Good,
-                trf("GOOD (not revoked, checked {})", &[&Time(checked)]),
-            ),
-            Status::Revoked(info) => {
+            X::Good(_) => (true, CertStatus::Good, Status::Good { checked }),
+            X::Revoked(info) => {
                 use x509_cert::ext::pkix::CrlReason as R;
                 let when = Some(ms(&info.revocation_time)?);
                 let compromised = matches!(
@@ -316,17 +342,9 @@ fn evaluate(
                 );
                 revoked_at = when;
                 untrusted_from = if compromised { Some(i64::MIN) } else { when };
-                (
-                    false,
-                    CertStatus::Revoked,
-                    trf("REVOKED on {}", &[&Time(when)]),
-                )
+                (false, CertStatus::Revoked, Status::Revoked { at: when })
             }
-            Status::Unknown(_) => (
-                false,
-                CertStatus::Unknown,
-                tr("UNKNOWN (the OCSP server does not know this certificate)"),
-            ),
+            X::Unknown(_) => (false, CertStatus::Unknown, Status::Unknown),
         };
         return Ok(Answer {
             good,
@@ -340,10 +358,7 @@ fn evaluate(
             basic: basic_der,
         });
     }
-    Ok(Answer::error(
-        tr("UNKNOWN (no answer for this certificate)"),
-        body,
-    ))
+    Ok(Answer::error(Status::NoAnswerForCert, body))
 }
 
 /// The response must be signed by the issuing CA itself, or by a responder certificate that the
@@ -356,7 +371,7 @@ fn check_responder(
     issuer: &Cert,
     trust: &TrustStore,
     at: i64,
-) -> core::result::Result<Cert, Text> {
+) -> core::result::Result<Cert, ResponderProblem> {
     let candidates = core::iter::once(issuer).chain(certs.iter());
     for c in candidates {
         let signed = c
@@ -370,21 +385,19 @@ fn check_responder(
             return Ok(c.clone());
         }
         if !cert::names_equal(&c.issuer, &issuer.subject) {
-            return Err(tr("OCSP responder was not issued by the certificate's CA"));
+            return Err(ResponderProblem::NotIssuedByCa);
         }
         if !c.has_eku(cert::EKU_OCSP_SIGNING) {
-            return Err(tr(
-                "OCSP responder certificate is not issued for OCSP signing",
-            ));
+            return Err(ResponderProblem::NotForOcspSigning);
         }
         let chain = trust.check(c, at);
         return if chain.ok {
             Ok(c.clone())
         } else {
-            Err(trf("OCSP responder is not trusted ({})", &[&chain.status]))
+            Err(ResponderProblem::Untrusted(chain.status))
         };
     }
-    Err(tr("OCSP response signature is invalid"))
+    Err(ResponderProblem::BadSignature)
 }
 
 /// Test helpers for this crate's and the application's tests: test keys, certificates issued
@@ -623,10 +636,10 @@ mod tests {
         let a = stored(&reply());
         assert!(
             a.good && a.cert_status == Some(CertStatus::Good),
-            "{}",
+            "{:?}",
             a.status
         );
-        assert!(a.status.to_string().starts_with("GOOD"));
+        assert!(matches!(a.status, Status::Good { .. }));
         assert_eq!(a.this_update, Some(now / 1000 * 1000));
         assert_eq!(a.responder.as_ref(), Some(&ca.cert));
         assert!(!a.basic.is_empty());
@@ -634,7 +647,7 @@ mod tests {
             version: true,
             ..reply()
         });
-        assert!(a.good, "{}", a.status);
+        assert!(a.good, "{:?}", a.status);
 
         // [1] RevokedInfo { revocationTime }
         let revoked = asn1::implicit(1, {
@@ -649,7 +662,7 @@ mod tests {
         });
         assert!(
             !a.good && a.cert_status == Some(CertStatus::Revoked),
-            "{}",
+            "{:?}",
             a.status
         );
         assert_eq!(a.revoked_at, Some((now - 86_400_000) / 1000 * 1000));
@@ -659,7 +672,7 @@ mod tests {
         });
         assert!(
             !a.good && a.cert_status == Some(CertStatus::Unknown),
-            "{}",
+            "{:?}",
             a.status
         );
 
@@ -669,19 +682,16 @@ mod tests {
             ..reply()
         });
         assert!(
-            !a.good
-                && a.status
-                    .to_string()
-                    .contains("no answer for this certificate"),
-            "{}",
+            !a.good && a.status == Status::NoAnswerForCert,
+            "{:?}",
             a.status
         );
         // tryLater (3), with no response bytes
         let r = [0x30, 3, 0x0a, 1, 3];
         let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
         assert!(
-            !a.good && a.status.to_string().contains("status 3"),
-            "{}",
+            !a.good && a.status == Status::ServerError(3),
+            "{:?}",
             a.status
         );
     }
@@ -718,33 +728,27 @@ mod tests {
         // a responder the CA certified for OCSP signing
         let delegated = responder(issue(&ca, &other.cert, true));
         let a = check(&delegated);
-        assert!(a.good, "{}", a.status);
+        assert!(a.good, "{:?}", a.status);
         assert_eq!(a.responder.as_ref(), Some(&delegated.cert));
         // ... not for OCSP signing
         let a = check(&responder(issue(&ca, &other.cert, false)));
         assert!(
-            !a.good && a.status.to_string().contains("not issued for OCSP signing"),
-            "{}",
+            !a.good && a.status == Status::Responder(ResponderProblem::NotForOcspSigning),
+            "{:?}",
             a.status
         );
         // ... certified by someone else
         let a = check(&responder(issue(&carol_key, &other.cert, true)));
         assert!(
-            !a.good
-                && a.status
-                    .to_string()
-                    .contains("not issued by the certificate's CA"),
-            "{}",
+            !a.good && a.status == Status::Responder(ResponderProblem::NotIssuedByCa),
+            "{:?}",
             a.status
         );
         // ... any key at all
         let a = check(&other);
         assert!(
-            !a.good
-                && a.status
-                    .to_string()
-                    .contains("not issued by the certificate's CA"),
-            "{}",
+            !a.good && a.status == Status::Responder(ResponderProblem::NotIssuedByCa),
+            "{:?}",
             a.status
         );
         // a signature that does not hold
@@ -764,8 +768,8 @@ mod tests {
         r[n - 1] ^= 1;
         let a = read_embedded(&r, &carol, &ca.cert, &trust).unwrap();
         assert!(
-            !a.good && a.status.to_string().contains("signature is invalid"),
-            "{}",
+            !a.good && a.status == Status::Responder(ResponderProblem::BadSignature),
+            "{:?}",
             a.status
         );
     }
@@ -841,24 +845,16 @@ mod tests {
                 false,
             ),
         ] {
-            assert_eq!(a.good, ok, "{name}: {}", a.status);
+            assert_eq!(a.good, ok, "{name}: {:?}", a.status);
             if !ok && name != "other nonce" {
-                assert!(
-                    a.status.to_string().contains("out of date"),
-                    "{name}: {}",
-                    a.status
-                );
+                assert!(a.status == Status::OutOfDate, "{name}: {:?}", a.status);
             }
         }
         let a = fresh(now, None, Some(octets(&[8; 16])));
-        assert!(
-            a.status.to_string().contains("nonce mismatch"),
-            "{}",
-            a.status
-        );
+        assert!(a.status == Status::NonceMismatch, "{:?}", a.status);
         // a fresh answer is dated when it was checked, not when it was made
         let a = fresh(now - 2 * 1440 * minute, None, Some(nested));
-        assert_eq!(a.status.args, vec![crate::text::Arg::Time(Some(now))]);
+        assert_eq!(a.status, Status::Good { checked: Some(now) });
     }
 
     #[test]

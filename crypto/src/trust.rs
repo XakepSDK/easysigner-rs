@@ -4,7 +4,6 @@
 use crate::Result;
 use crate::cert::{self, Cert};
 use crate::prelude::*;
-use crate::text::{Text, Time, tr, trf};
 
 /// NCA RK's root and issuing CA certificates, bundled into the executable.
 pub const BUNDLED_CA: [(&str, &[u8]); 10] = [
@@ -29,10 +28,34 @@ pub const BUNDLED_CA: [(&str, &[u8]); 10] = [
     ("nca_rsa_old", include_bytes!("../certs/nca_rsa_old.cer")),
 ];
 
+/// What a path check found. Names are certificates' common names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathStatus {
+    /// The path ends at the trusted CA `ca`.
+    Trusted { ca: String },
+    /// No trusted certificate issued `issuer`'s certificate (the path is not wrong, just not
+    /// known to be good).
+    IssuerNotFound { issuer: String },
+    /// `cert` was not valid at `at` (milliseconds since 1970, UTC).
+    NotValidAt { cert: String, at: i64 },
+    /// A trusted root's own signature does not verify.
+    BadRootSignature,
+    /// A self-signed certificate that is not trusted.
+    UntrustedSelfSigned { cert: String },
+    /// An issuer in the path is not a CA.
+    IssuerNotCa { issuer: String },
+    /// An issuer in the path may not sign certificates (key usage).
+    IssuerMayNotSignCerts { issuer: String },
+    /// More than 10 issuers.
+    TooLong,
+}
+
 /// Outcome of a path check. `issuer` is the certificate's direct issuer, if found.
 pub struct Chain {
+    /// The path ends at a trusted CA ([`PathStatus::Trusted`]).
     pub ok: bool,
-    pub status: Text,
+    pub status: PathStatus,
     pub path: Vec<String>,
     pub issuer: Option<Cert>,
     /// The issuers found, from the direct issuer up to the trusted CA.
@@ -67,69 +90,53 @@ impl TrustStore {
         let mut issuers: Vec<Cert> = Vec::new();
         let r = self.walk(c, at, &mut path, &mut issuers);
         let issuer = issuers.first().cloned();
-        match r {
-            Ok((ok, status)) => Chain {
-                ok,
-                status,
-                path,
-                issuer,
-                issuers,
-            },
-            Err(e) => Chain {
-                ok: false,
-                status: trf("Certificate path not valid: {}", &[&e]),
-                path,
-                issuer,
-                issuers,
-            },
+        Chain {
+            ok: matches!(r, PathStatus::Trusted { .. }),
+            status: r,
+            path,
+            issuer,
+            issuers,
         }
     }
 
-    fn walk(
-        &self,
-        c: &Cert,
-        at: i64,
-        path: &mut Vec<String>,
-        seen: &mut Vec<Cert>,
-    ) -> core::result::Result<(bool, Text), Text> {
+    fn walk(&self, c: &Cert, at: i64, path: &mut Vec<String>, seen: &mut Vec<Cert>) -> PathStatus {
         let mut cur = c.clone();
         let mut is_start = true;
         loop {
             path.push(cur.cn());
             if !cur.valid_on(at) {
-                return Err(trf(
-                    "certificate '{}' was not valid on {}",
-                    &[&cur.cn(), &Time(Some(at))],
-                ));
+                return PathStatus::NotValidAt { cert: cur.cn(), at };
             }
             let self_signed = cur.self_issued();
             if self.trusted.contains(&cur) && (!is_start || self_signed) {
                 if self_signed && !cur.signed_by(&cur) {
-                    return Err(tr("root certificate signature is invalid"));
+                    return PathStatus::BadRootSignature;
                 }
-                return Ok((true, trf("Issued by a trusted CA: {}", &[&cur.cn()])));
+                return PathStatus::Trusted { ca: cur.cn() };
             }
             let Some(issuer) = self.find_issuer(&cur, seen) else {
                 if self_signed {
-                    return Err(trf(
-                        "self-signed certificate '{}' is not a trusted root",
-                        &[&cur.cn()],
-                    ));
+                    return PathStatus::UntrustedSelfSigned { cert: cur.cn() };
                 }
-                return Ok((
-                    false,
-                    trf(
-                        "Issuer not found among trusted NCA RK certificates: {}",
-                        &[&cert::cn(&cur.issuer)],
-                    ),
-                ));
+                return PathStatus::IssuerNotFound {
+                    issuer: cert::cn(&cur.issuer),
+                };
             };
-            require_ca(&issuer)?;
+            if !issuer.is_ca() {
+                return PathStatus::IssuerNotCa {
+                    issuer: issuer.cn(),
+                };
+            }
+            if !issuer.may_sign_certs() {
+                return PathStatus::IssuerMayNotSignCerts {
+                    issuer: issuer.cn(),
+                };
+            }
             seen.push(issuer.clone());
             cur = issuer;
             is_start = false;
             if seen.len() > 10 {
-                return Err(tr("certificate path too long"));
+                return PathStatus::TooLong;
             }
         }
     }
@@ -166,19 +173,6 @@ impl TrustStore {
             .find(|t| c.signed_by(t))
             .cloned()
     }
-}
-
-fn require_ca(issuer: &Cert) -> core::result::Result<(), Text> {
-    if !issuer.is_ca() {
-        return Err(trf("issuer '{}' is not a CA", &[&issuer.cn()]));
-    }
-    if !issuer.may_sign_certs() {
-        return Err(trf(
-            "issuer '{}' may not sign certificates",
-            &[&issuer.cn()],
-        ));
-    }
-    Ok(())
 }
 
 /// Checks the bundled certificates against each other: how many have a signature that no

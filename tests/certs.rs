@@ -46,15 +46,19 @@ fn trust_rests_on_the_ca_signature() {
         let fake = forged(&alice);
         assert!(!fake.signed_by(&ca), "{a}");
         let chain = store.check(&fake, now);
-        assert!(!chain.ok && chain.issuer.is_none(), "{a}: {}", chain.status);
+        assert!(
+            !chain.ok && chain.issuer.is_none(),
+            "{a}: {:?}",
+            chain.status
+        );
 
         // a trusted root whose own signature is broken
         let bad_root = forged(&ca);
         let chain = TrustStore::new(vec![bad_root.clone()]).check(&bad_root, now);
         assert!(!chain.ok, "{a}");
         assert!(
-            chain.status.to_string().contains("signature"),
-            "{a}: {}",
+            kzsigner::i18n::text(&chain.status).contains("signature"),
+            "{a}: {:?}",
             chain.status
         );
 
@@ -76,8 +80,8 @@ fn dates_and_ca_rights() {
     assert!(store.check(&alice, alice.not_before).ok);
     let late = store.check(&alice, alice.not_after + 1);
     assert!(
-        !late.ok && late.status.to_string().contains("not valid on"),
-        "{}",
+        !late.ok && kzsigner::i18n::text(&late.status).contains("not valid on"),
+        "{:?}",
         late.status
     );
 
@@ -291,19 +295,19 @@ fn issuers_must_be_cas() {
     assert!(by_alice.signed_by(&alice.cert));
     let store = TrustStore::new(vec![ca.clone(), alice.cert.clone()]);
     let chain = store.check(&by_alice, now);
-    assert!(!chain.ok, "{}", chain.status);
+    assert!(!chain.ok, "{:?}", chain.status);
     assert!(
-        chain.status.to_string().contains("is not a CA"),
-        "{}",
+        kzsigner::i18n::text(&chain.status).contains("is not a CA"),
+        "{:?}",
         chain.status
     );
 
     // a trusted certificate that is not a root still needs its own issuer
     let chain = TrustStore::new(vec![alice.cert.clone()]).check(&alice.cert, now);
-    assert!(!chain.ok && chain.issuer.is_none(), "{}", chain.status);
+    assert!(!chain.ok && chain.issuer.is_none(), "{:?}", chain.status);
     assert!(
-        chain.status.to_string().contains("Issuer not found"),
-        "{}",
+        kzsigner::i18n::text(&chain.status).contains("Issuer not found"),
+        "{:?}",
         chain.status
     );
 }

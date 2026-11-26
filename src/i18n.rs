@@ -101,19 +101,93 @@ pub fn trf_in(l: Lang, template: &'static str, args: &[&dyn Display]) -> String 
     out
 }
 
-/// A [`kzcrypto::Text`] (a message from the cryptography) in the current language.
-pub fn text(t: &kzcrypto::Text) -> String {
-    text_in(lang(), t)
+/// A message (a [`kzcrypto::Text`], or a status from the cryptography) in the current
+/// language.
+pub fn text<W: Words + ?Sized>(w: &W) -> String {
+    text_in(lang(), w)
 }
 
 /// [`text`] in language `l`. Times are shown in this computer's time zone.
-pub fn text_in(l: Lang, t: &kzcrypto::Text) -> String {
+pub fn text_in<W: Words + ?Sized>(l: Lang, w: &W) -> String {
     use kzcrypto::text::Arg;
+    let t = w.words();
     t.fill(tr_in(l, t.template), &mut |a| match a {
         Arg::Str(s) => s.clone(),
         Arg::Time(ms) => crate::time::fmt(*ms),
-        Arg::Text(t) => text_in(l, t),
+        Arg::Text(t) => text_in(l, t.as_ref()),
     })
+}
+
+/// What the cryptography reports, put in words: an English template and its arguments, which
+/// [`text`] translates.
+pub trait Words {
+    fn words(&self) -> kzcrypto::Text;
+}
+
+impl Words for kzcrypto::Text {
+    fn words(&self) -> kzcrypto::Text {
+        self.clone()
+    }
+}
+
+impl Words for kzcrypto::trust::PathStatus {
+    fn words(&self) -> kzcrypto::Text {
+        use kzcrypto::text::Time;
+        use kzcrypto::trust::PathStatus as P;
+        use kzcrypto::{tr, trf};
+        let invalid = |why: kzcrypto::Text| trf("Certificate path not valid: {}", &[&why]);
+        match self {
+            P::Trusted { ca } => trf("Issued by a trusted CA: {}", &[ca]),
+            P::IssuerNotFound { issuer } => trf(
+                "Issuer not found among trusted NCA RK certificates: {}",
+                &[issuer],
+            ),
+            P::NotValidAt { cert, at } => invalid(trf(
+                "certificate '{}' was not valid on {}",
+                &[cert, &Time(Some(*at))],
+            )),
+            P::BadRootSignature => invalid(tr("root certificate signature is invalid")),
+            P::UntrustedSelfSigned { cert } => invalid(trf(
+                "self-signed certificate '{}' is not a trusted root",
+                &[cert],
+            )),
+            P::IssuerNotCa { issuer } => invalid(trf("issuer '{}' is not a CA", &[issuer])),
+            P::IssuerMayNotSignCerts { issuer } => {
+                invalid(trf("issuer '{}' may not sign certificates", &[issuer]))
+            }
+            P::TooLong => invalid(tr("certificate path too long")),
+            _ => invalid(tr("unknown problem")),
+        }
+    }
+}
+
+impl Words for kzcrypto::ocsp::Status {
+    fn words(&self) -> kzcrypto::Text {
+        use kzcrypto::ocsp::{ResponderProblem as R, Status as S};
+        use kzcrypto::text::Time;
+        use kzcrypto::{tr, trf};
+        let error = |why: kzcrypto::Text| trf("ERROR: {}", &[&why]);
+        match self {
+            S::Good { checked } => trf("GOOD (not revoked, checked {})", &[&Time(*checked)]),
+            S::Revoked { at } => trf("REVOKED on {}", &[&Time(*at)]),
+            S::Unknown => tr("UNKNOWN (the OCSP server does not know this certificate)"),
+            S::NoAnswerForCert => tr("UNKNOWN (no answer for this certificate)"),
+            S::ServerError(n) => trf("ERROR: OCSP server answered status {}", &[n]),
+            S::NonceMismatch => tr("ERROR: OCSP response is not for this request (nonce mismatch)"),
+            S::OutOfDate => tr("ERROR: OCSP answer is out of date"),
+            S::Responder(R::BadSignature) => error(tr("OCSP response signature is invalid")),
+            S::Responder(R::NotIssuedByCa) => {
+                error(tr("OCSP responder was not issued by the certificate's CA"))
+            }
+            S::Responder(R::NotForOcspSigning) => error(tr(
+                "OCSP responder certificate is not issued for OCSP signing",
+            )),
+            S::Responder(R::Untrusted(p)) => {
+                error(trf("OCSP responder is not trusted ({})", &[&p.words()]))
+            }
+            _ => error(tr("unknown problem")),
+        }
+    }
 }
 
 /// The language for the window: the one chosen in it before, else KZSIGNER_LANG, else the
@@ -276,6 +350,7 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("self-signed certificate '{}' is not a trusted root", "өзі қол қойған '{}' куәлігі сенімді түбірлік куәлік емес", "самоподписанный сертификат '{}' не является доверенным корневым"),
     ("Issuer not found among trusted NCA RK certificates: {}", "Куәлікті берген ҚР ҰКО сенімді куәліктерінің арасында жоқ: {}", "Издатель не найден среди доверенных сертификатов НУЦ РК: {}"),
     ("certificate path too long", "куәліктер тізбегі тым ұзын", "слишком длинная цепочка сертификатов"),
+    ("unknown problem", "белгісіз ақау", "неизвестная проблема"),
     ("GOST 34.310-2004 keys can no longer sign; they only check old signatures", "ГОСТ 34.310-2004 кілттерімен енді қол қоюға болмайды; олар тек ескі қолтаңбаларды тексеруге жарайды", "Ключами ГОСТ 34.310-2004 больше нельзя подписывать; они годятся только для проверки старых подписей"),
     ("'{}' is not an object identifier", "'{}' объект идентификаторы емес", "'{}' не является идентификатором объекта (OID)"),
     ("issuer '{}' is not a CA", "'{}' куәландырушы орталық емес", "издатель '{}' не является удостоверяющим центром"),
