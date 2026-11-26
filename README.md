@@ -206,9 +206,9 @@ DES/RC2/AES-CBC and RSA (`rsa`, constant-time `crypto-bigint`), `ureq` for HTTP 
   repository; see [crypto/README.md](crypto/README.md).
   * `gost.rs`: the KZ profiles of the GOST algorithms. GOST 34.311-95 is GOST R 34.11-94 with
     the test S-box (RustCrypto `gost94`), GOST 34.11-2015 is Streebog (`streebog`). GOST 34.10
-    signatures on the CryptoPro-A, TC26 256-A and TC26 512-A curves are implemented here
-    (Jacobian coordinates on `num-bigint`), with NCA's little-endian conventions for keys and
-    signatures.
+    signatures on the CryptoPro-A, TC26 256-A and TC26 512-A curves are the `gost3410` crate's
+    (`crates/gost3410`, on RustCrypto's `elliptic-curve`: constant-time, keys wiped on drop),
+    with NCA's little-endian conventions for keys and signatures.
   * `keys.rs`: KZ GOST and RSA keys; RSA PKCS#1 v1.5 signing and verification with the `rsa`
     crate.
   * `p12.rs`: PKCS#12 key files as Kalkan writes them (BER, 3DES key bag, RC2-40 certificate
@@ -292,8 +292,7 @@ they stay sharp at any scale with no image files. Fonts are a 51 KB subset of No
   signatures `xmlsec1` makes. The GOST ones use the same signature and hash bytes as Kalkan's
   CMS (NCALayer's XML bundle passes them through unchanged), but have not been checked
   against NCALayer itself. XAdES B-LT/B-LTA were checked by kzsigner's own tests only.
-* The GOST curve arithmetic is on `num-bigint`, which is not constant-time (no maintained Rust
-  crate implements KZ GOST 34.10). Keys never leave the computer. RSA uses the `rsa` crate.
+* RSA uses the `rsa` crate. Keys never leave the computer.
 
 ## Tests
 
