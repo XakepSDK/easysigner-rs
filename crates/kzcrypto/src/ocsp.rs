@@ -435,6 +435,11 @@ pub mod testkit {
     /// A certificate for `subject`'s key issued by `by`, with the OCSP signing purpose when
     /// `ocsp`.
     pub fn issue(by: &crate::p12::Key, subject: &Cert, ocsp: bool) -> Cert {
+        issue_as(by, subject, ocsp, "CN=TEST OCSP RESPONDER")
+    }
+
+    /// [`issue`], to the subject `name` (RFC 4514: "CN=IVANOV,SERIALNUMBER=IIN900101300123").
+    pub fn issue_as(by: &crate::p12::Key, subject: &Cert, ocsp: bool, name: &str) -> Cert {
         use ::der::asn1::{GeneralizedTime, ObjectIdentifier};
         use core::str::FromStr;
         use x509_cert::time::{Time, Validity};
@@ -467,7 +472,7 @@ pub mod testkit {
             signature: alg.clone(),
             issuer: asn1::any(&by.cert.subject).unwrap(),
             validity: Validity::<Raw>::new(time(by.cert.not_before), time(by.cert.not_after)),
-            subject: x509_cert::name::Name::from_str("CN=TEST OCSP RESPONDER").unwrap(),
+            subject: x509_cert::name::Name::from_str(name).unwrap(),
             subject_public_key_info: asn1::any(&subject.spki).unwrap(),
             extensions,
         }

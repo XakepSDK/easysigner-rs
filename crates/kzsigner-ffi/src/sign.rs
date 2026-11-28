@@ -22,6 +22,8 @@ pub struct Nca {
     pub(crate) tsa: String,
     pub(crate) ocsp: String,
     pub(crate) engine: Engine,
+    /// The CAs trusted besides NCA RK's (the tests'), for another [`kzsigner::env::Env`].
+    pub(crate) extra_trust: Vec<Cert>,
 }
 
 #[uniffi::export]
@@ -61,7 +63,8 @@ impl Nca {
         Nca {
             tsa: tsa.into(),
             ocsp: ocsp.into(),
-            engine: Engine::new(extra_trust),
+            engine: Engine::new(extra_trust.clone()),
+            extra_trust,
         }
     }
 }
@@ -253,7 +256,7 @@ pub(crate) fn signers(e: &Engine, bytes: &[u8]) -> Vec<SignedBy> {
     v
 }
 
-fn signed_by(s: &SignerReport) -> SignedBy {
+pub(crate) fn signed_by(s: &SignerReport) -> SignedBy {
     let company = s
         .cert_der
         .as_deref()
@@ -268,7 +271,7 @@ fn signed_by(s: &SignerReport) -> SignedBy {
 
 /// Why `c` can't sign today, asking NCA: before any prompt, so a key that can't sign asks
 /// nothing. `Ok` when NCA says it is good.
-fn check(nca: &Nca, c: &Cert) -> Result<(), SignError> {
+pub(crate) fn check(nca: &Nca, c: &Cert) -> Result<(), SignError> {
     let refuse = |reason| SignError::KeyCantSign {
         reason,
         valid_from_ms: c.not_before,
@@ -314,34 +317,9 @@ impl Vault {
         if doc.output == Output::Cannot {
             return Err(SignError::Cannot);
         }
-        let cert = {
-            let s = self.store();
-            let e = s
-                .keys()
-                .iter()
-                .find(|e| e.id == key_id)
-                .ok_or(SignError::NoSuchKey)?;
-            e.cert().clone()
-        };
+        let cert = self.cert_of(&key_id)?;
         check(&nca, &cert)?;
-        let password = password.map(Zeroizing::new);
-        let key = self
-            .store()
-            .key(
-                &key_id,
-                password.as_deref().map(String::as_str),
-                &prompt.into(),
-            )
-            .map_err(|e| match e {
-                VaultError::Cancelled => SignError::Cancelled,
-                VaultError::KeyReset => SignError::KeyReset,
-                VaultError::WrongPassword => SignError::WrongPassword,
-                VaultError::Wait(seconds) => SignError::Wait { seconds },
-                VaultError::NoSuchKey => SignError::NoSuchKey,
-                e => SignError::Failed {
-                    detail: e.to_string(),
-                },
-            })?;
+        let key = self.open_key(&key_id, password, prompt)?;
         let e = &nca.engine;
         // what every front end makes by default, with this app's NCA servers; revocation
         // was checked above: not twice
@@ -371,7 +349,51 @@ impl Vault {
     }
 }
 
+impl Vault {
+    /// Key `key_id`'s certificate (no prompt).
+    pub(crate) fn cert_of(&self, key_id: &str) -> Result<Cert, SignError> {
+        let s = self.store();
+        let e = s
+            .keys()
+            .iter()
+            .find(|e| e.id == key_id)
+            .ok_or(SignError::NoSuchKey)?;
+        Ok(e.cert().clone())
+    }
+
+    /// Opens key `key_id`: one prompt, or `password` for a key kept under its password.
+    pub(crate) fn open_key(
+        &self,
+        key_id: &str,
+        password: Option<String>,
+        prompt: ChipPrompt,
+    ) -> Result<kzsigner::p12::Key, SignError> {
+        let password = password.map(Zeroizing::new);
+        self.store()
+            .key(
+                key_id,
+                password.as_deref().map(String::as_str),
+                &prompt.into(),
+            )
+            .map_err(|e| match e {
+                VaultError::Cancelled => SignError::Cancelled,
+                VaultError::KeyReset => SignError::KeyReset,
+                VaultError::WrongPassword => SignError::WrongPassword,
+                VaultError::Wait(seconds) => SignError::Wait { seconds },
+                VaultError::NoSuchKey => SignError::NoSuchKey,
+                e => SignError::Failed {
+                    detail: e.to_string(),
+                },
+            })
+    }
+}
+
 /// NCA's time on the newest signature in `r`.
+pub(crate) fn nca_time_of(e: &Engine, pdf: &[u8]) -> Option<i64> {
+    let rep = e.verify(pdf, None, None).ok()?;
+    rep.signers.iter().filter_map(|s| s.timestamp_time).max()
+}
+
 fn nca_time(e: &Engine, r: &SignResult) -> Option<i64> {
     let rep = e.verify(&r.cms, None, None).ok()?;
     rep.signers.iter().filter_map(|s| s.timestamp_time).max()

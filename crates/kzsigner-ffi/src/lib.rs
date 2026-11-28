@@ -18,8 +18,10 @@ use zeroize::Zeroizing;
 uniffi::setup_scaffolding!();
 
 mod check;
+mod inperson;
 mod sign;
 pub use check::*;
+pub use inperson::*;
 pub use sign::*;
 
 /// Why a call failed.

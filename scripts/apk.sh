@@ -97,8 +97,9 @@ else
     fi
 fi
 
+# KZSIGNER_GRADLE_ARGS: more Gradle options (an init script with a Maven mirror, say)
 # shellcheck disable=SC2086
-"$GRADLE" -q -p apps/android --no-daemon --console=plain $TASKS \
+"$GRADLE" -q -p apps/android --no-daemon --console=plain ${KZSIGNER_GRADLE_ARGS:-} $TASKS \
     -Pkzsigner.version="$V" \
     -Pkzsigner.ffiLibs="$(pwd)/$FFI" -Pkzsigner.ffiKotlin="$(pwd)/target/uniffi-kotlin"
 mkdir -p "$(dirname "$OUT")"

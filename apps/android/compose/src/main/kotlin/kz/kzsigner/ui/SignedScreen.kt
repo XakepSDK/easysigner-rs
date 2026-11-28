@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import kz.kzsigner.AppModel
 import kz.kzsigner.Files
 import kz.kzsigner.R
+import kz.kzsigner.core.Signed
 
 /**
  * Screen 4: signed, with NCA's time; Send (the share sheet), Save to phone (the system's
@@ -50,6 +51,12 @@ import kz.kzsigner.R
 @Composable
 fun SignedScreen(model: AppModel, onDone: () -> Unit) {
     val s = model.signing.signed ?: return
+    SignedFile(s, stringResource(R.string.signed_title), onDone)
+}
+
+/** A signed file with Send, Save to phone and Done: [SignedScreen], and signing in person's copy. */
+@Composable
+fun SignedFile(s: Signed, title: String, onDone: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val savedText = stringResource(R.string.saved)
@@ -96,7 +103,7 @@ fun SignedScreen(model: AppModel, onDone: () -> Unit) {
             }
             Spacer(Modifier.size(20.dp))
             Text(
-                stringResource(R.string.signed_title),
+                title,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.semantics { heading() }

@@ -10,6 +10,10 @@ plugins {
 val ffiLibs = providers.gradleProperty("kzsigner.ffiLibs").getOrElse("../../../target/android-ffi")
 val ffiKotlin = providers.gradleProperty("kzsigner.ffiKotlin").getOrElse("../../../target/uniffi-kotlin")
 val appVersion = providers.gradleProperty("kzsigner.version").getOrElse("0.0.0-dev")
+// -Pkzsigner.screenshots=<folder> (scripts/screenshots.sh): adds the screenshot test
+// (src/screenshots) to the unit tests; it draws the screens with Robolectric over this
+// machine's build of the core and saves PNGs there. Without it, none of that is downloaded.
+val screenshots = providers.gradleProperty("kzsigner.screenshots").orNull
 
 layout.buildDirectory = file("../../../target/gradle-compose")
 
@@ -38,6 +42,7 @@ android {
         kotlin.directories.add(ffiKotlin)
         jniLibs.directories.add(ffiLibs)
     }
+    if (screenshots != null) sourceSets["test"].kotlin.directories.add("src/screenshots/kotlin")
 
     signingConfigs {
         // the public development key, for the emulator tests' build
@@ -90,6 +95,22 @@ android {
         }
     }
 
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = screenshots != null
+            all { t ->
+                if (screenshots != null) {
+                    t.systemProperty("kzsigner.screenshots", screenshots)
+                    t.systemProperty("kzsigner.testdata", rootProject.file("../../testdata").path)
+                    // the core built for this machine (cargo build -p kzsigner-ffi)
+                    t.systemProperty("jna.library.path", rootProject.file("../../target/debug").path)
+                    // the bindings' cleaner is Android's, which Robolectric runs on the JDK's own
+                    t.jvmArgs("--add-exports=java.base/jdk.internal.ref=ALL-UNNAMED")
+                }
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -131,9 +152,21 @@ dependencies {
     // the UniFFI bindings call the Rust library through JNA; the aar carries its Android .so
     implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.21"))
+    // signing in person: the QR code drawn (ZXing) and scanned with the camera (ZXing Android
+    // Embedded, its open-source scanner screen; no Google Play services)
+    implementation("com.google.zxing:core:3.5.4")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // JVM unit tests (src/test): plain logic, no phone needed
     testImplementation("junit:junit:4.13.2")
+    // the screenshot test only (-Pkzsigner.screenshots): Compose drawn by Robolectric, and JNA
+    // for this machine
+    if (screenshots != null) {
+        testImplementation("org.robolectric:robolectric:4.18.1")
+        testImplementation("androidx.compose.ui:ui-test-junit4")
+        debugImplementation("androidx.compose.ui:ui-test-manifest")
+        testImplementation("net.java.dev.jna:jna:5.19.1")
+    }
     pitest("org.pitest:pitest-command-line:1.30.2")
 }
 

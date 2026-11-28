@@ -1380,8 +1380,10 @@ dependencies = [
  "base16ct",
  "crypto-bigint",
  "crypto-common",
+ "digest",
  "ff",
  "group",
+ "hkdf",
  "hybrid-array",
  "rand_core",
  "sec1",
@@ -2005,6 +2007,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac",
+]
+
+[[package]]
 name = "hmac"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2326,11 +2337,14 @@ dependencies = [
  "der-testkit",
  "flate2",
  "getrandom 0.4.3",
+ "hkdf",
  "jiff",
  "kzcrypto",
  "kzcrypto-nca",
  "lopdf",
+ "p256",
  "roxmltree",
+ "sha2",
  "skrifa",
  "spki",
  "ureq",
@@ -2367,6 +2381,7 @@ name = "kzsigner-ffi"
 version = "0.1.0-dev"
 dependencies = [
  "der-testkit",
+ "kzcrypto",
  "kzsigner",
  "uniffi",
  "zeroize",
@@ -3045,6 +3060,17 @@ checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "p256"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"
+dependencies = [
+ "elliptic-curve",
+ "primefield",
+ "primeorder",
 ]
 
 [[package]]
