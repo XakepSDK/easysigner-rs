@@ -16,6 +16,10 @@ use crate::{Error, Result, Server, gost};
 const REQUEST_LIFETIME_MS: i64 = 15 * 60 * 1000;
 /// The biggest revocation list passed on for a signer.
 const CRL_LIMIT: u64 = 256 << 20;
+/// The most requests passed on for one signer: a few OCSP, timestamp and revocation list calls.
+const RELAY_LIMIT: usize = 16;
+/// The hosts a signer's requests may be passed on to: NCA's.
+const NCA_HOSTS: [&str; 3] = ["ocsp.pki.gov.kz", "tsp.pki.gov.kz", "crl.pki.gov.kz"];
 
 /// One signing session on the lawyer's phone. The lawyer's key is opened once for it.
 pub struct Lawyer {
@@ -26,6 +30,7 @@ pub struct Lawyer {
     page: WhoSigned,
     timestamp: bool,
     ocsp_url: Option<String>,
+    relay_hosts: Vec<String>,
     signed: Vec<Signed>,
     finished: bool,
 }
@@ -37,8 +42,8 @@ pub struct Signed {
     pub iin: Option<String>,
     /// The hash of their certificate.
     pub cert_hash: Vec<u8>,
-    /// The signed ack they got, given again when they scan once more.
-    ack: Msg,
+    slot: u32,
+    digest: Vec<u8>,
 }
 
 /// A signature the lawyer is asked to accept: who, and the checks of it.
@@ -88,6 +93,7 @@ impl Lawyer {
             page,
             timestamp,
             ocsp_url: None,
+            relay_hosts: NCA_HOSTS.iter().map(|h| h.to_string()).collect(),
             signed: Vec::new(),
             finished: false,
         })
@@ -96,6 +102,12 @@ impl Lawyer {
     /// Checks each signer's certificate with OCSP at `url` before accepting.
     pub fn with_ocsp(mut self, url: &str) -> Lawyer {
         self.ocsp_url = Some(url.to_string());
+        self
+    }
+
+    /// Also passes a signer's requests on to `host` (NCA's own hosts always are).
+    pub fn allow_relay_host(mut self, host: &str) -> Lawyer {
+        self.relay_hosts.push(host.to_ascii_lowercase());
         self
     }
 
@@ -110,16 +122,12 @@ impl Lawyer {
         )?;
         self.pdf = r.cms;
         let (name, iin) = who(&self.key.cert);
-        let ack = self.ack(
-            cert_hash(&self.key.cert.der),
-            r.signer_count as u32 - 1,
-            true,
-        )?;
         self.signed.push(Signed {
             name,
             iin,
             cert_hash: cert_hash(&self.key.cert.der),
-            ack,
+            slot: r.signer_count as u32 - 1,
+            digest: Vec::new(),
         });
         Ok(())
     }
@@ -149,6 +157,20 @@ impl Lawyer {
         env: &Env,
         decide: &mut dyn FnMut(&Candidate) -> bool,
     ) -> Result<Served> {
+        let r = self.serve_inner(ch, env, decide);
+        if let Err(e) = &r {
+            // the signer is told, not left waiting
+            let _ = ch.send(&Msg::Refuse { why: e.to_string() }.encode());
+        }
+        r
+    }
+
+    fn serve_inner(
+        &mut self,
+        ch: &mut dyn Channel,
+        env: &Env,
+        decide: &mut dyn FnMut(&Candidate) -> bool,
+    ) -> Result<Served> {
         let Ok(first) = ch.recv() else {
             return Ok(Served::Dropped);
         };
@@ -173,14 +195,20 @@ impl Lawyer {
             } else {
                 Msg::Done
             };
-            let ok = ch
-                .send(&s.ack.encode())
-                .and_then(|_| ch.send(&last.encode()));
-            return Ok(if ok.is_ok() {
-                Served::Status(name)
-            } else {
-                Served::Dropped
-            });
+            let ack = self.ack(ch, s.cert_hash.clone(), s.slot, s.digest.clone(), true)?;
+            let ok = ch.send(&ack.encode()).and_then(|_| ch.send(&last.encode()));
+            if ok.is_err() {
+                return Ok(Served::Dropped);
+            }
+            // the signer may check the ack through this phone; until it says it's done
+            let mut relayed = 0;
+            while let Ok(Msg::Net { server, url, body }) = ch.recv().and_then(|m| Msg::parse(&m)) {
+                let answer = self.pass_on(env, server, &url, &body, &mut relayed);
+                if ch.send(&Msg::NetAnswer { answer }.encode()).is_err() {
+                    break;
+                }
+            }
+            return Ok(Served::Status(name));
         }
         if self.finished {
             return refuse(ch, tr("Signing of this document is finished.").into());
@@ -205,7 +233,7 @@ impl Lawyer {
         let terms = Terms {
             doc_id: self.doc_id,
             slot: slot as u32,
-            digest,
+            digest: digest.clone(),
             title: self.title.clone(),
             lawyer_cert: self.key.cert.der.clone(),
             signer_cert_hash: hash.clone(),
@@ -219,6 +247,7 @@ impl Lawyer {
             return Ok(Served::Dropped);
         }
 
+        let mut relayed = 0;
         loop {
             let Ok(m) = ch.recv() else {
                 return Ok(Served::Dropped);
@@ -236,7 +265,7 @@ impl Lawyer {
                     .encode(),
                 ),
                 Msg::Net { server, url, body } => {
-                    let answer = pass_on(env, server, &url, &body).map_err(|e| e.to_string());
+                    let answer = self.pass_on(env, server, &url, &body, &mut relayed);
                     ch.send(&Msg::NetAnswer { answer }.encode())
                 }
                 Msg::Cancel => return Ok(Served::Cancelled),
@@ -253,14 +282,15 @@ impl Lawyer {
                         iin: iin.clone(),
                         report: &report,
                     });
-                    let ack = self.ack(hash.clone(), slot as u32, accepted)?;
+                    let ack = self.ack(ch, hash.clone(), slot as u32, digest.clone(), accepted)?;
                     if accepted {
                         self.pdf = pdf;
                         self.signed.push(Signed {
                             name: name.clone(),
                             iin: iin.clone(),
                             cert_hash: hash,
-                            ack: ack.clone(),
+                            slot: slot as u32,
+                            digest,
                         });
                     }
                     // accepted stands even if the ack doesn't arrive: a rescan gives it again
@@ -320,14 +350,69 @@ impl Lawyer {
                 .unwrap_or_default();
             return Err(Error::new(trf("The signature is not valid: {}", &[&why])));
         }
+        if self.timestamp && s.timestamp_ok != Some(true) {
+            return Err(Error::new(tr(
+                "The signature has no valid NCA timestamp, which was asked for.",
+            )));
+        }
         Ok((pdf, s))
     }
 
-    fn ack(&self, signer_cert_hash: Vec<u8>, slot: u32, accepted: bool) -> Result<Msg> {
+    /// A signer's OCSP or timestamp request (or revocation list), sent on from this phone to
+    /// NCA's servers only, a few per signer. The signer's phone made it and checks the answer;
+    /// this one only carries it.
+    fn pass_on(
+        &self,
+        env: &Env,
+        server: Server,
+        url: &str,
+        body: &[u8],
+        count: &mut usize,
+    ) -> std::result::Result<Vec<u8>, String> {
+        *count += 1;
+        if *count > RELAY_LIMIT || !self.may_relay(url) {
+            return Err(
+                tr("The lawyer's phone passes on requests to NCA's servers only.").to_string(),
+            );
+        }
+        match server {
+            Server::Ocsp => env.net.post(server, url, crate::ocsp::CONTENT_TYPE, body),
+            Server::Timestamp => env.net.post(server, url, crate::tsp::CONTENT_TYPE, body),
+            Server::RevocationList => env.net.get(server, url, CRL_LIMIT),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Whether a signer's request to `url` may be passed on: to an allowed host, over http.
+    fn may_relay(&self, url: &str) -> bool {
+        let Some(rest) = url.strip_prefix("http://") else {
+            return false;
+        };
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        if authority.contains('@') {
+            return false;
+        }
+        let host = authority.split(':').next().unwrap_or_default();
+        self.relay_hosts
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(host))
+    }
+
+    /// The signed ack for this session.
+    fn ack(
+        &self,
+        ch: &dyn Channel,
+        signer_cert_hash: Vec<u8>,
+        slot: u32,
+        digest: Vec<u8>,
+        accepted: bool,
+    ) -> Result<Msg> {
         let ack = Ack {
             doc_id: self.doc_id,
             slot,
             signer_cert_hash,
+            digest,
+            transcript: ch.transcript().to_vec(),
             accepted,
         }
         .encode();
@@ -349,16 +434,6 @@ impl Lawyer {
         )
         .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
         Ok(sd.encode()?)
-    }
-}
-
-/// A signer's OCSP or timestamp request (or revocation list), sent on from this phone. The
-/// signer's phone made it and checks the answer; this one only carries it.
-fn pass_on(env: &Env, server: Server, url: &str, body: &[u8]) -> Result<Vec<u8>> {
-    match server {
-        Server::Ocsp => env.net.post(server, url, crate::ocsp::CONTENT_TYPE, body),
-        Server::Timestamp => env.net.post(server, url, crate::tsp::CONTENT_TYPE, body),
-        Server::RevocationList => env.net.get(server, url, CRL_LIMIT),
     }
 }
 

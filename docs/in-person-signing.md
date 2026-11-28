@@ -70,6 +70,8 @@ Connections aren't kept open. Each signer's app saves the state ("signed, waitin
 | Dishonest lawyer (shows A, has B signed) | Prevented for signers who read first; others rely on trust and the signed request |
 | Lawyer tampering with relayed NCA traffic | Can only delay, visibly |
 | Final file that leaves out a signer | Not prevented; each signer can see whether their own signature is in their copy |
+| Someone sends a signer's (public) certificate after the end to get the final file | Not prevented: the file is shared with the signers anyway; a key-proof on rescan can come later |
+| Signer uses the relay to reach other hosts | The lawyer's phone passes on only to NCA's OCSP, TSA and CRL hosts, a few requests per signer |
 
 ## Open items
 

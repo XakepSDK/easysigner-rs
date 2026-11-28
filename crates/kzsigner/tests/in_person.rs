@@ -45,9 +45,13 @@ fn env() -> Env {
 }
 
 fn lawyer(timestamp: bool) -> Lawyer {
+    lawyer_with(key("kalkan/alice_gost2015.p12"), timestamp)
+}
+
+fn lawyer_with(k: Key, timestamp: bool) -> Lawyer {
     Lawyer::new(
         fx("pdf/plain.pdf"),
-        key("kalkan/alice_gost2015.p12"),
+        k,
         "Dogovor_arendy_2026.pdf",
         WhoSigned {
             document: "Dogovor_arendy_2026.pdf".into(),
@@ -123,15 +127,27 @@ fn a_signer_reads_signs_and_gets_the_final_copy() {
         }
         let (ch, h) = serve(l, true);
         let mut s = Signer::new(Box::new(ch), bob.cert.clone());
-        let Offer::Signed { ack, final_pdf } = s.start(&env(), None).unwrap() else {
+        let Offer::Signed {
+            ack,
+            final_pdf,
+            lawyer_cert,
+        } = s.start(&env(), None).unwrap()
+        else {
             panic!("not signed")
         };
-        assert!(ack.accepted);
+        assert!(ack.accepted && ack.slot == 1);
+        assert_eq!(lawyer_cert, out.lawyer_cert);
         assert_eq!(final_pdf.is_some(), finished);
         let (served, back) = h.join().unwrap();
         assert!(matches!(served, Served::Status(_)));
         l = back;
     }
+
+    // an ack signed by someone other than the lawyer met before doesn't count
+    let (ch, h) = serve(l, true);
+    let mut s = Signer::new(Box::new(ch), bob.cert.clone()).with_lawyer(bob.cert.der.clone());
+    assert!(s.start(&env(), None).is_err());
+    let (_, l) = h.join().unwrap();
 
     // and nobody new signs a finished document
     let (ch, h) = serve(l, true);
@@ -208,14 +224,25 @@ fn the_first_signer_certifies() {
 /// reads it: signing is refused and the signed request is kept.
 #[test]
 fn a_file_that_is_not_the_one_requested_blocks_signing() {
-    struct Swap(Pipe);
+    // a byte of the document changed, or a file that can't even be checked
+    for unreadable in [false, true] {
+        swapped_file(unreadable);
+    }
+}
+
+fn swapped_file(unreadable: bool) {
+    struct Swap(Pipe, bool);
     impl Channel for Swap {
         fn send(&mut self, m: &[u8]) -> kzsigner::Result<()> {
             let mut m = m.to_vec();
-            // the File message (kind 4): change a byte of the document in it
+            // the File message (kind 4): format, kind, master_len (8 bytes), the PDF
             if m[1] == 4 {
-                let at = m.len() / 3;
-                m[at] ^= 1;
+                if self.1 {
+                    m[2..10].fill(0);
+                } else {
+                    let at = m.len() / 3;
+                    m[at] ^= 1;
+                }
             }
             self.0.send(&m)
         }
@@ -231,15 +258,17 @@ fn a_file_that_is_not_the_one_requested_blocks_signing() {
     let before = l.pdf().to_vec();
     let (a, b) = inperson::pipe();
     let h = thread::spawn(move || {
-        let mut a = Swap(a);
+        let mut a = Swap(a, unreadable);
         let s = l.serve(&mut a, &env(), &mut |_| true).unwrap();
         (s, l)
     });
     let bob = key("kalkan/bob_gost2015.p12");
     let mut s = Signer::new(Box::new(b), bob.cert.clone());
     assert!(matches!(s.start(&env(), None).unwrap(), Offer::Sign(_)));
-    let copy = s.read(&env(), None).unwrap();
-    assert!(!copy.matches);
+    match s.read(&env(), None) {
+        Ok(copy) => assert!(!copy.matches && !unreadable),
+        Err(_) => assert!(unreadable),
+    }
     assert!(s.request_evidence().is_some());
     let e = s.sign(&bob, &env(), None, None).unwrap_err().to_string();
     assert!(e.contains("not the one"), "{e}");
@@ -254,7 +283,8 @@ fn a_file_that_is_not_the_one_requested_blocks_signing() {
 fn ocsp_and_timestamp_through_the_lawyers_phone() {
     let ocsp = nca::fake_ocsp(false);
     let tsa = nca::fake_tsa();
-    let mut l = lawyer(true);
+    // a lawyer the fake OCSP responder knows too
+    let mut l = lawyer_with(dave("keys/alice_gost2015_256.p12"), true);
     l.sign_self(Some(&tsa), &env()).unwrap();
     // the lawyer's phone counts what it passes on
     struct Counting(Arc<AtomicUsize>);
@@ -269,6 +299,7 @@ fn ocsp_and_timestamp_through_the_lawyers_phone() {
         }
     }
     let passed = Arc::new(AtomicUsize::new(0));
+    let l = l.allow_relay_host("127.0.0.1");
     let (ch, h) = serve_with(l, true, env().with_net(Arc::new(Counting(passed.clone()))));
     let carol = dave("kalkan/bob_gost2015.p12");
     let mut s = Signer::new(Box::new(ch), carol.cert.clone());
@@ -296,6 +327,16 @@ fn ocsp_and_timestamp_through_the_lawyers_phone() {
             .all(|s| s.valid && s.timestamp_ok == Some(true))
     );
 
+    // scanning again with the checks going through the lawyer's phone
+    let (ch, h) = serve(l, true);
+    let mut s = Signer::new(Box::new(ch), carol.cert.clone());
+    let relayed = env().with_net(s.relay());
+    assert!(matches!(
+        s.start(&relayed, Some(&ocsp)).unwrap(),
+        Offer::Signed { .. }
+    ));
+    let (_, l) = h.join().unwrap();
+
     // a revoked key is refused before anything is signed, and nothing changes
     let ocsp = nca::fake_ocsp(true);
     let before = l.pdf().to_vec();
@@ -308,6 +349,19 @@ fn ocsp_and_timestamp_through_the_lawyers_phone() {
     let (served, l) = h.join().unwrap();
     assert!(matches!(served, Served::Refused(_)), "{served:?}");
     assert_eq!(l.pdf(), before);
+
+    // the lawyer's phone passes requests on to NCA's servers only (here, without 127.0.0.1)
+    let l = lawyer(false);
+    let (ch, h) = serve(l, true);
+    let mut s = Signer::new(Box::new(ch), carol.cert.clone());
+    let relayed = env().with_net(s.relay());
+    assert!(matches!(s.start(&relayed, None).unwrap(), Offer::Sign(_)));
+    let e = s
+        .sign(&carol, &relayed, None, Some(&nca::fake_ocsp(false)))
+        .map(|o| o.warnings)
+        .unwrap_or_else(|e| vec![e.to_string()]);
+    assert!(e.iter().any(|w| w.contains("NCA's servers only")), "{e:?}");
+    let _ = h.join().unwrap();
 }
 
 /// A GOST 2015 key with a certificate from the fake OCSP responder's test CA.

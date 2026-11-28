@@ -644,6 +644,8 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     // keys kept on the phone
     ("valid until {}", "{} дейін жарамды", "действует до {}"),
     // signing in person
+    ("The lawyer's phone passes on requests to NCA's servers only.", "Заңгердің телефоны сұрауларды тек ҰКО серверлеріне жібереді.", "Телефон юриста передает запросы только на серверы НУЦ."),
+    ("The signature has no valid NCA timestamp, which was asked for.", "Қолтаңбада сұралған жарамды ҰКО уақыт белгісі жоқ.", "В подписи нет запрошенной действительной метки времени НУЦ."),
     ("Signing in person needs a GOST 34.10-2015 key.", "Бетпе-бет қол қою үшін ГОСТ 34.10-2015 кілті керек.", "Для подписания при встрече нужен ключ ГОСТ 34.10-2015."),
     ("Signing of this document is finished.", "Бұл құжатқа қол қою аяқталды.", "Подписание этого документа завершено."),
     ("The connection to the other phone was lost.", "Екінші телефонмен байланыс үзілді.", "Связь с другим телефоном потеряна."),

@@ -40,6 +40,10 @@ pub struct Ack {
     pub doc_id: [u8; 32],
     pub slot: u32,
     pub signer_cert_hash: Vec<u8>,
+    /// The hash that was signed (empty for the lawyer's own signature).
+    pub digest: Vec<u8>,
+    /// The session the ack was made in.
+    pub transcript: Vec<u8>,
     pub accepted: bool,
 }
 
@@ -212,6 +216,8 @@ impl Ack {
             .bytes(&self.doc_id)
             .u32(self.slot)
             .bytes(&self.signer_cert_hash)
+            .bytes(&self.digest)
+            .bytes(&self.transcript)
             .u8(self.accepted as u8)
             .done()
     }
@@ -224,6 +230,8 @@ impl Ack {
             doc_id: r.id()?,
             slot: r.u32()?,
             signer_cert_hash: r.bytes()?,
+            digest: r.bytes()?,
+            transcript: r.bytes()?,
             accepted: r.bool()?,
         };
         r.end()?;
@@ -370,6 +378,8 @@ mod tests {
             doc_id: [1; 32],
             slot: 0,
             signer_cert_hash: vec![2; 32],
+            digest: vec![3; 32],
+            transcript: vec![4; 32],
             accepted: false,
         };
         assert_eq!(Ack::parse(&a.encode()).unwrap(), a);
