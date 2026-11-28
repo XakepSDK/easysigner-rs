@@ -9,6 +9,7 @@ pub mod file;
 pub mod gost;
 pub(crate) mod http;
 pub mod i18n;
+pub mod inperson;
 pub(crate) mod keys;
 pub mod ltv;
 pub mod ocsp;

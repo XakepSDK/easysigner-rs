@@ -643,6 +643,22 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     ("The key store is damaged", "Кілттер қоймасы бүлінген", "Хранилище ключей повреждено"),
     // keys kept on the phone
     ("valid until {}", "{} дейін жарамды", "действует до {}"),
+    // signing in person
+    ("Signing in person needs a GOST 34.10-2015 key.", "Бетпе-бет қол қою үшін ГОСТ 34.10-2015 кілті керек.", "Для подписания при встрече нужен ключ ГОСТ 34.10-2015."),
+    ("Signing of this document is finished.", "Бұл құжатқа қол қою аяқталды.", "Подписание этого документа завершено."),
+    ("The connection to the other phone was lost.", "Екінші телефонмен байланыс үзілді.", "Связь с другим телефоном потеряна."),
+    ("The other phone sent a message this app can't read.", "Екінші телефон бұл қолданба оқи алмайтын хабар жіберді.", "Другой телефон прислал сообщение, которое это приложение не может прочитать."),
+    ("The other phone has a newer version of the app; update this one to sign with it.", "Екінші телефонда қолданбаның жаңа нұсқасы тұр; онымен қол қою үшін осы қолданбаны жаңартыңыз.", "На другом телефоне более новая версия приложения; обновите это приложение, чтобы подписать с ним."),
+    ("The prepared PDF's byte range is not the one expected.", "Дайындалған PDF-тің байт ауқымы күтілгендей емес.", "Диапазон байтов подготовленного PDF не такой, как ожидалось."),
+    ("The signature is not valid: {}", "Қолтаңба жарамсыз: {}", "Подпись недействительна: {}"),
+    ("The signature was not made with the key whose certificate was sent.", "Қолтаңба сертификаты жіберілген кілтпен қойылмаған.", "Подпись сделана не тем ключом, чей сертификат был отправлен."),
+    ("This request to sign has expired; scan the lawyer's QR code again.", "Қол қою сұрауының мерзімі өтті; заңгердің QR кодын қайта сканерлеңіз.", "Срок запроса на подпись истек; отсканируйте QR-код юриста еще раз."),
+    ("The lawyer's signature on the request is not valid.", "Сұраудағы заңгердің қолтаңбасы жарамсыз.", "Подпись юриста на запросе недействительна."),
+    ("This request was not made for you or for this session.", "Бұл сұрау сізге немесе осы сеансқа арналмаған.", "Этот запрос сделан не для вас или не для этого сеанса."),
+    ("The file shown is not the one the lawyer asked you to sign; signing is refused.", "Көрсетілген файл заңгер қол қоюды сұраған файл емес; қол қоюдан бас тартылды.", "Показанный файл не тот, который юрист просит подписать; подписание отклонено."),
+    ("The lawyer asks for a timestamp; set a timestamp server.", "Заңгер уақыт белгісін сұрайды; уақыт белгісі серверін көрсетіңіз.", "Юрист просит метку времени; укажите сервер меток времени."),
+    ("The lawyer's phone could not reach {}: {}", "Заңгердің телефоны {} серверіне қосыла алмады: {}", "Телефон юриста не смог связаться с {}: {}"),
+    ("Your signature is missing from the signed document, or it was changed.", "Қол қойылған құжатта сіздің қолтаңбаңыз жоқ немесе ол өзгертілген.", "В подписанном документе нет вашей подписи, или она изменена."),
 ];
 
 /// `s` as it would have been typed with the same keys on a Latin (US) keyboard, when it was

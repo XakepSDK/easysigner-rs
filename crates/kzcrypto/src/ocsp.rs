@@ -442,13 +442,14 @@ pub mod testkit {
             oid: asn1::oid(by.private_key.sig_oid()).unwrap(),
             parameters: Some(Any::null()),
         };
+        // RFC 5280 4.1.2.5: UTCTime through 2049, as real certificates have (and as a CMS
+        // writes them back)
         let time = |ms: i64| {
-            Time::GeneralTime(
-                GeneralizedTime::from_unix_duration(core::time::Duration::from_millis(
-                    u64::try_from(ms).unwrap(),
-                ))
-                .unwrap(),
-            )
+            let d = core::time::Duration::from_millis(u64::try_from(ms).unwrap());
+            match ::der::asn1::UtcTime::from_unix_duration(d) {
+                Ok(t) => Time::UtcTime(t),
+                Err(_) => Time::GeneralTime(GeneralizedTime::from_unix_duration(d).unwrap()),
+            }
         };
         let extensions = ocsp.then(|| {
             let eku = x509_cert::ext::pkix::ExtendedKeyUsage(vec![
