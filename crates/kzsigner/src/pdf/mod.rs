@@ -91,6 +91,42 @@ pub fn sign_with(
     env: &Env,
     look: Look,
 ) -> Result<SignResult> {
+    let (p, existing) = prepare(input, &key.cert, tsa_url.is_some(), env, look)?;
+    let mut r = SignResult {
+        warnings: cert::key_warnings(&key.cert, env.now_ms()),
+        cosigned: existing > 0,
+        ..Default::default()
+    };
+    let mut sd = cms::sign_once_with(
+        &p.signed_bytes(),
+        cms::ID_DATA,
+        false,
+        &key.private_key,
+        &key.cert,
+        None,
+        &[],
+        &mut crate::OsRng,
+    )
+    .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
+    if let Some(url) = tsa_url {
+        sign::timestamp(&mut sd, url, key, env, &mut r)?;
+    }
+    r.cms = p.insert(&sd.encode()?)?;
+    r.signer_count = existing + 1;
+    Ok(r)
+}
+
+/// The next revision of `input` for a signature by `cert`, shown as `look` says, with its
+/// value left empty (see [`Prepared`]); and how many signatures the PDF had. `timestamped`:
+/// the signature will carry a timestamp (more room). Everything in it comes from the
+/// certificate and the clock, so someone else can make it for the holder to sign.
+pub fn prepare(
+    input: &[u8],
+    cert: &Cert,
+    timestamped: bool,
+    env: &Env,
+    look: Look,
+) -> Result<(Prepared, usize)> {
     let doc = open(input)?;
     let now = env.now_ms();
     if docmdp_level(&doc) == Some(1) {
@@ -99,12 +135,7 @@ pub fn sign_with(
         )));
     }
     let existing = signature_fields(&doc).len();
-    let mut r = SignResult {
-        warnings: cert::key_warnings(&key.cert, env.now_ms()),
-        cosigned: existing > 0,
-        ..Default::default()
-    };
-    let room = if tsa_url.is_some() {
+    let room = if timestamped {
         ROOM_WITH_TIMESTAMP
     } else {
         ROOM
@@ -114,7 +145,7 @@ pub fn sign_with(
         ("Filter", "Adobe.PPKLite".into()),
         ("SubFilter", "ETSI.CAdES.detached".into()),
         ("M", Object::string_literal(pdf_date(now))),
-        ("Name", text_string(&cert::holder_name(&key.cert))),
+        ("Name", text_string(&cert::holder_name(cert))),
     ]);
     // the first signer of a Who signed page locks the document: signatures and form
     // filling only (DocMDP P=2), so nothing else can change what was signed
@@ -141,7 +172,6 @@ pub fn sign_with(
             ]),
         );
     }
-    let cert = &key.cert;
     let mut draw = |d: &Document,
                     pages: &BTreeMap<u32, ObjectId>,
                     alloc: &mut dyn FnMut() -> ObjectId|
@@ -149,47 +179,13 @@ pub fn sign_with(
         match look {
             Look::Invisible => Ok(None),
             Look::Stamp(st) => stamp::draw(d, pages, st, cert, now, alloc).map(Some),
-            Look::WhoSigned(ws) => whosigned::draw(
-                d,
-                pages,
-                ws,
-                cert,
-                now,
-                tsa_url.is_some(),
-                existing == 0,
-                alloc,
-            ),
+            Look::WhoSigned(ws) => {
+                whosigned::draw(d, pages, ws, cert, now, timestamped, existing == 0, alloc)
+            }
         }
     };
-    let data = add_field(
-        input,
-        doc,
-        "Signature",
-        sig,
-        room,
-        &mut draw,
-        certify,
-        |signed| {
-            let mut sd = cms::sign_once_with(
-                signed,
-                cms::ID_DATA,
-                false,
-                &key.private_key,
-                &key.cert,
-                None,
-                &[],
-                &mut crate::OsRng,
-            )
-            .map_err(|e| Error::new(trf("Signing failed: {}", &[&Error::from(e)])))?;
-            if let Some(url) = tsa_url {
-                sign::timestamp(&mut sd, url, key, env, &mut r)?;
-            }
-            Ok(sd.encode()?)
-        },
-    )?;
-    r.cms = data;
-    r.signer_count = existing + 1;
-    Ok(r)
+    let p = prepare_field(input, doc, "Signature", sig, room, &mut draw, certify)?;
+    Ok((p, existing))
 }
 
 /// Draws a signature's appearance: None for an invisible one.
@@ -208,12 +204,106 @@ fn add_field(
     input: &[u8],
     doc: Document,
     prefix: &str,
-    mut sig: Dictionary,
+    sig: Dictionary,
     room: usize,
     draw: &mut Draw,
     certify: bool,
     fill: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
 ) -> Result<Vec<u8>> {
+    let p = prepare_field(input, doc, prefix, sig, room, draw, certify)?;
+    let der = fill(&p.signed_bytes())?;
+    p.insert(&der)
+}
+
+/// A PDF with one more signature field whose value is still empty (zeros): the next revision,
+/// ready to sign. What the signature covers is the file without the value, its byte range.
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    data: Vec<u8>,
+    /// Where the value's hex string `<...>` starts and ends.
+    a: usize,
+    b: usize,
+    room: usize,
+}
+
+impl Prepared {
+    /// The file as it is now: the master, then the new revision with an empty value.
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// What the signature covers: the file without the value.
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        [&self.data[..self.a], &self.data[self.b..]].concat()
+    }
+
+    /// Finds the empty value in a prepared file someone else made, by its byte range (the last
+    /// signature field's), so its signed bytes can be worked out again.
+    pub fn parse(data: &[u8]) -> Result<Prepared> {
+        let doc = open(data)?;
+        let bad = || Error::new(tr("The prepared PDF's byte range is not the one expected."));
+        let range = |f: &SigField| -> Option<Vec<i64>> {
+            f.v.get(b"ByteRange")
+                .ok()?
+                .as_array()
+                .ok()?
+                .iter()
+                .map(|o| o.as_i64().ok())
+                .collect()
+        };
+        let r = signature_fields(&doc)
+            .iter()
+            .filter_map(range)
+            .max_by_key(|r| r.get(1).copied().unwrap_or(0))
+            .ok_or_else(bad)?;
+        let [0, a, b, rest] = r[..] else {
+            return Err(bad());
+        };
+        let as_usize = |v: i64| usize::try_from(v).map_err(|_| bad());
+        let (a, b, rest) = (as_usize(a)?, as_usize(b)?, as_usize(rest)?);
+        if a + 2 > b
+            || b.checked_add(rest) != Some(data.len())
+            || data[a] != b'<'
+            || data[b - 1] != b'>'
+        {
+            return Err(bad());
+        }
+        if !data[a + 1..b - 1].iter().all(|&c| c == b'0') {
+            return Err(bad());
+        }
+        Ok(Prepared {
+            data: data.to_vec(),
+            a,
+            b,
+            room: (b - a - 2) / 2,
+        })
+    }
+
+    /// Puts the signature `der` into the empty value: the signed PDF.
+    pub fn insert(mut self, der: &[u8]) -> Result<Vec<u8>> {
+        if der.len() > self.room {
+            return Err(Error::new(format!(
+                "internal: the signature ({} bytes) is larger than the room for it ({})",
+                der.len(),
+                self.room
+            )));
+        }
+        let hex = crate::hex(der).to_uppercase();
+        self.data[self.a + 1..self.a + 1 + hex.len()].copy_from_slice(hex.as_bytes());
+        Ok(self.data)
+    }
+}
+
+/// [`add_field`] up to signing: the PDF with the field added and its value empty.
+fn prepare_field(
+    input: &[u8],
+    doc: Document,
+    prefix: &str,
+    mut sig: Dictionary,
+    room: usize,
+    draw: &mut Draw,
+    certify: bool,
+) -> Result<Prepared> {
     let existing = signature_fields(&doc);
     let bad = |e: lopdf::Error| Error::new(trf("This PDF could not be read: {}", &[&e]));
 
@@ -395,17 +485,7 @@ fn add_field(
     let b = a + zeros.len();
     let ranges = format!("0 {a:010} {b:010} {:010}", data.len() - b);
     data[br..br + ranges.len()].copy_from_slice(ranges.as_bytes());
-    let signed = [&data[..a], &data[b..]].concat();
-    let der = fill(&signed)?;
-    if der.len() > room {
-        return Err(Error::new(format!(
-            "internal: the signature ({} bytes) is larger than the room for it ({room})",
-            der.len()
-        )));
-    }
-    let hex = crate::hex(&der).to_uppercase();
-    data[a + 1..a + 1 + hex.len()].copy_from_slice(hex.as_bytes());
-    Ok(data)
+    Ok(Prepared { data, a, b, room })
 }
 
 /// Makes a PDF's signatures long-term (PAdES B-LT): the certificates and revocation answers
