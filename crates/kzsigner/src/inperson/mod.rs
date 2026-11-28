@@ -2,9 +2,9 @@
 //! code; each signer scans it in turn, signs with their own key on their own phone, and the
 //! lawyer accepts or rejects the signature by name and IIN. See docs/in-person-signing.md.
 //!
-//! The connection itself (the QR's one-time key, ISO/IEC 18013-5 session encryption, Wi-Fi
-//! Aware, the same Wi-Fi or BLE) lives in the apps; this module is what runs over it, on any
-//! [`Channel`]. [`pipe`] is an in-memory one, for tests.
+//! The connection: [`session`] has the QR code's one-time key and the ISO/IEC 18013-5 session
+//! encryption, over TCP on the same Wi-Fi (or one phone's hotspot); the rest of this module runs
+//! over any [`Channel`]. [`pipe`] is an in-memory one, for tests.
 //!
 //! Strictly one signer at a time: the lawyer's app prepares the next revision of the PDF for
 //! the signer's certificate, the signer signs its hash, and only an accepted signature is
@@ -13,6 +13,7 @@
 //! timestamp's hash of the signature), so the lawyer can only pass them on or drop them.
 
 mod lawyer;
+pub mod session;
 mod signer;
 mod wire;
 

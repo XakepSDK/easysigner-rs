@@ -44,7 +44,7 @@ import kz.kzsigner.hasFingerprint
 
 /** Screen 1: Sign a document, Check a signature, the key chip (to Your keys), and Share. */
 @Composable
-fun HomeScreen(model: AppModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
+fun HomeScreen(model: AppModel, onKeys: () -> Unit, onAddKey: () -> Unit, onInPerson: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tooBig = stringResource(R.string.too_big)
@@ -151,7 +151,26 @@ fun HomeScreen(model: AppModel, onKeys: () -> Unit, onAddKey: () -> Unit) {
                 }
             }
         }
-        Spacer(Modifier.size(60.dp))
+        Surface(
+            onClick = onInPerson,
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier.padding(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(painterResource(R.drawable.ic_pen), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.home_in_person), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Small(stringResource(R.string.home_in_person_body))
+                }
+            }
+        }
+        Spacer(Modifier.size(40.dp))
         Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
             Text(
                 stringResource(R.string.home_share_hint),

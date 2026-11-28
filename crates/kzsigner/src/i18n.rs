@@ -646,6 +646,9 @@ pub const TABLE: &[(&str, &str, &str)] = &[
     // signing in person
     ("The lawyer's phone passes on requests to NCA's servers only.", "Заңгердің телефоны сұрауларды тек ҰКО серверлеріне жібереді.", "Телефон юриста передает запросы только на серверы НУЦ."),
     ("The signature has no valid NCA timestamp, which was asked for.", "Қолтаңбада сұралған жарамды ҰКО уақыт белгісі жоқ.", "В подписи нет запрошенной действительной метки времени НУЦ."),
+    ("This QR code is not a signing invitation from kzsigner.", "Бұл QR-код kzsigner-ден қол қоюға шақыру емес.", "Этот QR-код не приглашение на подписание от kzsigner."),
+    ("Can't reach the lawyer's phone: both phones must be on the same Wi-Fi.", "Заңгердің телефонына қосылу мүмкін емес: екі телефон да бір Wi-Fi желісінде болуы керек.", "Не удается связаться с телефоном юриста: оба телефона должны быть в одной сети Wi-Fi."),
+    ("The connection to the other phone was tampered with; start again.", "Екінші телефонмен байланысқа араласқан; қайтадан бастаңыз.", "Связь с другим телефоном была подменена; начните заново."),
     ("Signing in person needs a GOST 34.10-2015 key.", "Бетпе-бет қол қою үшін ГОСТ 34.10-2015 кілті керек.", "Для подписания при встрече нужен ключ ГОСТ 34.10-2015."),
     ("Signing of this document is finished.", "Бұл құжатқа қол қою аяқталды.", "Подписание этого документа завершено."),
     ("The connection to the other phone was lost.", "Екінші телефонмен байланыс үзілді.", "Связь с другим телефоном потеряна."),
@@ -697,6 +700,7 @@ mod tests {
         let mut files: Vec<std::path::PathBuf> = Vec::new();
         for dir in [
             "src",
+            "src/inperson",
             "src/pdf",
             "src/xml",
             "../../apps/desktop/src",

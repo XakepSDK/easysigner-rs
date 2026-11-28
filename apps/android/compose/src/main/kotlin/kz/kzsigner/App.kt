@@ -1,6 +1,9 @@
 package kz.kzsigner
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -8,12 +11,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.launch
 import kz.kzsigner.ui.AboutScreen
 import kz.kzsigner.ui.AddKeyScreen
 import kz.kzsigner.ui.CantSignScreen
@@ -21,12 +29,16 @@ import kz.kzsigner.ui.Center
 import kz.kzsigner.ui.CheckDetailsScreen
 import kz.kzsigner.ui.CheckScreen
 import kz.kzsigner.ui.HomeScreen
+import kz.kzsigner.ui.InPersonScreen
 import kz.kzsigner.ui.KeysScreen
+import kz.kzsigner.ui.MeetScreen
 import kz.kzsigner.ui.PdfReader
 import kz.kzsigner.ui.Reading
 import kz.kzsigner.ui.Refusal
 import kz.kzsigner.ui.SignScreen
 import kz.kzsigner.ui.SignedScreen
+import kz.kzsigner.ui.signingKey
+import kz.kzsigner.ui.VisitScreen
 
 private object Route {
     const val HOME = "home"
@@ -39,6 +51,9 @@ private object Route {
     const val ABOUT = "about"
     const val CHECK = "check"
     const val DETAILS = "check-details"
+    const val IN_PERSON = "in-person"
+    const val MEET = "meet"
+    const val VISIT = "visit"
 }
 
 /** Starts over at [route], with nothing to go back to. */
@@ -107,7 +122,73 @@ fun App(model: AppModel, finish: () -> Unit) {
                     model.signing.signAfterAdd = false
                     nav.navigate(if (hasKeys || keys.hidden) Route.KEYS else Route.ADD)
                 },
-                onAddKey = { nav.navigate(Route.ADD) }
+                onAddKey = { nav.navigate(Route.ADD) },
+                onInPerson = { nav.navigate(if (hasKeys) Route.IN_PERSON else Route.ADD) }
+            )
+        }
+        composable(Route.IN_PERSON) {
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            val unreadable = stringResource(R.string.cant_read_file)
+            val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) {
+                    scope.launch {
+                        if (model.openForMeeting(uri) == Opened.DOCUMENT) {
+                            nav.navigate(Route.MEET)
+                        } else {
+                            Toast.makeText(context, unreadable, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+            InPersonScreen(
+                onBack = back,
+                onHost = { pick.launch(arrayOf("application/pdf")) },
+                onJoin = { nav.navigate(Route.VISIT) }
+            )
+        }
+        composable(Route.MEET) {
+            val leave: () -> Unit = {
+                model.inPerson.close()
+                nav.popBackStack(Route.HOME, inclusive = false)
+            }
+            BackHandler(onBack = leave)
+            val key = signingKey(model) ?: return@composable
+            MeetScreen(key, model::online, model.inPerson, onBack = leave, onRead = {
+                reading = it
+                nav.navigate(Route.READ)
+            })
+        }
+        composable(Route.VISIT) {
+            val leave: () -> Unit = {
+                model.inPerson.leave()
+                nav.popBackStack(Route.HOME, inclusive = false)
+            }
+            BackHandler(onBack = leave)
+            var answer by remember { mutableStateOf<((String) -> Unit)?>(null) }
+            val scan = rememberLauncherForActivityResult(ScanContract()) { r ->
+                r.contents?.let { code -> answer?.invoke(code) }
+            }
+            val key = signingKey(model) ?: return@composable
+            VisitScreen(
+                key,
+                model::online,
+                model.inPerson,
+                onBack = leave,
+                onRead = {
+                    reading = it
+                    nav.navigate(Route.READ)
+                },
+                onScan = { then ->
+                    answer = then
+                    scan.launch(
+                        ScanOptions()
+                            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                            .setPrompt("")
+                            .setBeepEnabled(false)
+                            .setOrientationLocked(false)
+                    )
+                }
             )
         }
         composable(Route.SIGN) {

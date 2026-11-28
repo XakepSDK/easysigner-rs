@@ -73,6 +73,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     /** The file on the Check screens, and what checking it found. */
     val checking = CheckFlow(docs, Dispatchers.IO)
 
+    /** Signing in person, as the lawyer (the document here) or as a signer. */
+    val inPerson = InPersonFlow(viewModelScope, Dispatchers.IO, Dispatchers.Main, { (store as? NativeKeys)?.vault }, { nca })
+
     /** The keys, once read; null while reading. */
     var keys by mutableStateOf<Keys?>(null)
         private set
@@ -184,6 +187,16 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         return Opened.DOCUMENT
     }
 
+    /** Reads the PDF chosen to sign in person: it goes to [inPerson]. */
+    suspend fun openForMeeting(uri: Uri): Opened {
+        val f = readFile(uri, MAX_DOCUMENT)
+        val bytes = f.bytes ?: return f.failure()
+        val info = withContext(Dispatchers.Default) { docs.inspect(f.name, bytes) }
+        if (info.kind != DocKind.PDF) return Opened.UNREADABLE
+        inPerson.paper = Paper(f.name, bytes)
+        return Opened.DOCUMENT
+    }
+
     /** Reads the document a detached .cms signs, to check the two together. */
     suspend fun addOriginal(uri: Uri): Opened {
         if (checking.file == null) return Opened.UNREADABLE
@@ -200,6 +213,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     } catch (e: SecurityException) {
         // can't tell: say NCA didn't answer rather than close the app
         true
+    }
+
+    override fun onCleared() {
+        inPerson.close()
+        inPerson.leave()
     }
 
     private class ReadFile(val name: String, val bytes: ByteArray?, val tooBig: Boolean) {

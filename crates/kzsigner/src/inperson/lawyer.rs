@@ -148,6 +148,22 @@ impl Lawyer {
         self.finished = true;
     }
 
+    /// [`Lawyer::finish`], making the signed document long-term first (PAdES B-LTA: the
+    /// certificates and revocation answers inside it, and NCA's document timestamp over it all),
+    /// as the app makes every signed file.
+    pub fn finish_long_term(&mut self, tsa_url: &str, ocsp_url: &str, env: &Env) -> Result<()> {
+        if !self.finished {
+            self.pdf = pdf::extend(&self.pdf, true, tsa_url, ocsp_url, env)?.cms;
+            self.finished = true;
+        }
+        Ok(())
+    }
+
+    /// Whether [`Lawyer::finish`] was called.
+    pub fn finished(&self) -> bool {
+        self.finished
+    }
+
     /// Serves one signer over `ch`: their certificate, the request, then the read, relay and
     /// signature messages until the lawyer's `decide` accepts or rejects. Only an accepted
     /// signature changes the document.
@@ -157,7 +173,19 @@ impl Lawyer {
         env: &Env,
         decide: &mut dyn FnMut(&Candidate) -> bool,
     ) -> Result<Served> {
-        let r = self.serve_inner(ch, env, decide);
+        self.serve_with(ch, env, &mut |_, _| {}, decide)
+    }
+
+    /// [`Lawyer::serve`], telling `hello` who connected (name, IIN) as soon as their
+    /// certificate arrives, for the lawyer's screen.
+    pub fn serve_with(
+        &mut self,
+        ch: &mut dyn Channel,
+        env: &Env,
+        hello: &mut dyn FnMut(&str, Option<&str>),
+        decide: &mut dyn FnMut(&Candidate) -> bool,
+    ) -> Result<Served> {
+        let r = self.serve_inner(ch, env, hello, decide);
         if let Err(e) = &r {
             // the signer is told, not left waiting
             let _ = ch.send(&Msg::Refuse { why: e.to_string() }.encode());
@@ -169,6 +197,7 @@ impl Lawyer {
         &mut self,
         ch: &mut dyn Channel,
         env: &Env,
+        hello: &mut dyn FnMut(&str, Option<&str>),
         decide: &mut dyn FnMut(&Candidate) -> bool,
     ) -> Result<Served> {
         let Ok(first) = ch.recv() else {
@@ -185,6 +214,7 @@ impl Lawyer {
         };
         let hash = cert_hash(&cert.der);
         let (name, iin) = who(&cert);
+        hello(&name, iin.as_deref());
 
         // scanned again: their status, and the final copy once there is one
         if let Some(s) = self.signed.iter().find(|s| s.cert_hash == hash) {

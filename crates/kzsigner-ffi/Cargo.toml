@@ -27,3 +27,5 @@ zeroize = "1"
 [dev-dependencies]
 # hand-made DER for the tests (tests/common/nca.rs)
 der-testkit = { path = "../der-testkit" }
+# test keys issued on the spot (signing in person needs GOST 2015 ones the fake OCSP knows)
+kzcrypto = { path = "../kzcrypto", features = ["testkit"] }

@@ -26,6 +26,10 @@ roxmltree = "0.21"
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
 zeroize = "1"
+# signing in person: the QR's one-time key and the session keys (ISO/IEC 18013-5's scheme)
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdh"] }
+hkdf = "0.13"
+sha2 = { version = "0.11", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Globalization"] }

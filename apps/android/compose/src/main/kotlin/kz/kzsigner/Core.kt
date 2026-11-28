@@ -44,7 +44,7 @@ class NativeDocuments(private val nca: () -> Nca) : Documents {
         checkFile(nca(), name, bytes, original, lang)
 }
 
-class NativeKeys(private val vault: Vault, private val nca: () -> Nca) : KeyStore {
+class NativeKeys(val vault: Vault, private val nca: () -> Nca) : KeyStore {
     override fun keys(): Keys = vault.keys()
 
     override fun newKeyUnlock(): Unlock = vault.newKeyUnlock()

@@ -390,4 +390,5 @@ fn reads_the_egui_apps_vault() {
 }
 
 mod check;
+mod inperson;
 mod sign;
