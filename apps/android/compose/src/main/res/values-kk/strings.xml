@@ -228,10 +228,7 @@
     <string name="in_person_join_body">Басқа біреудің телефонындағы құжатқа қол қою.</string>
     <string name="in_person_wifi">Екі телефон да бір Wi-Fi желісінде болуы керек немесе бір телефон екіншісіне хотспот таратады.</string>
     <string name="meet_start_title">Бірге қол қою керек пе?</string>
-    <string name="meet_sign_first">Мен бірінші қол қоямын</string>
-    <string name="meet_sign_first_body">Сіздің қолтаңбаңыз «Кім қол қойды» бетімен бірінші түседі.</string>
     <string name="meet_start">Қол қойып, QR-кодты көрсету</string>
-    <string name="meet_start_no_sign">QR-кодты көрсету</string>
     <string name="meet_qr_title">Қол қою үшін сканерлеңіз</string>
     <string name="meet_qr_body">Мұны %1$d-қол қоюшыға көрсетіңіз. Ол өз телефонында оқып, қол қояды, ал сіз қолтаңбаны осында қабылдайсыз.</string>
     <string name="meet_signed_so_far">Қол қойғандар</string>

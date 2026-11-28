@@ -6,11 +6,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -25,10 +25,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,8 +77,20 @@ import kz.kzsigner.core.Visit
 fun InPersonScreen(onBack: () -> Unit, onHost: () -> Unit, onJoin: () -> Unit) {
     Screen(onBack) {
         Title(stringResource(R.string.in_person_title))
-        Choice(R.drawable.ic_file, stringResource(R.string.in_person_host), stringResource(R.string.in_person_host_body), primary = true, onHost)
-        Choice(R.drawable.ic_pen, stringResource(R.string.in_person_join), stringResource(R.string.in_person_join_body), primary = false, onJoin)
+        Choice(
+            R.drawable.ic_file,
+            stringResource(R.string.in_person_host),
+            stringResource(R.string.in_person_host_body),
+            primary = true,
+            onHost
+        )
+        Choice(
+            R.drawable.ic_pen,
+            stringResource(R.string.in_person_join),
+            stringResource(R.string.in_person_join_body),
+            primary = false,
+            onJoin
+        )
         InfoNotice(stringResource(R.string.in_person_wifi))
     }
 }
@@ -150,7 +162,10 @@ private fun signProblem(e: SignException?, online: () -> Boolean): String? = whe
 fun QrCode(text: String, modifier: Modifier = Modifier) {
     val bitmap = remember(text) { qrBitmap(text) }
     Box(
-        modifier.background(Color.White, RoundedCornerShape(16.dp)).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp)).padding(14.dp)
+        modifier.background(
+            Color.White,
+            RoundedCornerShape(16.dp)
+        ).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp)).padding(14.dp)
     ) {
         Image(bitmap, null, Modifier.fillMaxWidth().aspectRatio(1f), contentScale = ContentScale.Fit, filterQuality = FilterQuality.None)
     }
@@ -224,10 +239,23 @@ private fun Big(icon: Int, good: Boolean, title: String, body: String?) {
             Icon(painterResource(icon), null, tint = if (good) n.good else n.warnTitle, modifier = Modifier.size(40.dp))
         }
         Spacer(Modifier.size(20.dp))
-        Text(title, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.semantics { heading() })
+        Text(
+            title,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics {
+                heading()
+            }
+        )
         if (body != null) {
             Spacer(Modifier.size(10.dp))
-            Text(body, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -245,15 +273,19 @@ fun MeetScreen(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, onBack: 
     val done = flow.finished
     when {
         m == null -> MeetStart(key, online, flow, onBack, onRead)
+
         done != null -> MeetDone(flow, done, onBack)
+
         else -> when (val d = flow.desk) {
             is Desking.Showing -> MeetQr(flow, onBack)
+
             is Desking.Here -> Screen(onBack) {
                 Title(stringResource(R.string.meet_here_title, displayName(d.who.name)))
                 d.who.iin?.let { Body(stringResource(R.string.iin, it)) }
                 Body(stringResource(R.string.meet_here_body))
                 Waiting()
             }
+
             is Desking.Deciding -> MeetDecide(flow, d, onBack)
         }
     }
@@ -263,7 +295,6 @@ fun MeetScreen(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, onBack: 
 private fun MeetStart(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, onBack: () -> Unit, onRead: (Reading) -> Unit) {
     val paper = flow.paper ?: return
     val scope = rememberCoroutineScope()
-    var signFirst by remember { mutableStateOf(true) }
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
@@ -275,14 +306,14 @@ private fun MeetStart(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, o
         onBack,
         buttons = {
             MainButton(
-                stringResource(if (signFirst) R.string.meet_start else R.string.meet_start_no_sign),
+                stringResource(R.string.meet_start),
                 onClick = {
                     busy = true
                     failure = null
                     wrong = false
                     scope.launch {
                         try {
-                            flow.start(key.id, if (key.needsPassword()) password else null, prompt, lang, signFirst)
+                            flow.start(key.id, if (key.needsPassword()) password else null, prompt, lang)
                         } catch (e: SignException) {
                             failure = e
                             wrong = e is SignException.WrongPassword
@@ -298,13 +329,6 @@ private fun MeetStart(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, o
     ) {
         Title(stringResource(R.string.meet_start_title))
         FileRow(paper.name) { onRead(Reading(paper.name, paper.bytes)) }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Label(stringResource(R.string.meet_sign_first))
-                Small(stringResource(R.string.meet_sign_first_body))
-            }
-            Switch(checked = signFirst, onCheckedChange = { signFirst = it })
-        }
         SignAs(key, password, wrong) {
             password = it
             wrong = false
@@ -318,11 +342,30 @@ private fun MeetStart(key: KeyInfo, online: () -> Boolean, flow: InPersonFlow, o
 private fun TurnNotice(t: Turn?) {
     val n = LocalNotices.current
     when (t) {
-        is Turn.Signed -> Notice(stringResource(R.string.meet_turn_signed, displayName(t.name)), null, n.goodBg, n.good, n.good, R.drawable.ic_check)
-        is Turn.Collected -> Notice(stringResource(R.string.meet_turn_collected, displayName(t.name)), null, n.goodBg, n.good, n.good, R.drawable.ic_check)
+        is Turn.Signed -> Notice(
+            stringResource(R.string.meet_turn_signed, displayName(t.name)),
+            null,
+            n.goodBg,
+            n.good,
+            n.good,
+            R.drawable.ic_check
+        )
+
+        is Turn.Collected -> Notice(
+            stringResource(R.string.meet_turn_collected, displayName(t.name)),
+            null,
+            n.goodBg,
+            n.good,
+            n.good,
+            R.drawable.ic_check
+        )
+
         is Turn.Rejected -> WarnNotice(stringResource(R.string.meet_turn_rejected, displayName(t.name)), null)
+
         is Turn.Left -> WarnNotice(stringResource(R.string.meet_turn_left), null)
+
         is Turn.Refused -> WarnNotice(stringResource(R.string.meet_turn_refused, t.why), null)
+
         else -> {}
     }
 }
@@ -418,7 +461,8 @@ private fun MeetDone(flow: InPersonFlow, done: Signed, onBack: () -> Unit) {
 
 /**
  * A signer's side: scan the QR code, read the document, sign, and wait for the lawyer's Accept;
- * later, scan again for the signed copy. [onScan] opens the camera and gives the code read.
+ * later, scan again for the signed copy. [onScan] opens the camera, which puts the code it
+ * read in [InPersonFlow.scanned].
  */
 @Composable
 fun VisitScreen(
@@ -427,7 +471,7 @@ fun VisitScreen(
     flow: InPersonFlow,
     onBack: () -> Unit,
     onRead: (Reading) -> Unit,
-    onScan: ((String) -> Unit) -> Unit
+    onScan: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var connecting by remember { mutableStateOf(false) }
@@ -445,28 +489,49 @@ fun VisitScreen(
             }
         }
     }
-    val scan = { onScan(join) }
+    // the camera's answer, also after the app was recreated meanwhile
+    LaunchedEffect(flow.scanned) {
+        val code = flow.scanned ?: return@LaunchedEffect
+        flow.scanned = null
+        join(code)
+    }
+    val scan = onScan
     val visit = flow.visit
     val outcome = flow.outcome
     when {
         visit == null -> VisitScan(connecting, trouble, onBack, scan)
+
         outcome != null -> {
             val host = displayName(flow.host.orEmpty())
             Screen(
                 onBack = null,
                 buttons = {
                     if (outcome.accepted) MainButton(stringResource(R.string.scan_again), scan)
-                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.done)) }
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.done))
+                    }
                 }
             ) {
                 if (outcome.accepted) {
-                    Big(R.drawable.ic_check, true, stringResource(R.string.signed_title), stringResource(R.string.visit_accepted_body, host))
+                    Big(
+                        R.drawable.ic_check,
+                        true,
+                        stringResource(R.string.signed_title),
+                        stringResource(R.string.visit_accepted_body, host)
+                    )
                 } else {
-                    Big(R.drawable.ic_x, false, stringResource(R.string.visit_rejected_title), stringResource(R.string.visit_rejected_body, host))
+                    Big(
+                        R.drawable.ic_x,
+                        false,
+                        stringResource(R.string.visit_rejected_title),
+                        stringResource(R.string.visit_rejected_body, host)
+                    )
                 }
             }
         }
+
         visit is Visit.Sign -> VisitSign(online, flow, key, visit, onBack, onRead)
+
         visit is Visit.Signed -> {
             val doc = visit.document
             if (doc != null) {
@@ -475,12 +540,20 @@ fun VisitScreen(
             } else {
                 Screen(onBack = null, buttons = {
                     MainButton(stringResource(R.string.scan_again), scan)
-                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text(stringResource(R.string.done)) }
+                    TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.done))
+                    }
                 }) {
-                    Big(R.drawable.ic_clock, true, stringResource(R.string.visit_wait_copy_title), stringResource(R.string.visit_wait_copy_body))
+                    Big(
+                        R.drawable.ic_clock,
+                        true,
+                        stringResource(R.string.visit_wait_copy_title),
+                        stringResource(R.string.visit_wait_copy_body)
+                    )
                 }
             }
         }
+
         visit is Visit.Refused -> Screen(onBack) {
             Big(R.drawable.ic_x, false, stringResource(R.string.visit_refused_title), visit.why)
         }
@@ -515,7 +588,14 @@ private fun VisitScan(connecting: Boolean, trouble: MeetException?, onBack: () -
 }
 
 @Composable
-private fun VisitSign(online: () -> Boolean, flow: InPersonFlow, key: KeyInfo, ask: Visit.Sign, onBack: () -> Unit, onRead: (Reading) -> Unit) {
+private fun VisitSign(
+    online: () -> Boolean,
+    flow: InPersonFlow,
+    key: KeyInfo,
+    ask: Visit.Sign,
+    onBack: () -> Unit,
+    onRead: (Reading) -> Unit
+) {
     val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -542,7 +622,12 @@ private fun VisitSign(online: () -> Boolean, flow: InPersonFlow, key: KeyInfo, a
         decline,
         buttons = {
             if (reading?.matches != false) {
-                SignButton(stringResource(R.string.sign), fingerprint = !key.needsPassword(), enabled = !key.needsPassword() || password.isNotEmpty()) {
+                SignButton(
+                    stringResource(R.string.sign),
+                    fingerprint = !key.needsPassword(),
+                    enabled =
+                        !key.needsPassword() || password.isNotEmpty()
+                ) {
                     busy = true
                     failure = null
                     wrong = false

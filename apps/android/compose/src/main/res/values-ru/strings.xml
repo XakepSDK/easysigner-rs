@@ -234,10 +234,7 @@
     <string name="in_person_join_body">Подписать документ, который на чужом телефоне.</string>
     <string name="in_person_wifi">Оба телефона должны быть в одной сети Wi-Fi, или один телефон раздает точку доступа другому.</string>
     <string name="meet_start_title">Подписать вместе?</string>
-    <string name="meet_sign_first">Я подписываю первым</string>
-    <string name="meet_sign_first_body">Ваша подпись идет первой, со страницей «Кто подписал».</string>
     <string name="meet_start">Подписать и показать QR-код</string>
-    <string name="meet_start_no_sign">Показать QR-код</string>
     <string name="meet_qr_title">Сканируйте, чтобы подписать</string>
     <string name="meet_qr_body">Покажите это подписанту %1$d. Он читает и подписывает на своем телефоне, а вы принимаете подпись здесь.</string>
     <string name="meet_signed_so_far">Уже подписали</string>

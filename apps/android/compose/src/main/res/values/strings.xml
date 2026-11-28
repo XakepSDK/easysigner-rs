@@ -230,10 +230,7 @@
     <string name="in_person_join_body">Sign a document that is on someone else\'s phone.</string>
     <string name="in_person_wifi">Both phones must be on the same Wi-Fi, or one phone shares its hotspot with the other.</string>
     <string name="meet_start_title">Sign together?</string>
-    <string name="meet_sign_first">I sign first</string>
-    <string name="meet_sign_first_body">Your signature goes on first, with the Who signed page.</string>
     <string name="meet_start">Sign and show the QR code</string>
-    <string name="meet_start_no_sign">Show the QR code</string>
     <string name="meet_qr_title">Scan to sign</string>
     <string name="meet_qr_body">Show this to signer %1$d. They read and sign on their own phone; you accept their signature here.</string>
     <string name="meet_signed_so_far">Signed so far</string>

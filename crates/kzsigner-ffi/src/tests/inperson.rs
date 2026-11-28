@@ -82,7 +82,7 @@ fn sign_prompt() -> ChipPrompt {
     }
 }
 
-fn meeting(test: &str, nca: &Arc<Nca>, first: bool) -> (Arc<Meeting>, Arc<SoftwareGuard>) {
+fn meeting(test: &str, nca: &Arc<Nca>) -> (Arc<Meeting>, Arc<SoftwareGuard>) {
     let (v, id, g) = person(test, "keys/alice_gost2015_256.p12");
     let m = v
         .start_meeting(
@@ -93,7 +93,6 @@ fn meeting(test: &str, nca: &Arc<Nca>, first: bool) -> (Arc<Meeting>, Arc<Softwa
             None,
             sign_prompt(),
             "en".into(),
-            first,
         )
         .unwrap();
     (m, g)
@@ -131,7 +130,7 @@ fn come(
 #[test]
 fn a_signer_scans_signs_is_accepted_and_collects_the_final_copy() {
     let nca = fake_nca(false);
-    let (m, lg) = meeting("meet-lawyer", &nca, true);
+    let (m, lg) = meeting("meet-lawyer", &nca);
     assert_eq!(
         lg.prompts.lock().unwrap().len(),
         1,
@@ -180,15 +179,15 @@ fn a_signer_scans_signs_is_accepted_and_collects_the_final_copy() {
 #[test]
 fn rejected_offline_and_stopped() {
     let nca = fake_nca(false);
-    let (m, _) = meeting("meet-lawyer2", &nca, false);
+    let (m, _) = meeting("meet-lawyer2", &nca);
     let (v, id, _) = person("meet-signer2", "keys/bob_gost2015_256.p12");
 
     // without internet on the signer's phone, NCA is reached through the lawyer's
     let (visit, outcome, turn) = come(&m, screen(false), &v, &id, &nca, false);
-    assert!(matches!(visit, Visit::Sign { number: 1, .. }), "{visit:?}");
+    assert!(matches!(visit, Visit::Sign { number: 2, .. }), "{visit:?}");
     assert_eq!(outcome, Some(Outcome { accepted: false }));
     assert!(matches!(turn, Turn::Rejected { .. }), "{turn:?}");
-    assert!(m.signers().is_empty());
+    assert_eq!(m.signers().len(), 1, "the lawyer only");
 
     // a QR that is not ours, and a phone nobody listens at
     assert!(matches!(
@@ -233,5 +232,44 @@ fn the_screenshot_keys_open() {
     for f in ["inperson/lawyer.p12", "inperson/signer.p12"] {
         let k = kzsigner::p12::open(&file(f), "", None).unwrap();
         assert!(kzsigner::cert::get(&kzsigner::cert::rdns(&k.cert.subject), "CN").is_some());
+    }
+}
+
+/// A stranger on the network who connects (and says nothing, or something wrong) doesn't use
+/// up the QR code: the signer who scanned it still signs.
+#[test]
+fn strangers_dont_use_up_the_qr_code() {
+    use std::io::Write;
+    let nca = fake_nca(false);
+    let (m, _) = meeting("meet-lawyer3", &nca);
+    let (v, id, _) = person("meet-signer3", "keys/bob_gost2015_256.p12");
+    let qr = m.invite(vec!["127.0.0.1".into()]).unwrap();
+    let port = qr_port(&qr);
+    let mm = m.clone();
+    let h = thread::spawn(move || mm.wait(screen(true)));
+    // a stranger with a key of their own, then garbage
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let key = kzsigner::inperson::session::Invitation::new(vec![]).unwrap();
+    let k = kzsigner::inperson::session::Engagement::parse(&key.engagement.qr())
+        .unwrap()
+        .key;
+    s.write_all(&(k.len() as u32).to_be_bytes()).unwrap();
+    s.write_all(&k).unwrap();
+    s.write_all(&[0, 0, 0, 40]).unwrap();
+    s.write_all(&[7; 40]).unwrap();
+    drop(s);
+    // the signer who scanned
+    let g = v.visit(nca.clone(), id.clone(), qr, true).unwrap();
+    assert!(matches!(g.visit(), Visit::Sign { .. }), "{:?}", g.visit());
+    let o = v.sign_visit(g, None, sign_prompt(), "en".into()).unwrap();
+    assert!(o.accepted);
+    assert!(matches!(h.join().unwrap(), Turn::Signed { .. }));
+}
+
+fn qr_port(qr: &str) -> u16 {
+    let e = kzsigner::inperson::session::Engagement::parse(qr).unwrap();
+    match &e.hints[0] {
+        kzsigner::inperson::session::Hint::Tcp(a) => a.rsplit(':').next().unwrap().parse().unwrap(),
+        h => panic!("{h:?}"),
     }
 }

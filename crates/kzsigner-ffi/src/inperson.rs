@@ -15,6 +15,7 @@ use kzsigner::i18n::Lang;
 use kzsigner::inperson::session::{self, Door, Engagement, Hint, Invitation};
 use kzsigner::inperson::{Lawyer, Offer, Served, Signer};
 use kzsigner::pdf::whosigned::WhoSigned;
+use std::time::Duration;
 
 use crate::sign::{Nca, SignError, SignedBy, check, nca_time_of};
 use crate::{ChipPrompt, Signed, Vault, cant_sign, now};
@@ -102,8 +103,8 @@ pub struct Meeting {
 #[uniffi::export]
 impl Vault {
     /// Starts signing `bytes` (a PDF named `name`) in person with key `key_id`: checks the key
-    /// with NCA, opens it once for the whole meeting (one prompt, or `password`), and, with
-    /// `sign_first`, signs first, which adds the Who signed page. Blocks.
+    /// with NCA, opens it once for the whole meeting (one prompt, or `password`), and signs
+    /// first, which adds the Who signed page. Blocks.
     #[allow(clippy::too_many_arguments)]
     pub fn start_meeting(
         &self,
@@ -114,7 +115,6 @@ impl Vault {
         password: Option<String>,
         prompt: ChipPrompt,
         lang: String,
-        sign_first: bool,
     ) -> Result<Arc<Meeting>, SignError> {
         kzsigner::i18n::set(Lang::parse(&lang).unwrap_or(Lang::En));
         if !kzsigner::pdf::is_pdf(&bytes) {
@@ -133,21 +133,19 @@ impl Vault {
         lawyer = lawyer.with_ocsp(&nca.ocsp);
         // the app's own NCA servers (fake ones in the tests) take a signer's requests too
         for url in [&nca.tsa, &nca.ocsp] {
-            if let Some(h) = host(url) {
+            if let Some(h) = kzsigner::inperson::relay_host(url).map(str::to_string) {
                 lawyer = lawyer.allow_relay_host(&h);
             }
         }
-        if sign_first {
-            lawyer
-                .sign_self(Some(&nca.tsa), nca.engine.env())
-                .map_err(|e| {
-                    if e.server() == Some(kzsigner::Server::Timestamp) {
-                        SignError::NoAnswer
-                    } else {
-                        failed(e)
-                    }
-                })?;
-        }
+        lawyer
+            .sign_self(Some(&nca.tsa), nca.engine.env())
+            .map_err(|e| {
+                if e.server() == Some(kzsigner::Server::Timestamp) {
+                    SignError::NoAnswer
+                } else {
+                    failed(e)
+                }
+            })?;
         let door = Door::open().map_err(failed)?;
         Ok(Arc::new(Meeting {
             nca,
@@ -159,13 +157,6 @@ impl Vault {
             stopped: AtomicBool::new(false),
         }))
     }
-}
-
-/// The host in an http:// URL.
-fn host(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("http://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    Some(authority.split(':').next()?.to_string())
 }
 
 #[uniffi::export]
@@ -193,71 +184,33 @@ impl Meeting {
     }
 
     /// Waits for a signer to scan the QR from [`Meeting::invite`] and serves them to the end of
-    /// their turn. Blocks; [`Meeting::stop`] ends it.
+    /// their turn. Blocks; [`Meeting::stop`] ends it. A connection that doesn't prove it has
+    /// the QR code within [`HANDSHAKE`] (a stranger on the network, a scan of an old QR) is
+    /// dropped, and the QR keeps waiting for its signer. While a signer is served, the document
+    /// is held: [`Meeting::finish`] and [`Meeting::signers`] wait for the turn to end.
     pub fn wait(&self, desk: Arc<dyn Desk>) -> Turn {
-        self.stopped.store(false, Ordering::SeqCst);
-        let stream = match self.door.wait() {
-            Ok(Some((s, _))) => s,
-            Ok(None) => return Turn::Stopped,
-            Err(e) => return Turn::Refused { why: e.to_string() },
-        };
-        *self.current.lock().unwrap() = stream.try_clone().ok();
-        let Some(inv) = self.next.lock().unwrap().take() else {
-            return Turn::Refused {
-                why: "no QR code shown".into(),
+        loop {
+            let stream = match self.door.wait() {
+                Ok(Some((s, _))) => s,
+                Ok(None) => return Turn::Stopped,
+                Err(e) => return Turn::Refused { why: e.to_string() },
             };
-        };
-        // the invitation is used up either way: a phone that fails the handshake (not the
-        // one that scanned, or a scan of an old QR) gets nothing, and a new QR is needed
-        let mut ch = match inv.accept(stream) {
-            Ok(ch) => ch,
-            Err(_) => {
-                self.current.lock().unwrap().take();
-                if self.stopped.load(Ordering::SeqCst) {
-                    return Turn::Stopped;
-                }
-                return Turn::Left;
+            let Some(inv) = self.next.lock().unwrap().clone() else {
+                return Turn::Refused {
+                    why: "no QR code shown".into(),
+                };
+            };
+            *self.current.lock().unwrap() = stream.try_clone().ok();
+            let r = self.serve(&inv, stream, &desk);
+            self.current.lock().unwrap().take();
+            if self.stopped.load(Ordering::SeqCst) {
+                return Turn::Stopped;
             }
-        };
-        let env = self.nca.engine.env();
-        let mut lawyer = self.lawyer.lock().unwrap();
-        let r = lawyer.serve_with(
-            &mut ch,
-            env,
-            &mut |name, iin| {
-                desk.arrived(Person {
-                    name: name.to_string(),
-                    iin: iin.map(str::to_string),
-                })
-            },
-            &mut |c| {
-                let cert = c
-                    .report
-                    .cert_der
-                    .as_deref()
-                    .and_then(|d| Cert::parse(d).ok());
-                let subject = cert.as_ref().map(|c| rdns(&c.subject)).unwrap_or_default();
-                desk.decide(Arrival {
-                    name: c.name.clone(),
-                    iin: c.iin.clone(),
-                    company: get(&subject, "O").map(str::to_string),
-                    bin: c.report.get("BIN").map(str::to_string),
-                    nca_time_ms: c.report.timestamp_time,
-                })
-            },
-        );
-        drop(lawyer);
-        self.current.lock().unwrap().take();
-        if self.stopped.load(Ordering::SeqCst) {
-            return Turn::Stopped;
-        }
-        match r {
-            Ok(Served::Signed(name)) => Turn::Signed { name },
-            Ok(Served::Rejected(name)) => Turn::Rejected { name },
-            Ok(Served::Cancelled | Served::Dropped) => Turn::Left,
-            Ok(Served::Status(name)) => Turn::Collected { name },
-            Ok(Served::Refused(why)) => Turn::Refused { why },
-            Err(e) => Turn::Refused { why: e.to_string() },
+            match r {
+                // not the phone that scanned this QR code: wait for that one
+                None => continue,
+                Some(t) => return t,
+            }
         }
     }
 
@@ -271,7 +224,7 @@ impl Meeting {
         }
     }
 
-    /// Who signed so far, in order (the lawyer first, when they signed).
+    /// Who signed so far, in order (the lawyer first).
     pub fn signers(&self) -> Vec<Person> {
         self.lawyer
             .lock()
@@ -312,7 +265,63 @@ impl Meeting {
     }
 }
 
+/// How long a phone that connects has to prove it scanned the QR code (its key, then its
+/// certificate). After that there are no time limits: a signer may read for as long as they like.
+const HANDSHAKE: Duration = Duration::from_secs(10);
+
 impl Meeting {
+    /// One connection; None when it was not the signer this QR code was shown to.
+    fn serve(&self, inv: &Invitation, stream: TcpStream, desk: &Arc<dyn Desk>) -> Option<Turn> {
+        stream.set_read_timeout(Some(HANDSHAKE)).ok()?;
+        let clock = stream.try_clone().ok()?;
+        let mut ch = inv.accept(stream).ok()?;
+        let env = self.nca.engine.env();
+        let mut proven = false;
+        let mut lawyer = self.lawyer.lock().unwrap();
+        let r = lawyer.serve_with(
+            &mut ch,
+            env,
+            &mut |name, iin| {
+                // the certificate came in the session: this is the phone that scanned, and
+                // the QR code is used up
+                proven = true;
+                clock.set_read_timeout(None).ok();
+                self.next.lock().unwrap().take();
+                desk.arrived(Person {
+                    name: name.to_string(),
+                    iin: iin.map(str::to_string),
+                })
+            },
+            &mut |c| {
+                let cert = c
+                    .report
+                    .cert_der
+                    .as_deref()
+                    .and_then(|d| Cert::parse(d).ok());
+                let subject = cert.as_ref().map(|c| rdns(&c.subject)).unwrap_or_default();
+                desk.decide(Arrival {
+                    name: c.name.clone(),
+                    iin: c.iin.clone(),
+                    company: get(&subject, "O").map(str::to_string),
+                    bin: c.report.get("BIN").map(str::to_string),
+                    nca_time_ms: c.report.timestamp_time,
+                })
+            },
+        );
+        drop(lawyer);
+        if !proven {
+            return None;
+        }
+        Some(match r {
+            Ok(Served::Signed(name)) => Turn::Signed { name },
+            Ok(Served::Rejected(name)) => Turn::Rejected { name },
+            Ok(Served::Cancelled | Served::Dropped) => Turn::Left,
+            Ok(Served::Status(name)) => Turn::Collected { name },
+            Ok(Served::Refused(why)) => Turn::Refused { why },
+            Err(e) => Turn::Refused { why: e.to_string() },
+        })
+    }
+
     fn document(&self, l: &Lawyer) -> Signed {
         let bytes = l.pdf().to_vec();
         Signed {
@@ -499,8 +508,12 @@ impl Guest {
     }
 
     /// Says no and leaves.
+    /// Doesn't wait: the connection is cut first, which ends a [`Vault::sign_visit`] or
+    /// [`Guest::read`] still waiting on the lawyer's phone.
     pub fn cancel(&self) {
-        self.signer.lock().unwrap().cancel();
+        if let Ok(mut s) = self.signer.try_lock() {
+            s.cancel();
+        }
         if let Some(s) = &self.stream {
             let _ = s.shutdown(Shutdown::Both);
         }

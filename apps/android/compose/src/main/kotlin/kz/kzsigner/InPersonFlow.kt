@@ -16,8 +16,8 @@ import kz.kzsigner.core.Arrival
 import kz.kzsigner.core.ChipPrompt
 import kz.kzsigner.core.Desk
 import kz.kzsigner.core.Guest
-import kz.kzsigner.core.Meeting
 import kz.kzsigner.core.MeetException
+import kz.kzsigner.core.Meeting
 import kz.kzsigner.core.Nca
 import kz.kzsigner.core.Outcome
 import kz.kzsigner.core.Person
@@ -87,41 +87,64 @@ class InPersonFlow(
 
     /**
      * Opens the meeting for [paper] with key [keyId] (its one prompt, or [password]), signing
-     * first when [signFirst], and starts showing QR codes. Throws [kz.kzsigner.core.SignException].
+     * first (with the Who signed page), and starts showing QR codes. Throws [kz.kzsigner.core.SignException].
      */
-    suspend fun start(keyId: String, password: String?, prompt: ChipPrompt, lang: String, signFirst: Boolean) {
+    suspend fun start(keyId: String, password: String?, prompt: ChipPrompt, lang: String) {
         val v = vault() ?: throw kz.kzsigner.core.SignException.Failed("no key vault")
         val p = paper ?: throw kz.kzsigner.core.SignException.Failed("no document")
-        val m = withContext(io) { v.startMeeting(nca(), keyId, p.name, p.bytes, password, prompt, lang, signFirst) }
+        val m = withContext(io) { v.startMeeting(nca(), keyId, p.name, p.bytes, password, prompt, lang) }
         meeting = m
         signers = m.signers()
         serve(m)
     }
 
-    /** One signer after another until [close]: a new QR code for each. */
-    private fun serve(m: Meeting) {
-        serving = scope.launch(main) {
-            while (true) {
-                val code = withContext(io) { m.invite(addresses()) }
-                qr = code
-                desk = Desking.Showing
-                val turn = withContext(io) { m.wait(DeskScreen()) }
-                if (turn is Turn.Stopped) break
-                last = turn
-                signers = withContext(io) { m.signers() }
-            }
+    /** One meeting's showing of QR codes: once closed, nothing it hears changes the screens. */
+    private class Round {
+        @Volatile var closed = false
+
+        /** The Accept or Reject the core waits for. */
+        var pending: CompletableDeferred<Boolean>? = null
+
+        /** Ends it; the core, if it waits for an answer, gets Reject. */
+        fun close() = synchronized(this) {
+            closed = true
+            pending?.complete(false)
         }
     }
 
+    private var round: Round? = null
+
+    /** One signer after another until [close]: a new QR code for each. */
+    private fun serve(m: Meeting) {
+        val r = Round()
+        round = r
+        serving = scope.launch(main) {
+            while (true) {
+                val code = withContext(io) { m.invite(addresses()) }
+                if (r.closed) break
+                qr = code
+                desk = Desking.Showing
+                val turn = withContext(io) { m.wait(DeskScreen(r)) }
+                if (turn is Turn.Stopped || r.closed) break
+                last = turn
+                signers = withContext(io) { m.signers() }
+            }
+        }.also { it.invokeOnCompletion { r.close() } }
+    }
+
     /** The core's calls about the signer at the phone; they come on its thread. */
-    private inner class DeskScreen : Desk {
+    private inner class DeskScreen(private val r: Round) : Desk {
         override fun arrived(who: Person) {
-            scope.launch(main) { desk = Desking.Here(who) }
+            scope.launch(main) { if (!r.closed) desk = Desking.Here(who) }
         }
 
         override fun decide(who: Arrival): Boolean {
             val answer = CompletableDeferred<Boolean>()
-            scope.launch(main) { desk = Desking.Deciding(who, answer) }
+            synchronized(r) {
+                if (r.closed) return false
+                r.pending = answer
+            }
+            scope.launch(main) { if (!r.closed) desk = Desking.Deciding(who, answer) }
             return runBlocking { answer.await() }
         }
     }
@@ -142,7 +165,8 @@ class InPersonFlow(
 
     /** Leaves the meeting: a signer at the phone is cut off, nothing more is signed. */
     fun close() {
-        (desk as? Desking.Deciding)?.answer?.complete(false)
+        round?.close()
+        round = null
         meeting?.stop()
         serving?.cancel()
         serving = null
@@ -185,12 +209,19 @@ class InPersonFlow(
     suspend fun join(keyId: String, code: String, online: Boolean) {
         val v = vault() ?: throw MeetException.Failed("no key vault")
         leave()
+        val mine = visits
         val g = withContext(io) { v.visit(nca(), keyId, code, online) }
         val what = g.visit()
+        val r = if (what is Visit.Sign) withContext(io) { g.read() } else null
+        if (mine != visits) {
+            // left (or scanned again) meanwhile
+            g.cancel()
+            return
+        }
         if (what is Visit.Sign) {
             host = what.lawyer
             title = what.title
-            reading = withContext(io) { g.read() }
+            reading = r
         }
         guest = g
         visit = what
@@ -200,13 +231,21 @@ class InPersonFlow(
     suspend fun sign(password: String?, prompt: ChipPrompt, lang: String): Outcome {
         val v = vault() ?: throw kz.kzsigner.core.SignException.Failed("no key vault")
         val g = guest ?: throw kz.kzsigner.core.SignException.Failed("not connected")
+        val mine = visits
         val o = withContext(io) { v.signVisit(g, password, prompt, lang) }
-        outcome = o
+        if (mine == visits) outcome = o
         return o
     }
 
-    /** Says no, or puts the visit away. */
+    /** Counts visits, so that a late answer from one that ended is dropped. */
+    private var visits = 0
+
+    /** The code the camera read, for the signer's screen to connect with. */
+    var scanned by mutableStateOf<String?>(null)
+
+    /** Says no, or puts the visit away. Doesn't wait (the connection is cut). */
     fun leave() {
+        visits++
         guest?.cancel()
         guest = null
         visit = null

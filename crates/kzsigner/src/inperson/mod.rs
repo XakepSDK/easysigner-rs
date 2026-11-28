@@ -17,7 +17,7 @@ pub mod session;
 mod signer;
 mod wire;
 
-pub use lawyer::{Candidate, Lawyer, Served, Signed};
+pub use lawyer::{Candidate, Lawyer, Served, Signed, relay_host};
 pub use signer::{Copy, Offer, Outcome, Request, Signer};
 pub use wire::{Ack, FORMAT, Terms};
 

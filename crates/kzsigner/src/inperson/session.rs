@@ -39,6 +39,10 @@ const SCHEME: &str = "KZSIGN1:";
 const QR_FORMAT: u8 = 1;
 /// The largest message on the wire: a PDF and some.
 const MAX_FRAME: usize = 256 * 1024 * 1024;
+/// The largest first message the lawyer's phone reads, before anything proves the other phone
+/// scanned its QR code (the signer's certificate fits easily): a stranger on the network can't
+/// make it hold a big frame in memory.
+const FIRST_FRAME: usize = 64 * 1024;
 /// How long connecting to an address in the QR may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -131,6 +135,7 @@ impl Engagement {
 }
 
 /// The lawyer's side of one QR code: its one-time key. One invitation serves one signer.
+#[derive(Clone)]
 pub struct Invitation {
     secret: SecretKey,
     pub engagement: Engagement,
@@ -155,7 +160,7 @@ impl Invitation {
     }
 
     /// The session over `stream`, once the signer's phone sent its key.
-    pub fn accept<S: Read + Write + Send>(self, mut stream: S) -> Result<Secure<S>> {
+    pub fn accept<S: Read + Write + Send>(&self, mut stream: S) -> Result<Secure<S>> {
         let peer = read_frame(&mut stream, 65)?;
         let peer_key = parse_key(&peer)?;
         Secure::new(
@@ -230,9 +235,9 @@ impl Door {
         self.stop.clone()
     }
 
-    /// The next phone to connect; None once stopped.
+    /// The next phone to connect; None once stopped (for good: a stop that comes before the
+    /// wait starts still counts).
     pub fn wait(&self) -> Result<Option<(TcpStream, SocketAddr)>> {
-        self.stop.store(false, Ordering::SeqCst);
         loop {
             if self.stop.load(Ordering::SeqCst) {
                 return Ok(None);
@@ -270,6 +275,8 @@ pub struct Secure<S> {
     sent: u32,
     received: u32,
     transcript: [u8; 32],
+    /// The largest frame [`Channel::recv`] reads next.
+    limit: usize,
 }
 
 impl<S: Read + Write + Send> Secure<S> {
@@ -313,6 +320,11 @@ impl<S: Read + Write + Send> Secure<S> {
             sent: 0,
             received: 0,
             transcript,
+            limit: if role == Role::Mdoc {
+                FIRST_FRAME
+            } else {
+                MAX_FRAME
+            },
         })
     }
 
@@ -341,17 +353,21 @@ impl<S: Read + Write + Send> Channel for Secure<S> {
     }
 
     fn recv(&mut self) -> Result<Vec<u8>> {
-        let c = read_frame(&mut self.stream, MAX_FRAME)?;
+        let c = read_frame(&mut self.stream, self.limit)?;
         self.received = self.received.checked_add(1).ok_or_else(lost)?;
         let n = nonce(&self.recv_id, self.received);
         // a message changed, dropped, replayed or reordered on the way fails here
-        self.recv_key
+        let plain = self
+            .recv_key
             .decrypt(&Nonce::from(n), Payload { msg: &c, aad: &[] })
             .map_err(|_| {
                 Error::new(tr(
                     "The connection to the other phone was tampered with; start again.",
                 ))
-            })
+            })?;
+        // the other phone proved it has the QR's key: its messages may be big from now on
+        self.limit = MAX_FRAME;
+        Ok(plain)
     }
 
     fn transcript(&self) -> [u8; 32] {

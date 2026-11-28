@@ -415,14 +415,9 @@ impl Lawyer {
 
     /// Whether a signer's request to `url` may be passed on: to an allowed host, over http.
     fn may_relay(&self, url: &str) -> bool {
-        let Some(rest) = url.strip_prefix("http://") else {
+        let Some(host) = relay_host(url) else {
             return false;
         };
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        if authority.contains('@') {
-            return false;
-        }
-        let host = authority.split(':').next().unwrap_or_default();
         self.relay_hosts
             .iter()
             .any(|h| h.eq_ignore_ascii_case(host))
@@ -477,4 +472,15 @@ fn who(c: &Cert) -> (String, Option<String>) {
     let mut sr = SignerReport::default();
     cert::describe(&mut sr, c);
     (sr.name(), sr.get("IIN").map(str::to_string))
+}
+
+/// The host of an http:// URL the lawyer's phone may pass on (no user part, no IPv6 literal:
+/// NCA's servers are names); None for anything else.
+pub fn relay_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("http://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.contains('@') || authority.starts_with('[') {
+        return None;
+    }
+    authority.split(':').next().filter(|h| !h.is_empty())
 }

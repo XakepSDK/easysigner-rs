@@ -37,8 +37,8 @@ import kz.kzsigner.ui.Reading
 import kz.kzsigner.ui.Refusal
 import kz.kzsigner.ui.SignScreen
 import kz.kzsigner.ui.SignedScreen
-import kz.kzsigner.ui.signingKey
 import kz.kzsigner.ui.VisitScreen
+import kz.kzsigner.ui.signingKey
 
 private object Route {
     const val HOME = "home"
@@ -165,9 +165,8 @@ fun App(model: AppModel, finish: () -> Unit) {
                 nav.popBackStack(Route.HOME, inclusive = false)
             }
             BackHandler(onBack = leave)
-            var answer by remember { mutableStateOf<((String) -> Unit)?>(null) }
             val scan = rememberLauncherForActivityResult(ScanContract()) { r ->
-                r.contents?.let { code -> answer?.invoke(code) }
+                r.contents?.let { code -> model.inPerson.scanned = code }
             }
             val key = signingKey(model) ?: return@composable
             VisitScreen(
@@ -179,8 +178,7 @@ fun App(model: AppModel, finish: () -> Unit) {
                     reading = it
                     nav.navigate(Route.READ)
                 },
-                onScan = { then ->
-                    answer = then
+                onScan = {
                     scan.launch(
                         ScanOptions()
                             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)

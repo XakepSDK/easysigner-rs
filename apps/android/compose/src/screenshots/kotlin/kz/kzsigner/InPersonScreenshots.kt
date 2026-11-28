@@ -19,10 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -119,7 +119,13 @@ class InPersonScreenshots {
     @Composable
     private fun Phone(label: String, content: @Composable () -> Unit) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF5A6270), modifier = Modifier.padding(bottom = 8.dp))
+            Text(
+                label,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF5A6270),
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
             Box(
                 Modifier.size(390.dp, 820.dp)
                     .clip(RoundedCornerShape(28.dp))
@@ -159,7 +165,7 @@ class InPersonScreenshots {
         val signer = InPersonFlow(scope, Dispatchers.IO, Dispatchers.Main, { sv }, { nca }, here)
         lawyer.paper = Paper("Lease-agreement.pdf", File(testdata, "pdf/plain.pdf").readBytes())
         // the camera, played by handing over the code the lawyer's phone shows
-        val camera: ((String) -> Unit) -> Unit = { read -> read(lawyer.qr!!) }
+        val camera: () -> Unit = { signer.scanned = lawyer.qr }
 
         compose.setContent {
             KzsignerTheme {
