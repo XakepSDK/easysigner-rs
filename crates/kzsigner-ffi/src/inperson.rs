@@ -185,7 +185,7 @@ impl Meeting {
 
     /// Waits for a signer to scan the QR from [`Meeting::invite`] and serves them to the end of
     /// their turn. Blocks; [`Meeting::stop`] ends it. A connection that doesn't prove it has
-    /// the QR code within [`HANDSHAKE`] (a stranger on the network, a scan of an old QR) is
+    /// the QR code within 10 seconds (a stranger on the network, a scan of an old QR) is
     /// dropped, and the QR keeps waiting for its signer. While a signer is served, the document
     /// is held: [`Meeting::finish`] and [`Meeting::signers`] wait for the turn to end.
     pub fn wait(&self, desk: Arc<dyn Desk>) -> Turn {
